@@ -139,3 +139,50 @@ test('late Room Mic frame cannot revive a superseded owner waveform or surface',
     globals.document = previous.document;
   }
 });
+
+test('a note above the singer\'s recent pitch lifts the band; an unpitched one leaves it centred', async () => {
+  const fakeWindow = new FakeWindow();
+  const meter = new FakeSvgNode();
+  fakeWindow.relayProductAuthority = {
+    authorityFresh: true,
+    lastKnownSnapshot: { room: { mic: { state: 'live', ownerId: 'owner-a' } } },
+  };
+  const globals = globalThis as any;
+  const previous = { window: globals.window, document: globals.document };
+  globals.window = fakeWindow;
+  globals.document = { body: { dataset: {} }, querySelector: (s: string) => (s === '#mic-input-meter' ? meter : null) };
+
+  // How far the newest slice, drawn at the centre (x = 160), reaches above
+  // and below the centre line (y = 28): the path's two anchors at x = 160.
+  const reach = () => {
+    const d = meter.querySelector('.voice-presence-wave')!.attributes.get('d') ?? '';
+    const anchors = [...d.matchAll(/(?:M|, |L) ?(-?[\d.]+) (-?[\d.]+)(?= C| L| Z|$)/g)]
+      .map((match) => ({ x: Number(match[1]), y: Number(match[2]) }))
+      .filter((point) => Math.abs(point.x - 160) < 0.01)
+      .map((point) => point.y);
+    assert.equal(anchors.length, 2, d);
+    return { above: 28 - Math.min(...anchors), below: Math.max(...anchors) - 28 };
+  };
+  const frame = (f0Hz: number | null, pitchConfidence: number) => ({
+    ...presenceFrame('owner-a', 1), f0Hz, pitchConfidence,
+  });
+
+  try {
+    const moduleUrl = new URL('../public/mic-presence.js', import.meta.url);
+    moduleUrl.searchParams.set('runtime-test', `${Date.now()}-${Math.random()}`);
+    await import(moduleUrl.href);
+
+    for (let i = 0; i < 6; i += 1) fakeWindow.emit('relay-room-mic-presence', frame(null, 0));
+    const flat = reach();
+    assert.ok(Math.abs(flat.above - flat.below) < 0.01, 'no pitch: symmetric about the centre');
+
+    for (let i = 0; i < 6; i += 1) fakeWindow.emit('relay-room-mic-presence', frame(130.8, 0.95));
+    fakeWindow.emit('relay-room-mic-presence', frame(261.6, 0.95));
+    const high = reach();
+    assert.ok(high.above - high.below > 10, `an octave up lifts the band (above ${high.above}, below ${high.below})`);
+    assert.ok(high.above <= 27 && high.below <= 27, 'still inside the meter');
+  } finally {
+    globals.window = previous.window;
+    globals.document = previous.document;
+  }
+});

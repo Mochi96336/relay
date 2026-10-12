@@ -17,9 +17,18 @@ if (meter && wave) {
   const VIEWBOX_WIDTH = 320;
   const VIEWBOX_HEIGHT = 56;
   const CENTER_Y = VIEWBOX_HEIGHT / 2;
-  const MAX_AMPLITUDE = 18;
+  const MAX_AMPLITUDE = 22;
+  // Lifts quiet and mid levels a little, so ordinary singing moves the band.
+  const LEVEL_CURVE = 0.85;
   const PITCH_MODULATION_DEPTH = 0.18;
+  // The band's centre follows the melody: a note above the singer's recent
+  // pitch lifts it, a note below lowers it, so high and low read at a glance.
+  const PITCH_LIFT_PX_PER_SEMITONE = 1.2;
+  const MAX_PITCH_LIFT = 6;
   const ROOM_EVIDENCE_STALE_MS = 320;
+  // Room telemetry arrives every ~80 ms; the drawn band eases toward each new
+  // shape over about this long instead of jumping to it.
+  const EASE_MS = 70;
 
   let history = Array.from({ length: MIC_PRESENCE_SLICE_COUNT }, () => emptyPresenceSlice());
   let sourceKey = null;
@@ -27,6 +36,13 @@ if (meter && wave) {
   let roomAuthorityFresh = false;
   let authoritativeRoomOwnerId = null;
   let authoritativeRoomLive = false;
+  /** The points being drawn, easing toward the history's targets. */
+  let drawn = null;
+  let frame = null;
+  let lastFrameAt = null;
+  const animationFrame = typeof window.requestAnimationFrame === 'function'
+    ? window.requestAnimationFrame.bind(window)
+    : null;
 
   function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
@@ -51,7 +67,16 @@ if (meter && wave) {
     return path;
   }
 
-  function visualPoint(slice, index, side) {
+  /** The singer's recent pitch, in octaves above 1 Hz: the median of the voiced slices shown. */
+  function referencePitch() {
+    const voiced = history
+      .filter((slice) => presenceSliceGeometry(slice).pitchStrength > 0)
+      .map((slice) => Math.log2(slice.f0Hz))
+      .sort((a, b) => a - b);
+    return voiced.length > 0 ? voiced[Math.floor(voiced.length / 2)] : null;
+  }
+
+  function visualPoint(slice, index, side, reference) {
     const geometry = presenceSliceGeometry(slice);
     const positions = centerOriginX(index, history.length, VIEWBOX_WIDTH);
     const x = side === 'left' ? positions.left : positions.right;
@@ -59,23 +84,33 @@ if (meter && wave) {
     const pitchTexture = geometry.pitchStrength > 0
       ? Math.sin(2 * Math.PI * geometry.density * distance) * geometry.pitchStrength * PITCH_MODULATION_DEPTH
       : 0;
+    const lift = reference !== null && geometry.pitchStrength > 0
+      ? clamp((Math.log2(slice.f0Hz) - reference) * 12 * PITCH_LIFT_PX_PER_SEMITONE, -MAX_PITCH_LIFT, MAX_PITCH_LIFT)
+        * geometry.pitchStrength
+      : 0;
+    // Lifted or lowered, the band still fits inside the meter.
     const amplitude = clamp(
-      geometry.amplitude * MAX_AMPLITUDE * (1 + pitchTexture),
+      Math.pow(geometry.amplitude, LEVEL_CURVE) * MAX_AMPLITUDE * (1 + pitchTexture),
       0,
-      MAX_AMPLITUDE,
+      Math.min(MAX_AMPLITUDE, CENTER_Y - 1 - Math.abs(lift)),
     );
-    return { x, amplitude };
+    return { x, amplitude, lift };
   }
 
-  function envelopePath() {
-    const left = history.map((slice, index) => visualPoint(slice, index, 'left'));
+  /** Left half from the oldest edge to the centre, then the right half back out. */
+  function targetPoints() {
+    const reference = referencePitch();
+    const left = history.map((slice, index) => visualPoint(slice, index, 'left', reference));
     const right = history
       .slice(0, -1)
-      .map((slice, index) => visualPoint(slice, index, 'right'))
+      .map((slice, index) => visualPoint(slice, index, 'right', reference))
       .reverse();
-    const samples = [...left, ...right];
-    const upper = samples.map((point) => ({ x: point.x, y: CENTER_Y - point.amplitude }));
-    const lower = samples.map((point) => ({ x: point.x, y: CENTER_Y + point.amplitude })).reverse();
+    return [...left, ...right];
+  }
+
+  function envelopePath(samples) {
+    const upper = samples.map((point) => ({ x: point.x, y: CENTER_Y - point.lift - point.amplitude }));
+    const lower = samples.map((point) => ({ x: point.x, y: CENTER_Y - point.lift + point.amplitude })).reverse();
 
     const upperPath = smoothPath(upper);
     const lowerPath = smoothPath(lower);
@@ -83,10 +118,42 @@ if (meter && wave) {
     return `${upperPath} L ${lower[0].x.toFixed(2)} ${lower[0].y.toFixed(2)} ${lowerPath.replace(/^M [^C]+/, '')} Z`;
   }
 
+  function draw() {
+    wave.setAttribute('d', envelopePath(drawn));
+  }
+
+  /** Moves the drawn band toward its target; stops once it has arrived. */
+  function step(now) {
+    frame = null;
+    const targets = targetPoints();
+    if (!drawn || drawn.length !== targets.length) drawn = targets.map((point) => ({ ...point, amplitude: 0, lift: 0 }));
+    const elapsed = lastFrameAt === null ? 16 : Math.min(100, now - lastFrameAt);
+    lastFrameAt = now;
+    const blend = 1 - Math.exp(-elapsed / EASE_MS);
+    let moving = false;
+    drawn = drawn.map((point, index) => {
+      const target = targets[index];
+      const amplitude = point.amplitude + (target.amplitude - point.amplitude) * blend;
+      const lift = point.lift + (target.lift - point.lift) * blend;
+      const arrived = Math.abs(target.amplitude - amplitude) <= 0.05 && Math.abs(target.lift - lift) <= 0.05;
+      if (!arrived) moving = true;
+      return arrived ? target : { x: target.x, amplitude, lift };
+    });
+    draw();
+    if (moving) frame = animationFrame(step);
+    else lastFrameAt = null;
+  }
+
   function render(active) {
     meter.dataset.active = active ? 'true' : 'false';
-    wave.setAttribute('d', envelopePath());
     wave.style.opacity = active ? '0.9' : '0';
+    if (!active || !animationFrame) {
+      // Cleared at once; without frames (tests, background tabs) drawn as is.
+      drawn = targetPoints();
+      draw();
+      return;
+    }
+    if (frame === null) frame = animationFrame(step);
   }
 
   function clearRoomStaleTimer() {

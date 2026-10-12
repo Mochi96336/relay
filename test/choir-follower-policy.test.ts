@@ -15,9 +15,11 @@ const local: ChoirFollowerLocal = {
 describe('Choir follower only controls its own player', () => {
   test('keeps small device drift rather than seeking every observation', () => {
     const policy = new ChoirFollowerPolicy();
-    assert.deepEqual(policy.decide({ room, local, nowMs: 5_000, roomFresh: true }), {
-      action: 'none', reason: 'within-tolerance', signedDriftMs: 120.00000000000455,
-    });
+    const decision = policy.decide({ room, local, nowMs: 5_000, roomFresh: true });
+    assert.equal(decision.action, 'none');
+    if (decision.action !== 'none') return;
+    assert.equal(decision.reason, 'within-tolerance');
+    assert.ok(Math.abs(decision.signedDriftMs! - 120) < 0.001);
   });
 
   test('large drift seeks at a bounded interval, rather than hunting continuously', () => {

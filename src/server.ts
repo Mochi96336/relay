@@ -58,6 +58,7 @@ import { MicLevelMonitor } from './mic-level-monitor.js';
 import { MicClockDriftEstimator } from './mic-clock-drift-estimator.js';
 import { MicCaptureDeliveryMonitor } from './mic-capture-delivery.js';
 import { MicUplinkBacklog } from './mic-uplink-backlog.js';
+import { MicWebTransportReport } from './mic-webtransport-report.js';
 import { ProductMicSteadiness } from './product-mic-steadiness.js';
 import { youtubeErrorMeansUnplayable } from '../shared/robot-player-errors.js';
 import { MicRuntime } from './mic-runtime.js';
@@ -2296,23 +2297,12 @@ function noteMicTransit(nowMs: number) {
   session.noteMicTransitBacklog(transit.generation, transit.backlogMs);
 }
 
-let reportedMicWebTransportFailure: { generation: number; failure: string | null } | null = null;
+const micWebTransportReport = new MicWebTransportReport();
 
-/** Logs each new reason the page gives for a WebTransport attempt that did not take. */
+/** Logs each new reason a WebTransport attempt did not take, and the retry that then did. */
 function reportMicWebTransportFailure(health: AudioUplinkHealth) {
-  const failure = health.transport.webTransportLastFailure ?? null;
-  const previous = reportedMicWebTransportFailure;
-  if (previous?.generation === health.captureGeneration && previous.failure === failure) return;
-  reportedMicWebTransportFailure = { generation: health.captureGeneration, failure };
-  if (failure === null) return;
-  console.warn('[mic-webtransport]', JSON.stringify({
-    generation: health.captureGeneration,
-    failure,
-    path: health.transport.path,
-    attempts: health.transport.webTransportAttempts,
-    connections: health.transport.webTransportConnections,
-    retries: health.transport.webTransportRetries,
-  }));
+  const record = micWebTransportReport.observe(health);
+  if (record) console.warn('[mic-webtransport]', JSON.stringify(record));
 }
 
 /**

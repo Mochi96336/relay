@@ -64,9 +64,11 @@
   background: transparent;
   cursor: pointer;
 }
+/* The thumb's centre stops half its 32px box from each end, so the drawn
+   track is inset 9px per side to end exactly at the visible dot's edge. */
 .adjust-range::-webkit-slider-runnable-track {
   height: 2px;
-  background: #3a3c42;
+  background: linear-gradient(#3a3c42, #3a3c42) center / calc(100% - 18px) 100% no-repeat;
 }
 /* A phone can only drag the thumb itself, so the thumb is a 32px touch
    target: a transparent border around a 14px visible dot. */
@@ -83,7 +85,10 @@
   background-clip: padding-box;
   box-shadow: inset 0 0 0 1px #0d0e10;
 }
-.adjust-range::-moz-range-track { height: 2px; background: #3a3c42; }
+.adjust-range::-moz-range-track {
+  height: 2px;
+  background: linear-gradient(#3a3c42, #3a3c42) center / calc(100% - 18px) 100% no-repeat;
+}
 .adjust-range::-moz-range-thumb {
   box-sizing: border-box;
   width: 32px;

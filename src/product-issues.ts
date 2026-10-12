@@ -53,6 +53,8 @@ export type ProductRecovery =
   | 'raise-mic-gain'
   | 'retry-recording'
   | 'recalibrate'
+  /** Realign is refused while a Take records; the recording keeps the timing it started with. */
+  | 'recalibrate-after-take'
   | 'host-service'
   | 'change-song';
 
@@ -112,6 +114,16 @@ export type ProductIssueFacts = {
   /** The serving alignment is being held back by the live Mic frontier, not only by buffer affordability. */
   timingFrontierCorrectionActive?: boolean;
 };
+
+/**
+ * A Take freezes timing: Realign is refused and background measurement stops
+ * until it ends, so "measure again" is only advice for after the recording.
+ */
+function recalibrateRecovery(facts: ProductIssueFacts): ProductRecovery {
+  return facts.takeLifecycle === 'recording' || facts.takeLifecycle === 'finalizing'
+    ? 'recalibrate-after-take'
+    : 'recalibrate';
+}
 
 function hostIssues(facts: ProductIssueFacts) {
   const issues: ProductIssue[] = [];
@@ -323,7 +335,7 @@ export function buildProductIssues(facts: ProductIssueFacts): ProductIssue[] {
       // cannot move the samples that have actually arrived. Restarting the Mic
       // creates a fresh capture epoch and deliberately clears that correction.
       // A pure buffer/calibration clamp still belongs to timing calibration.
-      recovery: facts.timingFrontierCorrectionActive === true ? 'retry-mic' : 'recalibrate',
+      recovery: facts.timingFrontierCorrectionActive === true ? 'retry-mic' : recalibrateRecovery(facts),
     });
   } else if (facts.performanceActive && ['calibrating', 'fallback', 'stale'].includes(facts.timingState)) {
     const cause = facts.timingState === 'calibrating'
@@ -337,7 +349,7 @@ export function buildProductIssues(facts: ProductIssueFacts): ProductIssue[] {
       severity: 'warning',
       cause,
       affects: ['timing', 'recording'],
-      recovery: facts.timingState === 'calibrating' ? 'automatic' : 'recalibrate',
+      recovery: facts.timingState === 'calibrating' ? 'automatic' : recalibrateRecovery(facts),
     });
   }
 

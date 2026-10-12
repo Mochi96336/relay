@@ -98,6 +98,7 @@ if (
     'raise-mic-gain': 'system.issue.recovery.raise-mic-gain',
     'retry-recording': 'system.issue.recovery.retry-recording',
     recalibrate: 'system.issue.recovery.recalibrate',
+    'recalibrate-after-take': 'system.issue.recovery.recalibrate-after-take',
     'host-service': 'system.issue.recovery.host-service',
     'change-song': 'system.issue.recovery.change-song',
   };
@@ -136,7 +137,11 @@ if (
 
     const heading = document.createElement('strong');
     const titleKey = issueTitleKeys[issue?.code];
-    heading.textContent = titleKey ? t(titleKey) : t('system.attention');
+    // A Take freezes timing, so the estimate it records with is not
+    // "recovering"; say what the recording is using instead.
+    heading.textContent = issue?.recovery === 'recalibrate-after-take'
+      ? t('system.attention.timing-estimated')
+      : titleKey ? t(titleKey) : t('system.attention');
 
     const detail = document.createElement('p');
     detail.textContent = causeCopy(issue?.cause);

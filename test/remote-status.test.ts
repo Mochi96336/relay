@@ -150,12 +150,57 @@ describe('remote status health projection', () => {
       backingSampleRate: 48_000,
       backingIsRobot: true,
       robotSourceConnected: true,
+      timelineConnected: true,
+      timelineState: 1,
       playerOffsetFresh: false,
     });
     assert.equal(stale.ok, true);
     assert.equal(stale.state, 'degraded');
     assert.deepEqual(stale.warnings, [
-      'robot player delta is stale; alignment fell back to the network estimate',
+      'robot player delta is stale; alignment is on the network estimate',
+    ]);
+  });
+
+  test('an idle Robot whose song is not playing is not degraded by its quiet delta', () => {
+    for (const timelineState of [null, 0, 2, 5]) {
+      const idle = status({
+        routeMode: 'robot',
+        backingConnected: true,
+        backingStreaming: true,
+        backingSampleRate: 48_000,
+        backingIsRobot: true,
+        robotSourceConnected: true,
+        timelineConnected: timelineState !== null,
+        timelineState,
+        playerOffsetFresh: false,
+      });
+      assert.equal(idle.state, 'live', `song state ${timelineState}`);
+      assert.deepEqual(idle.warnings, []);
+    }
+  });
+
+  test('a held boot calibration is described as held, not as a fallback', () => {
+    const held = status({
+      routeMode: 'robot',
+      backingConnected: true,
+      backingStreaming: true,
+      backingSampleRate: 48_000,
+      backingIsRobot: true,
+      robotSourceConnected: true,
+      micConnected: true,
+      micStreaming: true,
+      micFlowObserved: true,
+      sessionActive: true,
+      timelineConnected: true,
+      timelineState: 1,
+      playerOffsetFresh: false,
+      calibrationState: 'complete',
+      calibrationValid: true,
+      calibrationKind: 'boot-probe',
+    });
+    assert.equal(held.state, 'degraded');
+    assert.deepEqual(held.warnings, [
+      'robot player delta is stale; holding the last boot calibration',
     ]);
   });
 

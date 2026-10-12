@@ -423,4 +423,73 @@ describe('product lifecycle and health', () => {
     assert.equal(model.attention, null);
   });
 
+  test('a held boot measurement is still the alignment being served, not a fallback', () => {
+    // calibration-applicability holds an established boot result while the
+    // Robot's player delta is quiet, and the mixer keeps applying it.
+    const model = buildProductViewModel(input({
+      readiness: readiness({ playerOffsetMs: null, playerOffsetFresh: false }),
+      timing: {
+        timingMode: 'acoustic-calibration',
+        calibrationState: 'complete',
+        calibrationStale: false,
+        alignmentClamped: false,
+        requiresRobotPlayerDelta: true,
+        robotDeltaFresh: false,
+      },
+    }));
+
+    assert.equal(model.timing.state, 'aligned');
+    assert.equal(model.timing.syncHeld, true);
+    assert.equal(model.issues.find((issue) => issue.scope === 'timing'), undefined);
+  });
+
+  test('a revoked measurement that left the mixer on the estimate is still a fallback', () => {
+    const model = buildProductViewModel(input({
+      readiness: readiness({ playerOffsetMs: null, playerOffsetFresh: false }),
+      timing: {
+        timingMode: 'network-estimate',
+        calibrationState: 'complete',
+        calibrationStale: false,
+        alignmentClamped: false,
+        requiresRobotPlayerDelta: true,
+        robotDeltaFresh: false,
+      },
+    }));
+
+    assert.equal(model.timing.state, 'fallback');
+    assert.equal(model.timing.syncHeld, false);
+  });
+
+  test('timing advice during a Take waits for the recording instead of offering a refused Realign', () => {
+    const model = buildProductViewModel(input({
+      readiness: readiness({ calibrationValid: false, calibrationKind: 'none' }),
+      take: { lifecycle: 'recording', takeId: 'take-1', qualityVerdict: null },
+      timing: {
+        timingMode: 'network-estimate',
+        calibrationState: 'failed',
+        calibrationStale: false,
+        alignmentClamped: false,
+        requiresRobotPlayerDelta: true,
+        robotDeltaFresh: true,
+      },
+    }));
+
+    assert.equal(model.actions.canStartCalibration, false);
+    assert.equal(model.actions.startCalibrationBlockedReason, 'take-active');
+    assert.equal(model.issues.find((issue) => issue.scope === 'timing')?.recovery, 'recalibrate-after-take');
+
+    const afterTake = buildProductViewModel(input({
+      readiness: readiness({ calibrationValid: false, calibrationKind: 'none' }),
+      timing: {
+        timingMode: 'network-estimate',
+        calibrationState: 'failed',
+        calibrationStale: false,
+        alignmentClamped: false,
+        requiresRobotPlayerDelta: true,
+        robotDeltaFresh: true,
+      },
+    }));
+    assert.equal(afterTake.issues.find((issue) => issue.scope === 'timing')?.recovery, 'recalibrate');
+  });
+
 });

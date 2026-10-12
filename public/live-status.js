@@ -322,8 +322,19 @@ if (
             : songState === 'unavailable'
               ? t('system.needsAttention')
               : t('system.idle');
-    systemTiming.textContent = timingLabels[status.timing?.state]?.() ?? t('system.unknown');
+    systemTiming.textContent = takeFreezesEstimate(status)
+      ? t('system.timing.estimated')
+      : timingLabels[status.timing?.state]?.() ?? t('system.unknown');
     systemRecording.textContent = takeLabels[status.take?.lifecycle]?.() ?? t('system.unknown');
+  }
+
+  /**
+   * A Take freezes timing until it ends: no Realign, no background measurement.
+   * An estimate it records with will not recover by itself meanwhile.
+   */
+  function takeFreezesEstimate(status) {
+    return ['recording', 'finalizing'].includes(status.take?.lifecycle)
+      && ['fallback', 'stale'].includes(status.timing?.state);
   }
 
   function renderAttention(status) {
@@ -333,7 +344,9 @@ if (
       attentionCopy.textContent = '';
       return;
     }
-    attentionCopy.textContent = attentionLabels[attention.code]?.() ?? t('system.attention');
+    attentionCopy.textContent = attention.code === 'timing-recovering' && takeFreezesEstimate(status)
+      ? t('system.attention.timing-estimated')
+      : attentionLabels[attention.code]?.() ?? t('system.attention');
     attentionRegion.hidden = false;
     attentionRegion.dataset.scope = attention.scope || '';
     attentionRegion.dataset.severity = attention.severity || 'warning';

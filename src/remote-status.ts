@@ -54,8 +54,23 @@ export function deriveRemoteStatusHealth(readiness: ReadinessSnapshot): RemoteSt
   }
 
   const warnings: string[] = [];
-  if (robotRoute && components.robotSource.connected && !components.player.offsetFresh) {
-    warnings.push('robot player delta is stale; alignment fell back to the network estimate');
+  // The Robot reports its player position only while the room's song plays, so
+  // a stale delta over a paused or finished song is the expected quiet, not
+  // degradation that anything could recover. While it plays, say what the mix
+  // is actually doing: a boot measurement is held on its last delta rather
+  // than abandoned, and only a room without a measurement is on the estimate.
+  if (
+    robotRoute
+    && components.robotSource.connected
+    && !components.player.offsetFresh
+    && components.player.state === 1
+  ) {
+    const calibration = components.calibration;
+    warnings.push(!calibration.valid
+      ? 'robot player delta is stale; alignment is on the network estimate'
+      : calibration.kind === 'boot-probe'
+        ? 'robot player delta is stale; holding the last boot calibration'
+        : 'robot player delta is stale');
   }
   if (components.calibration.stale) {
     warnings.push('timing calibration no longer matches the current capture');

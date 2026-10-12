@@ -34,7 +34,8 @@ magic bias in milliseconds.
   previously confirmed Content. External mapping decides `apply`, `hold`,
   or `revoke`. Hold means keep current applied read head; the experiment
   merely returns the held candidate as a diagnostic, **not** permission to
-  install a different alignment.
+  install a different alignment. Revoke permanently removes that Content
+  evidence until a separately validated new candidate is confirmed.
 - The existing Sample model needs THREE consecutive internally consistent
   observations from each side, shared video and playback rate, and reports
   no more than one second old. The experiment must never relax those gates.

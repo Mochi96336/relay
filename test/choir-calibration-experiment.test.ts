@@ -133,6 +133,8 @@ describe('dual-singer real Content plus separate fallback strategies', () => {
     // Once authoritative mapping revokes Content, a *fresh* Sample candidate
     // remains available, but is explicitly labeled as an estimate.
     assert.equal(choice(model, A, { contentApplicability: 'revoke' })?.source, 'sample-song-estimate');
+    assert.equal(choice(model, A)?.source, 'sample-song-estimate',
+      'a revoked Content candidate cannot silently revive at the next query');
     assert.equal(choice(model, B)?.source, 'sample-song-estimate');
   });
 

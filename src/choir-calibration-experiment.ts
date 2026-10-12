@@ -205,6 +205,9 @@ export class ChoirCalibrationExperiment {
     const state = this.matching(input.identity);
     if (!state || !Number.isFinite(input.nowMs) || !Number.isFinite(input.sessionSampleRate)
       || input.sessionSampleRate <= 0) return null;
+    // 'revoke' is a permanent authority invalidation, not a temporary
+    // absence of new Content evidence. No implicit revival on the next query.
+    if (input.contentApplicability === 'revoke') state.content = null;
     const sampleCandidateMs = state.sample.estimate(
       input.nowMs, input.identity.videoId, input.sampleMap, input.sessionSampleRate,
     );

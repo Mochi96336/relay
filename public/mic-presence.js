@@ -17,9 +17,19 @@ if (meter && wave) {
   const VIEWBOX_WIDTH = 320;
   const VIEWBOX_HEIGHT = 56;
   const CENTER_Y = VIEWBOX_HEIGHT / 2;
-  const MAX_AMPLITUDE = 18;
+  // Nearly the whole meter: ordinary singing should visibly breathe.
+  const MAX_AMPLITUDE = 26;
+  // Lifts quiet and mid levels, so a voice reads as more than a line while
+  // silence still collapses to one.
+  const LEVEL_CURVE = 0.7;
+  // Older slices, further out, are this much narrower at the edges: the band
+  // reads as a ripple leaving the centre rather than a mirrored copy.
+  const AGE_NARROWING = 0.45;
   const PITCH_MODULATION_DEPTH = 0.18;
   const ROOM_EVIDENCE_STALE_MS = 320;
+  // Room telemetry arrives every ~80 ms; the drawn band eases toward each new
+  // shape over about this long instead of jumping to it.
+  const EASE_MS = 70;
 
   let history = Array.from({ length: MIC_PRESENCE_SLICE_COUNT }, () => emptyPresenceSlice());
   let sourceKey = null;
@@ -27,6 +37,13 @@ if (meter && wave) {
   let roomAuthorityFresh = false;
   let authoritativeRoomOwnerId = null;
   let authoritativeRoomLive = false;
+  /** The amplitudes being drawn, easing toward the history's targets. */
+  let drawn = null;
+  let frame = null;
+  let lastFrameAt = null;
+  const animationFrame = typeof window.requestAnimationFrame === 'function'
+    ? window.requestAnimationFrame.bind(window)
+    : null;
 
   function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
@@ -60,20 +77,25 @@ if (meter && wave) {
       ? Math.sin(2 * Math.PI * geometry.density * distance) * geometry.pitchStrength * PITCH_MODULATION_DEPTH
       : 0;
     const amplitude = clamp(
-      geometry.amplitude * MAX_AMPLITUDE * (1 + pitchTexture),
+      Math.pow(geometry.amplitude, LEVEL_CURVE) * MAX_AMPLITUDE
+        * (1 + pitchTexture) * (1 - AGE_NARROWING * distance),
       0,
       MAX_AMPLITUDE,
     );
     return { x, amplitude };
   }
 
-  function envelopePath() {
+  /** Left half from the oldest edge to the centre, then the right half back out. */
+  function targetPoints() {
     const left = history.map((slice, index) => visualPoint(slice, index, 'left'));
     const right = history
       .slice(0, -1)
       .map((slice, index) => visualPoint(slice, index, 'right'))
       .reverse();
-    const samples = [...left, ...right];
+    return [...left, ...right];
+  }
+
+  function envelopePath(samples) {
     const upper = samples.map((point) => ({ x: point.x, y: CENTER_Y - point.amplitude }));
     const lower = samples.map((point) => ({ x: point.x, y: CENTER_Y + point.amplitude })).reverse();
 
@@ -83,10 +105,41 @@ if (meter && wave) {
     return `${upperPath} L ${lower[0].x.toFixed(2)} ${lower[0].y.toFixed(2)} ${lowerPath.replace(/^M [^C]+/, '')} Z`;
   }
 
+  function draw() {
+    wave.setAttribute('d', envelopePath(drawn));
+  }
+
+  /** Moves the drawn band toward its target; stops once it has arrived. */
+  function step(now) {
+    frame = null;
+    const targets = targetPoints();
+    if (!drawn || drawn.length !== targets.length) drawn = targets.map((point) => ({ ...point, amplitude: 0 }));
+    const elapsed = lastFrameAt === null ? 16 : Math.min(100, now - lastFrameAt);
+    lastFrameAt = now;
+    const blend = 1 - Math.exp(-elapsed / EASE_MS);
+    let moving = false;
+    drawn = drawn.map((point, index) => {
+      const target = targets[index];
+      const amplitude = point.amplitude + (target.amplitude - point.amplitude) * blend;
+      const arrived = Math.abs(target.amplitude - amplitude) <= 0.05;
+      if (!arrived) moving = true;
+      return { x: target.x, amplitude: arrived ? target.amplitude : amplitude };
+    });
+    draw();
+    if (moving) frame = animationFrame(step);
+    else lastFrameAt = null;
+  }
+
   function render(active) {
     meter.dataset.active = active ? 'true' : 'false';
-    wave.setAttribute('d', envelopePath());
     wave.style.opacity = active ? '0.9' : '0';
+    if (!active || !animationFrame) {
+      // Cleared at once; without frames (tests, background tabs) drawn as is.
+      drawn = targetPoints();
+      draw();
+      return;
+    }
+    if (frame === null) frame = animationFrame(step);
   }
 
   function clearRoomStaleTimer() {

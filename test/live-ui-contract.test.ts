@@ -52,7 +52,7 @@ test('input ribbon follows the authoritative Room Mic without fabricated animati
   assert.match(liveStatus, /document\.body\.dataset\.roomMic/);
   assert.match(liveState, /\.voice-input-evidence \{[\s\S]*?display: none;/);
   assert.match(liveState, /body\[data-room-mic="live"\] \.voice-input-evidence[\s\S]*?display: flex;/);
-  assert.match(liveState, /body\[data-room-mic="live"\] \.voice-presence-wave/);
+  assert.match(liveState, /body\[data-room-mic="live"\] \.voice-glow-core/);
   assert.doesNotMatch(micPresence, /localActive/,
     'self capture must not outrank the authoritative room projection');
   assert.match(micPresence, /roomAuthorityFresh/);
@@ -63,7 +63,9 @@ test('input ribbon follows the authoritative Room Mic without fabricated animati
   assert.match(liveComposition, /\.voice-presence-baseline/);
   assert.match(liveComposition, /\.voice-presence-wave/);
   assert.match(micPresence, /CENTER_Y = VIEWBOX_HEIGHT \/ 2/);
-  assert.match(micPresence, /envelopePath\(\)/);
+  assert.match(micPresence, /envelopePath\(drawn\)/);
+  // Easing only interpolates between measured shapes; nothing animates without a measurement.
+  assert.match(micPresence, /if \(moving\) frame = animationFrame\(step\)/);
   assert.match(micAnalysis, /function measureSpectrumBands\(\)/);
   assert.doesNotMatch(capture, /measureSpectrumBands|measureF0|runFft/);
   assert.doesNotMatch(micPresence, /voice-presence-slice|voice-presence-shape|voice-presence-band/);

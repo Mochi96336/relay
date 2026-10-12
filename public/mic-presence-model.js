@@ -1,4 +1,4 @@
-export const MIC_PRESENCE_SLICE_COUNT = 20;
+export const MIC_PRESENCE_SLICE_COUNT = 32;
 export const MIC_PRESENCE_BAND_COUNT = 5;
 export const MIC_PRESENCE_MIN_DBFS = -58;
 export const MIC_PRESENCE_MAX_DBFS = -18;

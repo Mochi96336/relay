@@ -41,20 +41,22 @@ test('holder Change song is visible as a real phone touch target instead of tiny
   assert.match(song, /data-playback-role="holder"\]\[data-song-editing="false"\] \.youtube-form[\s\S]*?display: none;/);
 });
 
-test('Room Mic is one centered full-bleed envelope backed by one 20-sample measured history', () => {
+test('Room Mic is one centered full-bleed glow backed by one 32-sample measured history', () => {
   assert.match(composition, /\.voice-input-evidence \{[\s\S]*?width: 100vw;[\s\S]*?margin: 10px calc\(50% - 50vw\) 2px;/);
   assert.match(composition, /\.voice-input-meter \{[\s\S]*?width: 100%;[\s\S]*?max-width: none;[\s\S]*?height: 56px;/);
-  assert.match(composition, /-webkit-mask-image: linear-gradient\(to right, transparent 0%, #000 6%, #000 94%, transparent 100%\);/);
-  assert.match(composition, /mask-image: linear-gradient\(to right, transparent 0%, #000 6%, #000 94%, transparent 100%\);/);
+  // Older slices, further out, fade: the band leaves the centre like a ripple.
+  assert.match(composition, /-webkit-mask-image: linear-gradient\(to right, transparent 0%, rgba\(0,0,0,\.35\) 12%, #000 40%, #000 60%, rgba\(0,0,0,\.35\) 88%, transparent 100%\);/);
+  assert.match(composition, /\.voice-presence-wave \{ fill: url\(#voice-presence-glow\);/);
+  assert.match(composition, /\.voice-input-meter\[data-active="true"\] \.voice-presence-baseline \{ opacity: 0; \}/);
   assert.doesNotMatch(composition, /\.voice-input-meter\s*\{[\s\S]{0,180}?width:\s*min\(100%,\s*(?:320|310)px\)/);
   assert.match(composition, /\.voice-presence-baseline/);
   assert.match(composition, /\.voice-presence-wave/);
-  assert.match(model, /MIC_PRESENCE_SLICE_COUNT = 20/);
+  assert.match(model, /MIC_PRESENCE_SLICE_COUNT = 32/);
   assert.match(model, /MIC_PRESENCE_BAND_COUNT = 5/);
   assert.match(model, /export function centerOriginX/);
   assert.match(presence, /CENTER_Y = VIEWBOX_HEIGHT \/ 2/);
   assert.match(presence, /presenceSliceGeometry/);
-  assert.match(presence, /envelopePath\(\)/);
+  assert.match(presence, /envelopePath\(drawn\)/);
   assert.match(presence, /smoothPath\(upper\)/);
   assert.match(liveStatus, /MIC_PRESENCE_TELEMETRY_INTERVAL_MS = 80/);
   assert.match(presence, /event\.detail\?\.spectrumBands/);
@@ -81,7 +83,12 @@ test('frequency evidence remains truthful timbre data and is not painted as fake
   assert.match(micAnalysis, /function measureSpectrumBands\(\)/);
   assert.doesNotMatch(capture, /runFft|measureSpectrumBands|measureF0|F0_YIN_THRESHOLD/);
   assert.match(composition, /not[\s\S]*presented as musical pitch until a real F0 estimate exists/);
-  assert.doesNotMatch(presence, /WebSocket|mix-health|requestAnimationFrame/);
+  assert.doesNotMatch(presence, /WebSocket|mix-health/);
+  // Animation frames only ease the drawn band toward the latest measured
+  // shape and stop once it arrives; no motion exists without a measurement.
+  assert.match(presence, /if \(moving\) frame = animationFrame\(step\);/);
+  assert.match(presence, /if \(frame === null\) frame = animationFrame\(step\);/);
+  assert.equal(presence.match(/animationFrame\(step\)/g)?.length, 2);
   assert.doesNotMatch(state, /@keyframes|voice-breathe|preparing-pulse/);
   assert.doesNotMatch(composition, /@keyframes|voice-breathe|preparing-pulse/);
 });
@@ -114,7 +121,7 @@ test('Room Mic presence is visible to listeners and self owners through the same
   assert.match(state, /font-size: clamp\(27px, 7vw, 34px\)/);
   assert.match(state, /\.voice-input-evidence \{[\s\S]*?display: none;/);
   assert.match(state, /body\[data-room-mic="live"\] \.voice-input-evidence[\s\S]*?display: flex;/);
-  assert.match(state, /body\[data-self-mic="live"\] \.voice-presence-wave[\s\S]*?stroke: rgba\(247, 244, 237, \.82\);/);
+  assert.match(state, /body\[data-self-mic="live"\] \.voice-glow-core[\s\S]*?stop-opacity: \.64;/);
   assert.match(presence, /`room:\$\{ownerId\}:\$\{generation\}`/);
   assert.doesNotMatch(presence, /if \(localActive\) return;/);
 });

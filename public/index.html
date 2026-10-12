@@ -56,6 +56,11 @@
         </div>
       </header>
 
+      <div id="update-notice" class="update-notice" role="status" hidden>
+        <span data-i18n="update.message">Relay was updated. Reload this page to use the new version.</span>
+        <button id="update-notice-reload" class="update-notice-reload" type="button" data-i18n="update.reload">Reload</button>
+      </div>
+
       <section class="song-stage" data-playback-role="connecting" aria-label="Room song" data-i18n-aria-label="song.roomSong">
         <div class="song-heading-row">
           <div class="section-label" data-i18n="song.label">Song</div>
@@ -387,5 +392,6 @@
     <script type="module" src="/youtube-local-audibility.js"></script>
     <script type="module" src="/youtube.js"></script>
     <script type="module" src="/youtube-sync.js"></script>
+    <script type="module" src="/update-notice.js"></script>
   </body>
 </html>

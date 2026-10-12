@@ -340,3 +340,45 @@ body[data-listen="playback-muted"] #listen-note,
 body[data-listen="review-muted"] #listen-note {
   display: none;
 }
+
+/* "Relay was updated": a page left open across an update (#487). Fixed over
+   the header rather than placed in the live grid, whose rows are all owned. */
+.update-notice {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 8px);
+  left: 16px;
+  right: 16px;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.update-notice[hidden] {
+  display: none;
+}
+
+.update-notice > span {
+  flex: 1;
+}
+
+.update-notice-reload {
+  flex: none;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--bg);
+  font: inherit;
+  font-weight: 600;
+  touch-action: manipulation;
+}

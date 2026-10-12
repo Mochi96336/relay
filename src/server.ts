@@ -77,6 +77,7 @@ import {
   type RobotPlayerError,
 } from './relay-status-projection.js';
 import { createRelayHttpServer } from './relay-http-server.js';
+import { computeRelayBuild, validPageBuild } from './relay-build.js';
 import { createRelayQueryProtocol } from './relay-query-protocol.js';
 import { loadMonitorOpusEncoder } from './monitor-opus.js';
 import { createRelayCommandProtocol } from './relay-command-protocol.js';
@@ -133,6 +134,7 @@ type RelayConfig = ReturnType<typeof loadRelayConfig>;
 export async function startRelayServer(relayConfig: RelayConfig) {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(__dirname, '../public');
+const relayBuild = computeRelayBuild([publicDir, path.resolve(publicDir, '../shared')]);
 const takeDir = path.resolve(relayConfig.takeDir);
 const port = relayConfig.port;
 const relayKey = relayConfig.relayKey;
@@ -204,6 +206,7 @@ const TAKE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
 const server = createRelayHttpServer({
   publicDir,
+  build: relayBuild,
   takeDir,
   relayKey,
   remoteStatus: () => remoteStatusPayload(),
@@ -1652,7 +1655,12 @@ function frameAgeMs(atMs: number, nowMs: number) {
 /** /statusz; see projectRemoteStatus for what it promises. */
 function remoteStatusPayload() {
   const status = projectRemoteStatus(remoteStatusFacts(performance.now()));
-  return { ...status, audio: { ...status.audio, listenerPlayback: monitorTransport.playbackHealth() } };
+  return {
+    ...status,
+    // `micPage` null with a Mic connected is a page from before builds existed.
+    build: { relay: relayBuild, micPage: micRuntime.publisher?.pageBuild ?? null },
+    audio: { ...status.audio, listenerPlayback: monitorTransport.playbackHealth() },
+  };
 }
 
 /**
@@ -3987,9 +3995,12 @@ const authenticationProtocol = createRelayAuthenticationProtocol<RelaySocket>({
       return;
     }
     attachParticipantIdentity(socket, authenticated);
+    socket.pageBuild = validPageBuild(payload.build);
     sendJson(socket, {
       type: 'participant-authenticated',
       participantId: authenticated.participantId,
+      // A page whose build differs asks its user to reload (#487).
+      build: relayBuild,
     });
     return;
   },

@@ -73,6 +73,18 @@ function initialize() {
    * not work while the payload said exactly why, and each of these has a
    * different recovery.
    */
+  /**
+   * Says why Realign shows "—" instead of a value. A bare dash beside an
+   * enabled Realign read as broken while a song the room had not registered
+   * was playing on the page.
+   */
+  function pendingValueText() {
+    const reason = timingAuthority?.authorityFresh === true ? timingAuthority.pendingReason : null;
+    if (reason === 'robot-position') return t('timing.pending.robotPosition');
+    if (reason === 'mix-idle') return t('timing.pending.mixIdle');
+    return '';
+  }
+
   function blockedText(reason) {
     const key = reason ? `timing.blocked.${reason}` : null;
     const copy = key ? t(key) : null;
@@ -141,7 +153,7 @@ function initialize() {
     if (authority.actionable) {
       setHidden(false);
       setDisabled(false);
-      setText(calibrateStatus, '');
+      setText(calibrateStatus, pendingValueText());
       return;
     }
 

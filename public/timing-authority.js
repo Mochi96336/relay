@@ -21,18 +21,24 @@ function currentState() {
   return { authorityFresh: false, valueMs: null };
 }
 
-function publish(authorityFresh, valueMs = null) {
+/**
+ * Why a fresh authority has no value to show: `mix-idle` while no Mic and song
+ * are being mixed, `robot-position` while a boot measurement waits for the
+ * Robot's player position. Null whenever there is a value, or no authority.
+ */
+function publish(authorityFresh, valueMs = null, pendingReason = null) {
+  const hasValue = authorityFresh === true && typeof valueMs === 'number' && Number.isFinite(valueMs);
   const state = {
     authorityFresh: authorityFresh === true,
-    valueMs: authorityFresh === true && typeof valueMs === 'number' && Number.isFinite(valueMs)
-      ? valueMs
-      : null,
+    valueMs: hasValue ? valueMs : null,
+    pendingReason: authorityFresh === true && !hasValue ? pendingReason : null,
   };
   const previous = currentState();
   window.relayTimingAuthority = state;
   if (
     previous.authorityFresh === state.authorityFresh
     && previous.valueMs === state.valueMs
+    && (previous.pendingReason ?? null) === state.pendingReason
   ) return;
   window.dispatchEvent(new CustomEvent('relay-timing-authority', { detail: state }));
 }
@@ -104,13 +110,14 @@ function acceptSourceStatus(message) {
   // user alignment. The mixer temporarily falls back to its network estimate
   // until advance = Lmic - Lbacking + playerDelta can be completed. Do not
   // publish that fallback as though it were the calibrated user-facing value.
+  const waitingForRobot = waitingForRobotPlayerDelta(message);
   const valueMs = message.active === true
-    && !waitingForRobotPlayerDelta(message)
+    && !waitingForRobot
     && typeof applied === 'number'
     && Number.isFinite(applied)
     ? applied
     : null;
-  publish(true, valueMs);
+  publish(true, valueMs, message.active !== true ? 'mix-idle' : waitingForRobot ? 'robot-position' : null);
 }
 
 function connect() {

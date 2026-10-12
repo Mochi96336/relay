@@ -184,6 +184,8 @@
       'timing.realign': 'Realign',
       'timing.aligning': 'Aligning…',
       'timing.unavailable': 'Unable to realign right now',
+      'timing.pending.mixIdle': 'A value appears while the room song plays with the Mic on.',
+      'timing.pending.robotPosition': 'A value appears once the Robot reports where its song is.',
       'timing.reconnecting': 'Reconnecting…',
       // One line per reason the server can refuse the action. A single
       // "unavailable" told the user it would not work while the payload
@@ -445,6 +447,8 @@
       'timing.realign': '重新對齊',
       'timing.aligning': '對齊中…',
       'timing.unavailable': '目前無法重新對齊',
+      'timing.pending.mixIdle': '開著 Mic 並播放房間歌曲時才會顯示數值。',
+      'timing.pending.robotPosition': '等 Robot 回報歌曲位置後才會顯示數值。',
       'timing.reconnecting': '重新連線中…',
       'timing.blocked.take-active': '停止錄音後才能重新對齊',
       'timing.blocked.calibration-active': '對齊中…',

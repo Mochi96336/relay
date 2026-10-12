@@ -84,6 +84,7 @@ if (
     'mic-too-quiet': 'system.issue.cause.mic-too-quiet',
     'timing-calibrating': 'system.issue.cause.timing-calibrating',
     'timing-fallback': 'system.issue.cause.timing-fallback',
+    'timing-probe-unheard': 'system.issue.cause.timing-probe-unheard',
     'timing-stale': 'system.issue.cause.timing-stale',
     'timing-clamped': 'system.issue.cause.timing-clamped',
     'mic-frontier-lagging': 'system.issue.cause.mic-frontier-lagging',
@@ -99,6 +100,7 @@ if (
     'retry-recording': 'system.issue.recovery.retry-recording',
     recalibrate: 'system.issue.recovery.recalibrate',
     'recalibrate-after-take': 'system.issue.recovery.recalibrate-after-take',
+    'recalibrate-speaker': 'system.issue.recovery.recalibrate-speaker',
     'host-service': 'system.issue.recovery.host-service',
     'change-song': 'system.issue.recovery.change-song',
   };
@@ -141,7 +143,9 @@ if (
     // "recovering"; say what the recording is using instead.
     heading.textContent = issue?.recovery === 'recalibrate-after-take'
       ? t('system.attention.timing-estimated')
-      : titleKey ? t(titleKey) : t('system.attention');
+      : issue?.cause === 'timing-probe-unheard'
+        ? t('system.attention.timing-estimate')
+        : titleKey ? t(titleKey) : t('system.attention');
 
     const detail = document.createElement('p');
     detail.textContent = causeCopy(issue?.cause);

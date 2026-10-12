@@ -128,9 +128,14 @@ export class BootProbeRuntime {
     return this.lifecycle.canStart(target, nowMs);
   }
 
-  failAttempt(target: ProbeTarget, reason: string, nowMs: number): ProbeFailure | null {
+  failAttempt(
+    target: ProbeTarget,
+    reason: string,
+    nowMs: number,
+    options: { unheard?: boolean } = {},
+  ): ProbeFailure | null {
     if (target === 'mic') this.clearMicLeg();
-    return this.lifecycle.failAttempt(target, reason, nowMs);
+    return this.lifecycle.failAttempt(target, reason, nowMs, options);
   }
 
   setMicLeg(leg: BootProbeMicLeg) {

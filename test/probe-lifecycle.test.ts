@@ -117,6 +117,27 @@ test('reset clears terminal failure and retry history for a real capture change 
     attempts: { mic: 0, backing: 0 },
     maxAttempts: 1,
     error: null,
+    micProbeUnheard: false,
   });
   assert.equal(lifecycle.canStart('mic', 0), true);
+});
+
+test('a run that ends because the Mic never heard its chime says so', () => {
+  const unheard = new ProbeLifecycle(2, 100);
+  assert.equal(unheard.beginRequest(request('mic', 1)), true);
+  assert.equal(unheard.failAttempt('mic', 'correlation 0.299 was below 0.500', 0, { unheard: true }), null);
+  assert.equal(unheard.status(0).micProbeUnheard, false, 'not until the run ends');
+  assert.equal(unheard.beginRequest(request('mic', 2, 200)), true);
+  assert.ok(unheard.failAttempt('mic', 'correlation 0.374 was below 0.500', 200, { unheard: true }));
+  assert.equal(unheard.status(200).micProbeUnheard, true);
+
+  const timedOut = new ProbeLifecycle(1, 100);
+  assert.equal(timedOut.beginRequest(request('mic', 1)), true);
+  assert.ok(timedOut.failAttempt('mic', 'request expired', 0));
+  assert.equal(timedOut.status(0).micProbeUnheard, false, 'a lost request may well work next time');
+
+  const backing = new ProbeLifecycle(1, 100);
+  assert.equal(backing.beginRequest(request('backing', 1)), true);
+  assert.ok(backing.failAttempt('backing', 'correlation 0.2 was below 0.500', 0, { unheard: true }));
+  assert.equal(backing.status(0).micProbeUnheard, false, 'the Robot side is not a headphone question');
 });

@@ -492,4 +492,33 @@ describe('product lifecycle and health', () => {
     assert.equal(afterTake.issues.find((issue) => issue.scope === 'timing')?.recovery, 'recalibrate');
   });
 
+  test('a Mic that never heard the boot chime is an estimate, and Realign is advice for speakers', () => {
+    const base = {
+      readiness: readiness({ calibrationValid: false, calibrationKind: 'none' }),
+      timing: {
+        timingMode: 'network-estimate' as const,
+        calibrationState: 'failed',
+        calibrationStale: false,
+        alignmentClamped: false,
+        requiresRobotPlayerDelta: false,
+        robotDeltaFresh: true,
+        micProbeUnheard: true,
+      },
+    };
+    const model = buildProductViewModel(input(base));
+    const issue = model.issues.find((candidate) => candidate.scope === 'timing');
+    assert.equal(model.timing.state, 'fallback');
+    assert.equal(issue?.cause, 'timing-probe-unheard');
+    assert.equal(issue?.recovery, 'recalibrate-speaker');
+
+    const recording = buildProductViewModel(input({
+      ...base,
+      take: { lifecycle: 'recording', takeId: 'take-1', qualityVerdict: null },
+    }));
+    assert.equal(recording.issues.find((candidate) => candidate.scope === 'timing')?.recovery, 'recalibrate-after-take');
+
+    const heard = buildProductViewModel(input({ ...base, timing: { ...base.timing, micProbeUnheard: false } }));
+    assert.equal(heard.issues.find((candidate) => candidate.scope === 'timing')?.cause, 'timing-fallback');
+  });
+
 });

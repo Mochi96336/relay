@@ -13,6 +13,12 @@ export type ProbePhase =
 export type ProbeFailure = {
   target: ProbeTarget;
   message: string;
+  /**
+   * The last attempt ran but the chime was not found in the capture, as with
+   * headphones that never let it back into the Mic. Retrying the same way
+   * cannot fix that; every other failure (a lost leg, a timeout) might.
+   */
+  unheard: boolean;
 };
 
 export type ProbeRequest<TGeneration = number | null> = {
@@ -39,6 +45,8 @@ export type ProbeLifecycleStatus = {
   attempts: Record<ProbeTarget, number>;
   maxAttempts: number;
   error: string | null;
+  /** The run ended because the Mic never heard its chime. */
+  micProbeUnheard: boolean;
 };
 
 /**
@@ -167,7 +175,7 @@ export class ProbeLifecycle {
       && nowMs >= this.retryAfterMs[target];
   }
 
-  failAttempt(target: ProbeTarget, reason: string, nowMs: number) {
+  failAttempt(target: ProbeTarget, reason: string, nowMs: number, { unheard = false } = {}) {
     if (this.request?.target === target) this.request = null;
     if (this.analysis?.target === target) this.analysis = null;
     this.retryAfterMs[target] = nowMs + this.retryMs;
@@ -176,7 +184,7 @@ export class ProbeLifecycle {
 
     const label = target === 'mic' ? 'Microphone' : 'Song source';
     const message = `${label} timing probe failed after ${this.attemptCounts[target]} attempts: ${reason}`;
-    this.failure = { target, message };
+    this.failure = { target, message, unheard };
     return this.failure;
   }
 
@@ -198,6 +206,7 @@ export class ProbeLifecycle {
       attempts: { ...this.attemptCounts },
       maxAttempts: this.maxAttempts,
       error: this.failure?.message ?? null,
+      micProbeUnheard: this.failure?.target === 'mic' && this.failure.unheard,
     };
   }
 }

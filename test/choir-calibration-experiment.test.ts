@@ -173,7 +173,7 @@ describe('dual-singer real Content plus separate fallback strategies', () => {
     model.activate(A);
     model.activate(B);
     seedSample(model, B, .16);
-    assert.equal(model.remove(A), true);
+    assert.equal(model.remove(A.participantId), true);
     assert.equal(choice(model, A), null);
     assert.equal(choice(model, B)?.source, 'sample-song-estimate');
   });

@@ -1,10 +1,9 @@
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 /**
- * Identifies the browser code this Relay process serves: a content hash of
- * public/ and shared/ as they were when it started.
+ * Identifies browser code: a content hash of public/ and shared/.
  *
  * A page carries the build it was served with, and Relay answers every
  * participant authentication with its own. A page left open across an update
@@ -23,6 +22,54 @@ export function computeRelayBuild(dirs: readonly string[]): string {
     }
   }
   return hash.digest('hex').slice(0, 12);
+}
+
+export type RelayBuildTracker = {
+  /** The build of the files being served now. */
+  current(): string;
+};
+
+/**
+ * The build of what Relay is serving right now, not of what it started with.
+ *
+ * Relay reads index.html and every static file from disk on each request, so
+ * an asset update reaches new page loads without a restart. A build computed
+ * once at startup then named old and new pages identically, and a page left
+ * open across that update was never asked to reload. The file sizes and
+ * modification times are rechecked at most every `maxAgeMs`; the content is
+ * hashed again only when they changed.
+ */
+export function createRelayBuildTracker(
+  dirs: readonly string[],
+  { maxAgeMs = 2_000, now = Date.now }: { maxAgeMs?: number; now?: () => number } = {},
+): RelayBuildTracker {
+  let signature = '';
+  let build = '';
+  let checkedAtMs = Number.NEGATIVE_INFINITY;
+  return {
+    current() {
+      const nowMs = now();
+      if (build && nowMs - checkedAtMs < maxAgeMs) return build;
+      checkedAtMs = nowMs;
+      const next = fileSignature(dirs);
+      if (next !== signature || !build) {
+        signature = next;
+        build = computeRelayBuild(dirs);
+      }
+      return build;
+    },
+  };
+}
+
+function fileSignature(dirs: readonly string[]): string {
+  const parts: string[] = [];
+  for (const dir of dirs) {
+    for (const file of regularFiles(dir)) {
+      const stat = statSync(file);
+      parts.push(`${file}\0${stat.size}\0${stat.mtimeMs}`);
+    }
+  }
+  return parts.join('\n');
 }
 
 /** A build a page reported, or null for an old page or anything malformed. */

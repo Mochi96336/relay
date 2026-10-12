@@ -31,6 +31,8 @@ export type ReadinessInput = {
   micFlowObserved?: boolean;
   /** Current connected Mic capture exceeded its first-frame startup deadline. */
   micStartupTimedOut?: boolean;
+  /** The Mic page's health omits source state this Relay requires: an old page. */
+  micPageOutdated?: boolean;
   robotSourceConnected: boolean;
   sessionActive: boolean;
   timelineConnected: boolean;
@@ -134,6 +136,7 @@ export function buildReadiness(input: ReadinessInput) {
         arriving: input.micArriving ?? input.micStreaming,
         flowObserved: input.micFlowObserved ?? input.micStreaming,
         startupTimedOut: input.micStartupTimedOut === true,
+        pageOutdated: input.micPageOutdated === true,
       },
       robotSource: {
         connected: input.robotSourceConnected,

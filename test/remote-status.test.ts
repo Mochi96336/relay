@@ -109,6 +109,22 @@ describe('remote status health projection', () => {
     ]);
   });
 
+  test('an old page that cannot report its input state is not called silent', () => {
+    // #487: after a Relay update the open page reconnected with its old
+    // JavaScript. Audio arrived at 0 loss, yet the fault said it had stopped.
+    const result = status({
+      micConnected: true,
+      micStreaming: false,
+      micArriving: false,
+      micFlowObserved: true,
+      micPageOutdated: true,
+    });
+    assert.equal(result.state, 'fault');
+    assert.deepEqual(result.faults, [
+      'microphone page is out of date and does not report its input state; reload the page',
+    ]);
+  });
+
   test('a required route without backing is a fault', () => {
     const result = status({ routeMode: 'song' });
     assert.equal(result.state, 'fault');

@@ -24,8 +24,10 @@ if (meter && wave) {
   // (pitchLobeCount). Deep enough to see, and drawn with extra points between
   // slices: at one point per slice a high note's ripples were lost between
   // samples and every note looked alike.
-  const PITCH_MODULATION_DEPTH = 0.35;
-  const POINTS_PER_SLICE = 4;
+  // Kept shallow: pitch changes how dense the ripples are, not how big the band is.
+  const PITCH_MODULATION_DEPTH = 0.2;
+  // Enough points for about nine per ripple at the densest pitch.
+  const POINTS_PER_SLICE = 8;
   const ROOM_EVIDENCE_STALE_MS = 320;
   // Room telemetry arrives every ~80 ms; the drawn band eases toward each new
   // shape over about this long instead of jumping to it.

@@ -158,8 +158,18 @@ test('a higher note draws denser ripples along the band; an unpitched one draws 
     const ys = [...d.matchAll(/(?:M|, ) ?(-?[\d.]+) (-?[\d.]+)(?= C| L| Z|$)/g)]
       .map((match) => Number(match[2]))
       .filter((y) => y < 28);
+    // A top is where the edge turns from rising (y falling) to falling,
+    // ignoring steps too small to see.
     let tops = 0;
-    for (let i = 1; i < ys.length - 1; i += 1) if (ys[i] < ys[i - 1] - 0.05 && ys[i] <= ys[i + 1] - 0.05) tops += 1;
+    let rising: boolean | null = null;
+    let anchor = ys[0];
+    for (const y of ys.slice(1)) {
+      if (Math.abs(y - anchor) < 0.3) continue;
+      const nowRising = y < anchor;
+      if (rising === true && !nowRising) tops += 1;
+      rising = nowRising;
+      anchor = y;
+    }
     return tops;
   };
   const steady = (f0Hz: number | null, pitchConfidence: number) => {
@@ -177,8 +187,9 @@ test('a higher note draws denser ripples along the band; an unpitched one draws 
     assert.equal(steady(null, 0), 0, 'no pitch: a smooth edge');
     const low = steady(130.8, 0.95);
     const high = steady(523.3, 0.95);
-    assert.ok(low >= 2, `a low note still ripples (${low})`);
-    assert.ok(high >= low * 2, `two octaves up at least doubles the ripples (${low} -> ${high})`);
+    // Both halves together: about 2 x 4.4 ripples at C3 and 2 x 14 at C5.
+    assert.ok(low >= 7 && low <= 12, `C3 draws about nine ripples (${low})`);
+    assert.ok(high >= 24, `C5 draws about twenty-eight ripples, every one visible (${high})`);
   } finally {
     globals.window = previous.window;
     globals.document = previous.document;

@@ -17,12 +17,13 @@ async function withHttpServer(
   const takeDir = path.join(root, 'takes');
   await mkdir(publicDir, { recursive: true });
   await mkdir(takeDir, { recursive: true });
-  await writeFile(path.join(publicDir, 'index.html'), '<main id="fixture">Relay fixture</main>');
+  await writeFile(path.join(publicDir, 'index.html'), '<head></head><main id="fixture">Relay fixture</main>');
   await writeFile(path.join(takeDir, TAKE_ID + '.wav'), Buffer.from('RIFFfixture'));
 
   const server = createRelayHttpServer({
     publicDir,
     takeDir,
+    build: 'fixturebuild',
     relayKey: null,
     remoteStatus: () => ({ ok: true, state: 'idle' }),
     observationStatusV1: () => ({ version: 1, sequence: 1 }),
@@ -53,6 +54,20 @@ test('HTTP adapter serves static content and health without Express disclosure',
     const health = await fetch(baseUrl + '/healthz');
     assert.equal(health.status, 200);
     assert.deepEqual(await health.json(), { ok: true });
+  });
+});
+
+test('the page is served with its build and must be revalidated on every load', async () => {
+  await withHttpServer({}, async (baseUrl) => {
+    for (const route of ['/', '/index.html']) {
+      const page = await fetch(baseUrl + route);
+      assert.equal(page.status, 200);
+      assert.match(page.headers.get('content-type') ?? '', /^text\/html/);
+      assert.equal(page.headers.get('cache-control'), 'no-cache');
+      const html = await page.text();
+      assert.match(html, /<head>\s*<meta name="relay-build" content="fixturebuild" \/>/);
+      assert.match(html, /Relay fixture/);
+    }
   });
 });
 

@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import path from 'node:path';
 
@@ -11,6 +12,8 @@ export type RelayHttpReadiness = {
 
 export type RelayHttpServerOptions = {
   publicDir: string;
+  /** The page build (relay-build.ts) written into the served index.html. */
+  build: string;
   takeDir: string;
   relayKey: string | null;
   remoteStatus: () => unknown;
@@ -54,6 +57,21 @@ export function createRelayHttpServer(options: RelayHttpServerOptions): Server {
   // Browser and server policy can share pure modules without making src depend
   // on browser-static public/. The production public directory is always the
   // repository's public/ directory, so the shared layer is its explicit sibling.
+  // The page carries the build it was served with, so a page left open across
+  // a Relay update can tell it is out of date (#487). Ahead of express.static,
+  // which would otherwise serve index.html for `/` unchanged.
+  app.get(['/', '/index.html'], async (_req, res, next) => {
+    try {
+      const html = await readFile(path.join(options.publicDir, 'index.html'), 'utf8');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.type('html').send(html.replace(
+        '<head>',
+        `<head>\n    <meta name="relay-build" content="${options.build}" />`,
+      ));
+    } catch (error) {
+      next(error);
+    }
+  });
   app.use('/shared', express.static(path.resolve(options.publicDir, '../shared')));
   app.use(express.static(options.publicDir));
   app.get('/healthz', (_req, res) => {

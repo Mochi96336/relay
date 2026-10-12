@@ -22,6 +22,7 @@ test('HTTP serves the explicit shared sibling at /shared without widening the pu
   const server = createRelayHttpServer({
     publicDir,
     takeDir,
+    build: 'fixturebuild',
     relayKey: null,
     remoteStatus: () => ({ ok: true }),
     observationStatusV1: () => ({ schema: 'relay.observation.v1' }),

@@ -43,6 +43,8 @@ export type RelaySocket = WebSocket & {
   isRobotSource?: boolean;
   participantId?: string;
   participantConnectionId?: string;
+  /** The build the authenticated page was served with; null for a page too old to say. */
+  pageBuild?: string | null;
   playbackParticipantId?: string;
   playbackTransportId?: string;
   playbackGeneration?: number;

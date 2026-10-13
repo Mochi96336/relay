@@ -35,6 +35,31 @@ describe('extracted MicTrack owns per-singer components independently', () => {
     assert.equal(b.timeline.generation, null);
     assert.equal(a.gain.targetDb, 6);
     assert.equal(b.gain.targetDb, 24, 'independent B keeps the Relay default +24 dB');
+    a.alignmentState.calibratedMicLagMs = 220;
+    a.calibratedMicLagTargetMs = 330;
+    a.lastEmittedMicAdvanceSamples = 1234;
+    a.lastEmittedMicSourceSample = 4321;
+    a.lastEmittedMicFrameComplete = true;
+    a.calibrationUnfoldedSamples = 120;
+    a.micHeadroomMs = 180;
+    a.micConcealedSamples = 220;
+    a.micStarvedFrames = 5;
+    a.micUnplayableRunFrames = 6;
+    a.micCaptureOriginSample = 88;
+    a.micLimiterResetPending = true;
+    assert.equal(b.alignmentState.calibratedMicLagMs, null);
+    assert.equal(b.calibratedMicLagTargetMs, null);
+    assert.equal(b.lastEmittedMicAdvanceSamples, null);
+    assert.equal(b.lastEmittedMicSourceSample, null);
+    assert.equal(b.lastEmittedMicFrameComplete, false);
+    assert.equal(b.calibrationUnfoldedSamples, 0);
+    assert.equal(b.micHeadroomMs, 0);
+    assert.equal(b.micConcealedSamples, 0);
+    assert.equal(b.micStarvedFrames, 0);
+    assert.equal(b.micUnplayableRunFrames, 0);
+    assert.equal(b.micCaptureOriginSample, null);
+    assert.equal(b.micLimiterResetPending, false);
+
   });
 
   test('current AudioSession still uses its actual existing Mic clock and limits', () => {

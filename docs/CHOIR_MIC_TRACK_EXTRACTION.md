@@ -54,14 +54,27 @@ This is stronger than the earlier single-impulse position comparison:
 protection for their covered scenarios**. Passing them alone is not proof
 that every mobile hardware failure mode is reproduced in tests.
 
+## Stage 2: singer-local scalar state migrated into MicTrack
+
+The canonical `AudioSession` now uses `this.micTrack.*` for:
+- `alignmentState`, `calibratedMicLagTargetMs`, `calibrationUnfoldedSamples`;
+- `lastEmittedMicAdvanceSamples`, `lastEmittedMicFrameComplete`,
+  `lastEmittedMicSourceSample`;
+- `micCaptureOriginSample`, `micLimiterResetPending`;
+- `micStarvedFrames`, `micUnplayableRunFrames`, `micHeadroomMs`,
+  `micConcealedSamples`.
+
+These are not room-global concepts: two singers cannot share any of these
+without contaminating the other's capture/calibration or health state.
+This refactor keeps every existing computation in its original order;
+`AudioSession` still emits exactly one Mic source. New isolation assertions
+modify A's flags and verify that B's state remains at defaults.
+
 ## Still *inside* AudioSession and must be extracted next
 
 The existing canonical methods continue to own:
 
-- `lastEmittedMicAdvanceSamples`, `lastEmittedMicFrameComplete`, source
-  position history, calibration slew target and folded/unfolded baseline;
-- capture-origin and limiter-reset-pending mutable flags;
-- per-singer per-frame evidence accounting, source concealment application,
+- per-singer frame processing, source concealment application,
   input clipping and MixBus summing loop;
 - `ingestMic`, source sample-to-session mapping, trim/restart handling,
   `planMicRead`, `readMicFrame`, and `mixFrame`.

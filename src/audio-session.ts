@@ -43,12 +43,7 @@ import { SourceOutputEdge } from './source-output-edge.js';
 export type { MicTimelineFold, MicTimelineUnfold } from './mic-frontier-correction.js';
 export { HEAVY_LIMIT_DB, LIMITER_THRESHOLD_DBFS } from './mic-limiter.js';
 
-export type AlignmentState = {
-  /** RTT/2 fallback used until an acoustic calibration succeeds. */
-  networkCompensationMs: number;
-  calibratedMicLagMs: number | null;
-  fineTuneMs: number;
-};
+export type { AlignmentState } from './mic-track.js';
 
 /**
  * Raw evidence for exactly one mixed output frame.
@@ -232,35 +227,12 @@ export class AudioSession {
   private sessionGeneration = 0;
 
   private readonly micGain: MicGainRamp;
-  private alignmentState: AlignmentState = {
-    networkCompensationMs: 0,
-    calibratedMicLagMs: null,
-    fineTuneMs: 0,
-  };
-  /** Desired live drift correction while the currently applied lag slews there. */
-  private calibratedMicLagTargetMs: number | null = null;
-  /**
-   * Folded Mic loss taken back out of the timeline from under the calibration
-   * in force, which was measured with it in place: the calibration reads that
-   * much too far ahead until the next measurement (see foldConfirmedMicCaptureLoss).
-   */
-  private calibrationUnfoldedSamples = 0;
-  /**
-   * Actual Mic advance trajectory emitted at the end of the previous frame.
-   * This is deliberately separate from alignmentState: an immediate authority
-   * update can replace alignmentState between frames, but continuity still has
-   * to know where the audible read head came from.
-   */
-  private lastEmittedMicAdvanceSamples: number | null = null;
-  /** Whether the preceding emitted Mic frame was backed by real source PCM. */
-  private lastEmittedMicFrameComplete = false;
-  /**
-   * Mic frontier safety can deliberately move the read head backwards through
-   * retained history. Remember the actual source position last emitted so a
-   * capture-clock seam is de-clicked every time the audible trajectory crosses
-   * it, not only the first time the mixer ever encountered that position.
-   */
-  private lastEmittedMicSourceSample: number | null = null;
+
+
+
+
+
+
   /**
    * In-band capture-clock restarts cannot retire queued old PCM at ingest time.
    * Keep every unread old-capture frontier in order: more than one restart can
@@ -279,28 +251,21 @@ export class AudioSession {
   private readonly backingEdge: SourceOutputEdge;
   private readonly sourceEdgeFadeSamples: number;
 
-  private micStarvedFrames = 0;
+
   private backingStarvedFrames = 0;
-  /** Consecutive emitted frames missing real source samples, whether a gap or frontier starvation. */
-  private micUnplayableRunFrames = 0;
+
   private backingUnplayableRunFrames = 0;
   private clippedSamples = 0;
   private limitedSamples = 0;
   private heavyLimitedSamples = 0;
 
   private readonly micLimiter: MicLimiter;
-  /**
-   * A capture boundary owns fresh limiter dynamics, but a hot replacement must
-   * not start blindly at unity. Seed from that capture's own look-ahead on the
-   * first real audible sample instead of inheriting the retired capture.
-   */
-  private micLimiterResetPending = false;
+
 
   private readonly micRawMeter: MicRawMeter;
-  private micHeadroomMs = 0;
-  private micConcealedSamples = 0;
-  /** Timeline position where the current Mic capture generation's audio begins. */
-  private micCaptureOriginSample: number | null = null;
+
+
+
   /** Holds the Mic read head inside audio that has arrived. */
   private readonly micFrontier: MicFrontierCorrection;
   private readonly micClockTrim: MicClockTrim;
@@ -381,12 +346,12 @@ export class AudioSession {
    * budget for how long a transport may wait before the read head needs PCM.
    */
   get liveMicHeadroomMs(): number | null {
-    return this.running ? this.micHeadroomMs : null;
+    return this.running ? this.micTrack.micHeadroomMs : null;
   }
 
   /** Samples of real Mic holes filled by concealment since the session began. */
   get micConcealedSampleCount() {
-    return this.micConcealedSamples;
+    return this.micTrack.micConcealedSamples;
   }
 
   /** Capture clock error the Mic timeline is currently trimmed for, in ppm. */
@@ -422,7 +387,7 @@ export class AudioSession {
    * burst of stale backlog while the current mix frame is still silence.
    */
   get micPlayable() {
-    return this.micUnplayableRunFrames <= Math.ceil(ADVANCE_SAFETY_MS / this.frameMs);
+    return this.micTrack.micUnplayableRunFrames <= Math.ceil(ADVANCE_SAFETY_MS / this.frameMs);
   }
 
   get backingPlayable() {
@@ -459,9 +424,9 @@ export class AudioSession {
 
   stop() {
     this.running = false;
-    this.alignmentState = { networkCompensationMs: 0, calibratedMicLagMs: null, fineTuneMs: 0 };
-    this.calibratedMicLagTargetMs = null;
-    this.calibrationUnfoldedSamples = 0;
+    this.micTrack.alignmentState = { networkCompensationMs: 0, calibratedMicLagMs: null, fineTuneMs: 0 };
+    this.micTrack.calibratedMicLagTargetMs = null;
+    this.micTrack.calibrationUnfoldedSamples = 0;
     this.clearTimeline(this.mic);
     this.clearTimeline(this.backing);
     this.resetHealth();
@@ -481,7 +446,7 @@ export class AudioSession {
     this.micFrontier.reset(this.mic.generation);
     // A pending correction belongs to the old mix epoch. Preserve the value
     // already being applied but do not continue walking an old target forward.
-    this.calibratedMicLagTargetMs = this.alignmentState.calibratedMicLagMs;
+    this.micTrack.calibratedMicLagTargetMs = this.micTrack.alignmentState.calibratedMicLagMs;
     this.bus.reset();
     this.micGain.reset();
     this.resetHealth();
@@ -519,19 +484,19 @@ export class AudioSession {
   }
 
   get alignment(): AlignmentState {
-    return { ...this.alignmentState };
+    return { ...this.micTrack.alignmentState };
   }
 
   /** Current target, equal to the applied lag when no runtime slew is pending. */
   get calibratedMicLagTarget() {
-    return this.calibratedMicLagTargetMs;
+    return this.micTrack.calibratedMicLagTargetMs;
   }
 
   /** Immediate authority change used by existing initial/manual/robot semantics. */
   setAlignment(patch: Partial<AlignmentState>) {
-    this.alignmentState = { ...this.alignmentState, ...patch };
+    this.micTrack.alignmentState = { ...this.micTrack.alignmentState, ...patch };
     if (Object.prototype.hasOwnProperty.call(patch, 'calibratedMicLagMs')) {
-      this.calibratedMicLagTargetMs = patch.calibratedMicLagMs ?? null;
+      this.micTrack.calibratedMicLagTargetMs = patch.calibratedMicLagMs ?? null;
     }
   }
 
@@ -541,24 +506,24 @@ export class AudioSession {
    */
   slewCalibratedMicLagTo(targetMs: number) {
     if (!Number.isFinite(targetMs)) return false;
-    const current = this.alignmentState.calibratedMicLagMs;
+    const current = this.micTrack.alignmentState.calibratedMicLagMs;
     if (current === null || !this.running) {
-      const changed = current !== targetMs || this.calibratedMicLagTargetMs !== targetMs;
+      const changed = current !== targetMs || this.micTrack.calibratedMicLagTargetMs !== targetMs;
       this.setAlignment({ calibratedMicLagMs: targetMs });
       return changed;
     }
-    if (this.calibratedMicLagTargetMs === targetMs) return false;
-    this.calibratedMicLagTargetMs = targetMs;
+    if (this.micTrack.calibratedMicLagTargetMs === targetMs) return false;
+    this.micTrack.calibratedMicLagTargetMs = targetMs;
     return true;
   }
 
   /** What the alignment asks for, before the buffer's limits are applied. */
   get requestedMicAdvanceMs() {
-    const calibrated = this.alignmentState.calibratedMicLagMs;
+    const calibrated = this.micTrack.alignmentState.calibratedMicLagMs;
     const base = calibrated === null
-      ? this.alignmentState.networkCompensationMs
-      : calibrated - (this.calibrationUnfoldedSamples / this.sampleRate) * 1000;
-    return base - this.alignmentState.fineTuneMs;
+      ? this.micTrack.alignmentState.networkCompensationMs
+      : calibrated - (this.micTrack.calibrationUnfoldedSamples / this.sampleRate) * 1000;
+    return base - this.micTrack.alignmentState.fineTuneMs;
   }
 
   /** What the configured buffers can afford, before the live frontier is known. */
@@ -667,7 +632,7 @@ export class AudioSession {
    * old one.
    */
   noteMicCalibrationMeasured() {
-    this.calibrationUnfoldedSamples = 0;
+    this.micTrack.calibrationUnfoldedSamples = 0;
     this.micFrontier.noteCalibrationMeasured();
   }
 
@@ -709,7 +674,7 @@ export class AudioSession {
     if (unfold === 0) return;
     const measuredAcross = this.micFrontier.unfoldMeasuredAcross(unfold);
     const advanceBefore = this.budgetedMicAdvanceMs();
-    this.calibrationUnfoldedSamples += measuredAcross;
+    this.micTrack.calibrationUnfoldedSamples += measuredAcross;
     const advanceAfter = this.budgetedMicAdvanceMs();
     this.rebaseMicTimeline(-unfold);
     // The advance itself moved back by up to the part measured across, so the
@@ -730,11 +695,11 @@ export class AudioSession {
     this.mic.originOffset += shift;
     this.micCaptureRestartBoundaries.rebase(shift);
     this.micInputClipping.shift(shift);
-    if (this.micCaptureOriginSample !== null) this.micCaptureOriginSample += shift;
-    if (this.lastEmittedMicSourceSample !== null) this.lastEmittedMicSourceSample += shift;
+    if (this.micTrack.micCaptureOriginSample !== null) this.micTrack.micCaptureOriginSample += shift;
+    if (this.micTrack.lastEmittedMicSourceSample !== null) this.micTrack.lastEmittedMicSourceSample += shift;
     // The read position is the frame start plus the advance, so the advance
     // moves with the audio it was reading.
-    if (this.lastEmittedMicAdvanceSamples !== null) this.lastEmittedMicAdvanceSamples += shift;
+    if (this.micTrack.lastEmittedMicAdvanceSamples !== null) this.micTrack.lastEmittedMicAdvanceSamples += shift;
     this.micFrontier.rebase(shift);
   }
 
@@ -768,7 +733,7 @@ export class AudioSession {
       // away, the frontier its audio has to follow. Recorded only from the
       // later chunk, the origin stayed with the retiring capture, and
       // concealment learned a pitch period across the seam between them.
-      this.micCaptureOriginSample = addedChunk ? currentChunk.start : this.mic.totalSamples;
+      this.micTrack.micCaptureOriginSample = addedChunk ? currentChunk.start : this.mic.totalSamples;
     }
 
     const positioned = frame.firstSampleIndex !== null;
@@ -840,7 +805,7 @@ export class AudioSession {
     // repetition joins without a step. Once the read head has emitted those
     // samples the join cannot happen, and the output-side frontier edge already
     // owns continuity from what was actually heard - keep that path.
-    const emitted = this.lastEmittedMicSourceSample;
+    const emitted = this.micTrack.lastEmittedMicSourceSample;
     const guardSamples = Math.round((MIC_CONCEALMENT_JOIN_GUARD_MS * this.sampleRate) / 1000);
     if (emitted !== null && emitted >= gapStart - guardSamples) return false;
     const gapSamples = currentChunk.start - gapStart;
@@ -870,7 +835,7 @@ export class AudioSession {
       positioned: true,
       concealed: true,
     });
-    this.micConcealedSamples += concealment.fill.length;
+    this.micTrack.micConcealedSamples += concealment.fill.length;
     // Without a blend the repetition has faded to silence by the end of the
     // hole (a long hole, or one exactly as long as the fade). Returning from
     // that silence is an ordinary source edge.
@@ -887,7 +852,7 @@ export class AudioSession {
     const floor = Math.max(
       0,
       gapStart - Math.round((MIC_CONCEALMENT_HISTORY_MS * this.sampleRate) / 1000),
-      this.micCaptureOriginSample ?? 0,
+      this.micTrack.micCaptureOriginSample ?? 0,
     );
     const chunks = this.mic.chunks;
     let start = gapStart;
@@ -1000,7 +965,7 @@ export class AudioSession {
     // reset is deferred until replacement PCM is actually audible so a hot new
     // capture can seed a safe gain from its own look-ahead rather than jumping
     // blindly to unity.
-    this.micLimiterResetPending = true;
+    this.micTrack.micLimiterResetPending = true;
     this.micRawMeter.reset();
     this.clearTimeline(this.mic);
     this.micFrontier.reset(this.mic.generation);
@@ -1052,9 +1017,9 @@ export class AudioSession {
 
   health(): MixHealth {
     return {
-      micStarvedFrames: this.micStarvedFrames,
+      micStarvedFrames: this.micTrack.micStarvedFrames,
       backingStarvedFrames: this.backingStarvedFrames,
-      micHeadroomMs: Math.round(this.micHeadroomMs),
+      micHeadroomMs: Math.round(this.micTrack.micHeadroomMs),
       backingHeadroomMs: Math.round(this.backingHeadroomMs),
       micGapMs: Math.round((this.mic.gapSamples / this.sampleRate) * 1000),
       backingGapMs: Math.round((this.backing.gapSamples / this.sampleRate) * 1000),
@@ -1068,14 +1033,14 @@ export class AudioSession {
   }
 
   resetHealth() {
-    this.micStarvedFrames = 0;
+    this.micTrack.micStarvedFrames = 0;
     this.backingStarvedFrames = 0;
-    this.micUnplayableRunFrames = 0;
+    this.micTrack.micUnplayableRunFrames = 0;
     this.backingUnplayableRunFrames = 0;
     this.clippedSamples = 0;
     this.limitedSamples = 0;
     this.micRawMeter.reset();
-    this.micHeadroomMs = 0;
+    this.micTrack.micHeadroomMs = 0;
     this.backingHeadroomMs = 0;
     // These are audio state, not just diagnostics. Carrying gain reduction into
     // a new epoch makes the beginning of the next take inherit the previous
@@ -1083,7 +1048,7 @@ export class AudioSession {
     this.resetMicLimiterState();
     this.micEdge.reset();
     this.backingEdge.reset();
-    this.lastEmittedMicSourceSample = null;
+    this.micTrack.lastEmittedMicSourceSample = null;
     this.micCaptureRestartBoundaries.clear();
     this.backingCaptureRestartBoundaries.clear();
     this.mic.gapSamples = 0;
@@ -1096,7 +1061,7 @@ export class AudioSession {
     if (timeline === this.mic) {
       this.micClockTrim.reset();
       this.resetMicReadContinuity();
-      this.lastEmittedMicSourceSample = null;
+      this.micTrack.lastEmittedMicSourceSample = null;
       this.micCaptureRestartBoundaries.clear();
       this.micInputClipping.clear();
     } else if (timeline === this.backing) {
@@ -1112,7 +1077,7 @@ export class AudioSession {
   /** Capture-scoped detector state; cumulative limiter evidence stays intact. */
   private resetMicLimiterState() {
     this.micLimiter.reset();
-    this.micLimiterResetPending = false;
+    this.micTrack.micLimiterResetPending = false;
   }
 
   /**
@@ -1156,13 +1121,13 @@ export class AudioSession {
     currentMicGainDb: number,
   ) {
     this.seedMicLimiterFromWindow(samples, fromOffset, toOffset, currentMicGainDb);
-    this.micLimiterResetPending = false;
+    this.micTrack.micLimiterResetPending = false;
   }
 
   /** Forgets the trajectory the last emitted Mic frame was read along. */
   private resetMicReadContinuity() {
-    this.lastEmittedMicAdvanceSamples = null;
-    this.lastEmittedMicFrameComplete = false;
+    this.micTrack.lastEmittedMicAdvanceSamples = null;
+    this.micTrack.lastEmittedMicFrameComplete = false;
   }
 
   /** Where the session clock is now, in session samples since the epoch. */
@@ -1447,7 +1412,7 @@ export class AudioSession {
       startSample,
       fromAdvanceSamples,
       toStartSample,
-      previousSourceSample: this.lastEmittedMicSourceSample,
+      previousSourceSample: this.micTrack.lastEmittedMicSourceSample,
       current,
       inputClipping: this.micInputClipping,
       captureRestartBoundaries: this.micCaptureRestartBoundaries,
@@ -1514,13 +1479,13 @@ export class AudioSession {
    * interpolates, so the sample after a fractional position was read too.
    */
   private firstUnheardMicSample() {
-    return this.lastEmittedMicSourceSample === null
+    return this.micTrack.lastEmittedMicSourceSample === null
       ? Number.NEGATIVE_INFINITY
-      : Math.ceil(this.lastEmittedMicSourceSample) + 1;
+      : Math.ceil(this.micTrack.lastEmittedMicSourceSample) + 1;
   }
 
   private crossedRetainedMicRestartBoundary(sourceSample: number) {
-    const previous = this.lastEmittedMicSourceSample;
+    const previous = this.micTrack.lastEmittedMicSourceSample;
     if (previous === null || previous === sourceSample) return false;
     return this.micCaptureRestartBoundaries.firstCrossing(previous, sourceSample) !== null;
   }
@@ -1549,13 +1514,13 @@ export class AudioSession {
   }
 
   private advanceCalibrationSlew() {
-    const target = this.calibratedMicLagTargetMs;
-    const current = this.alignmentState.calibratedMicLagMs;
+    const target = this.micTrack.calibratedMicLagTargetMs;
+    const current = this.micTrack.alignmentState.calibratedMicLagMs;
     if (target === null || current === null || current === target) return;
 
     const maximumStepMs = this.frameMs * RUNTIME_CALIBRATION_SLEW_FRACTION;
     const deltaMs = target - current;
-    this.alignmentState.calibratedMicLagMs = Math.abs(deltaMs) <= maximumStepMs
+    this.micTrack.alignmentState.calibratedMicLagMs = Math.abs(deltaMs) <= maximumStepMs
       ? target
       : current + Math.sign(deltaMs) * maximumStepMs;
   }
@@ -1566,12 +1531,12 @@ export class AudioSession {
    */
   private planMicRead(frameIndex: number): MicReadPlan {
     this.foldConfirmedMicCaptureLoss();
-    const previouslyEmittedAdvanceSamples = this.lastEmittedMicAdvanceSamples;
-    const previousCalibratedMicLagMs = this.alignmentState.calibratedMicLagMs;
+    const previouslyEmittedAdvanceSamples = this.micTrack.lastEmittedMicAdvanceSamples;
+    const previousCalibratedMicLagMs = this.micTrack.alignmentState.calibratedMicLagMs;
     const previousFrontierCorrectionSamples = this.micFrontier.correctionSamples;
     const previousRequestedMicAdvanceMs = previousCalibratedMicLagMs === null
-      ? this.alignmentState.networkCompensationMs - this.alignmentState.fineTuneMs
-      : previousCalibratedMicLagMs - this.alignmentState.fineTuneMs;
+      ? this.micTrack.alignmentState.networkCompensationMs - this.micTrack.alignmentState.fineTuneMs
+      : previousCalibratedMicLagMs - this.micTrack.alignmentState.fineTuneMs;
     const modeledPreviousAdvanceSamplesExact = (
       this.appliedMicAdvanceForRequestedMs(
         previousRequestedMicAdvanceMs,
@@ -1605,7 +1570,7 @@ export class AudioSession {
       startSample,
       previouslyEmittedAdvanceSamples,
       previousAdvanceSamplesExact,
-      lastEmittedMicFrameComplete: this.lastEmittedMicFrameComplete,
+      lastEmittedMicFrameComplete: this.micTrack.lastEmittedMicFrameComplete,
       appliedAdvanceMs,
       runtimeCalibrationSlewFraction: RUNTIME_CALIBRATION_SLEW_FRACTION,
       readHeadCrossfadeMs: MIC_READ_HEAD_CROSSFADE_MS,
@@ -1673,9 +1638,9 @@ export class AudioSession {
       ? startSample + previouslyEmittedAdvanceSamples + crossfadeSamples + 2
       : Number.NEGATIVE_INFINITY;
     const micReadEnd = Math.ceil(Math.max(ordinaryMicReadEnd, crossfadeOldReadEnd));
-    this.micHeadroomMs = ((this.mic.totalSamples - micReadEnd) / this.sampleRate) * 1000;
+    this.micTrack.micHeadroomMs = ((this.mic.totalSamples - micReadEnd) / this.sampleRate) * 1000;
     this.backingHeadroomMs = ((this.backing.totalSamples - (startSample + this.frameSamples)) / this.sampleRate) * 1000;
-    if (this.micHeadroomMs < 0 && this.bus.micExpected) this.micStarvedFrames += 1;
+    if (this.micTrack.micHeadroomMs < 0 && this.bus.micExpected) this.micTrack.micStarvedFrames += 1;
     if (this.backingHeadroomMs < 0 && this.bus.backingExpected) this.backingStarvedFrames += 1;
   }
 
@@ -1833,9 +1798,9 @@ export class AudioSession {
     } = this.readBackingFrame(startSample);
     const lookahead = this.micLimiter.lookaheadSamples;
 
-    this.micUnplayableRunFrames = this.bus.micExpected
+    this.micTrack.micUnplayableRunFrames = this.bus.micExpected
       && micReadEvidence.gapSamples + micReadEvidence.frontierMissingSamples > 0
-      ? this.micUnplayableRunFrames + 1
+      ? this.micTrack.micUnplayableRunFrames + 1
       : 0;
     this.backingUnplayableRunFrames = this.bus.backingExpected
       && backingReadEvidence.gapSamples + backingReadEvidence.frontierMissingSamples > 0
@@ -1868,7 +1833,7 @@ export class AudioSession {
       // crosses the semantic boundary. The first real replacement sample then
       // seeds fresh dynamics from replacement PCM itself.
       if (this.beginMicCaptureRestartEdgeIfDue(micSourceSample)) {
-        this.micLimiterResetPending = true;
+        this.micTrack.micLimiterResetPending = true;
       }
 
       const micEvidenceMissing = micSlew
@@ -1896,7 +1861,7 @@ export class AudioSession {
 
       const recoveringFromFullMicSilence = !micAudibleMissing && this.micEdge.silenced;
 
-      if (this.micLimiterResetPending && !micAudibleMissing) {
+      if (this.micTrack.micLimiterResetPending && !micAudibleMissing) {
         this.seedMicLimiterForCapture(
           mic,
           i,
@@ -1960,7 +1925,7 @@ export class AudioSession {
       ) {
         this.bus.releaseBackingHold();
       }
-      this.lastEmittedMicSourceSample = micSourceSample;
+      this.micTrack.lastEmittedMicSourceSample = micSourceSample;
       const value = this.bus.mixSample(
         voice,
         songContribution,
@@ -2006,10 +1971,10 @@ export class AudioSession {
         + crossfadeUnheaderedSamplesDelta,
     };
 
-    this.lastEmittedMicAdvanceSamples = boundedRuntimeAdvanceMoved
+    this.micTrack.lastEmittedMicAdvanceSamples = boundedRuntimeAdvanceMoved
       ? advanceSamplesExact
       : advanceSamples;
-    this.lastEmittedMicFrameComplete =
+    this.micTrack.lastEmittedMicFrameComplete =
       micReadEvidence.gapSamples === 0
       && micReadEvidence.frontierMissingSamples === 0;
 

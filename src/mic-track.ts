@@ -8,6 +8,13 @@ import { MicRawMeter } from './mic-raw-meter.js';
 import { emptyPcmTimeline } from './pcm-timeline.js';
 import { SourceOutputEdge } from './source-output-edge.js';
 
+export type AlignmentState = {
+  /** RTT/2 fallback used until an acoustic calibration succeeds. */
+  networkCompensationMs: number;
+  calibratedMicLagMs: number | null;
+  fineTuneMs: number;
+};
+
 /**
  * Per-singer Mic state extracted without changing AudioSession's ingest, render,
  * clock, limiter, or evidence algorithms. The current single-Mic AudioSession
@@ -15,9 +22,9 @@ import { SourceOutputEdge } from './source-output-edge.js';
  * instance while one room owns the backing and final MixBus.
  *
  * This is a STATE boundary, not yet an independent full Mic processor.
- * Read/ingest state that still belongs to AudioSession (read-head history,
- * folded loss, limiter-reset flag etc.) must migrate before reusing it as a
- * production multi-Mic renderer.
+ * Track-local calibration/read-head history, capture flags and health counters
+ * now live alongside these components. The actual ingest/read algorithms
+ * still run in AudioSession; this does not yet create a reusable processor.
  */
 export class MicTrack {
   readonly timeline = emptyPcmTimeline();
@@ -29,6 +36,29 @@ export class MicTrack {
   readonly edge: SourceOutputEdge;
   readonly frontier: MicFrontierCorrection;
   readonly clockTrim: MicClockTrim;
+
+  /** Calibration is owned by each singer, not by the room output clock. */
+  alignmentState: AlignmentState = {
+    networkCompensationMs: 0,
+    calibratedMicLagMs: null,
+    fineTuneMs: 0,
+  };
+  calibratedMicLagTargetMs: number | null = null;
+  /** Calibration offset accounted for by folded capture loss. */
+  calibrationUnfoldedSamples = 0;
+  /** Previously emitted per-singer read-head trajectory. */
+  lastEmittedMicAdvanceSamples: number | null = null;
+  lastEmittedMicFrameComplete = false;
+  lastEmittedMicSourceSample: number | null = null;
+  /** Own source starvation and concealment evidence. */
+  micStarvedFrames = 0;
+  micUnplayableRunFrames = 0;
+  micHeadroomMs = 0;
+  micConcealedSamples = 0;
+  /** Capture-specific source origin and limiter restart guard. */
+  micLimiterResetPending = false;
+  micCaptureOriginSample: number | null = null;
+
 
   constructor(options: {
     sampleRate: number;

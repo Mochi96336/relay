@@ -132,6 +132,68 @@ describe('extracted MicTrack owns per-singer components independently', () => {
     assert.notStrictEqual(aFrame.samples, bFrame.samples);
   });
 
+  test('two separate MicTracks perform real fractional slew with independent source PCM', () => {
+    const a = new MicTrack(config);
+    const b = new MicTrack(config);
+    const waveform = new Int16Array(1600);
+    for (let i = 0; i < waveform.length; i++) waveform[i] = i * 10;
+    for (const [track, sign] of [[a, 1], [b, -1]] as const) {
+      track.timeline.chunks.push({
+        start: 0,
+        samples: waveform.map(sample => sample * sign),
+        positioned: true,
+      });
+      track.timeline.totalSamples = waveform.length;
+    }
+    const plan = {
+      startSample: 0,
+      previouslyEmittedAdvanceSamples: 0,
+      previousAdvanceSamplesExact: 0,
+      advanceSamplesExact: 9.6,
+      advanceSamples: 10,
+      micReadStart: 10,
+      boundedRuntimeAdvanceMoved: true,
+      canCrossfadeReadHeadJump: false,
+      crossfadeSamples: 0,
+    };
+    const first = a.readMicFrame(plan);
+    const second = b.readMicFrame(plan);
+    assert.ok(first.slew, 'real bounded-slew interpolation is used');
+    assert.equal(first.slew?.rate, 1.01);
+    assert.equal(first.samples[0], 0);
+    assert.ok(Math.abs(first.samples[500] - 5_050) <= 1);
+    assert.equal(second.samples[500], -first.samples[500]);
+    assert.equal(first.evidence.gapSamples, 0);
+    assert.equal(second.evidence.frontierMissingSamples, 0);
+    assert.notStrictEqual(first.samples, second.samples);
+  });
+
+  test('immediate read-head jump crossfades using only its own retained PCM', () => {
+    const track = new MicTrack(config);
+    const samples = new Int16Array(2600);
+    for (let i = 0; i < samples.length; i++) samples[i] = i * 9;
+    track.timeline.chunks.push({ start: 0, samples, positioned: true });
+    track.timeline.totalSamples = samples.length;
+    track.lastEmittedMicSourceSample = 959;
+    const frame = track.readMicFrame({
+      startSample: 960,
+      previouslyEmittedAdvanceSamples: 0,
+      previousAdvanceSamplesExact: 0,
+      advanceSamplesExact: 96,
+      advanceSamples: 96,
+      micReadStart: 1056,
+      boundedRuntimeAdvanceMoved: false,
+      canCrossfadeReadHeadJump: true,
+      crossfadeSamples: 240,
+    });
+    assert.equal(frame.samples[0], samples[960], 'first sample continues prior trajectory');
+    assert.equal(frame.samples[239], samples[1056 + 239],
+      'the last crossfade sample comes entirely from the new trajectory');
+    assert.equal(frame.samples[400], samples[1056 + 400]);
+    assert.equal(frame.crossfadeUnheaderedSamplesDelta, 0);
+    assert.equal(frame.crossfadeInputClippedSamplesDelta, 0);
+  });
+
   test('current AudioSession still uses its actual existing Mic clock and limits', () => {
     const session = new AudioSession({
       sampleRate: 48_000, frameMs: 20, prebufferMs: 400,

@@ -223,16 +223,16 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
       captured(FRAME, 10_000), RATE, 20), false);
     assert.equal(coordinator.admitTrusted({
       verifiedParticipantId: 'B', transportId: 'socket-B',
-      seat: 'secondary', expectedPrimaryId: null, nowMs: 10,
+      seat: 'secondary', expectedPrimaryId: null, nowMs: 20,
     }).ok, false, 'primary must be deliberately admitted first');
     const a = coordinator.admitTrusted({
       verifiedParticipantId: 'A', transportId: 'socket-A',
-      seat: 'primary', expectedPrimaryId: null, nowMs: 10,
+      seat: 'primary', expectedPrimaryId: null, nowMs: 21,
     });
     assert.equal(a.ok, true);
     const attempted = coordinator.admitTrusted({
       verifiedParticipantId: 'B', transportId: 'socket-B',
-      seat: 'primary', expectedPrimaryId: null, nowMs: 11,
+      seat: 'primary', expectedPrimaryId: null, nowMs: 22,
     });
     assert.equal(attempted.ok, false, 'no implicit Take Mic');
     assert.equal(coordinator.snapshot().seats.primaryMicId, 'A');

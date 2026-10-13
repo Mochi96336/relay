@@ -63,6 +63,7 @@ import { ProductMicSteadiness } from './product-mic-steadiness.js';
 import { youtubeErrorMeansUnplayable } from '../shared/robot-player-errors.js';
 import { MicRuntime } from './mic-runtime.js';
 import { MicTransportGraceRuntime } from './mic-transport-grace-runtime.js';
+import { watchEventLoopStalls } from './event-loop-stall.js';
 import { TimingRuntime } from './timing-runtime.js';
 import { authorizeMicOwnerCommand, type MicOwnerCommand } from './command-authority.js';
 import { decodePcmFrame, type PcmFrame } from './pcm-frame.js';
@@ -2232,6 +2233,11 @@ function processPublisherFrame(frame: PcmFrame) {
 function deliverMicPackets(packets: PcmFrame[]) {
   for (const packet of packets) processPublisherFrame(packet);
 }
+
+// A paused Relay looks, from a page, like the network holding Mic audio back.
+const stopEventLoopStallWatch = watchEventLoopStalls((record) => {
+  console.warn('[event-loop]', JSON.stringify(record));
+});
 
 const mixerTimer = setInterval(() => {
   if (micRuntime.audioTransport) {
@@ -4605,6 +4611,7 @@ wss.on('close', () => {
   clearMicMediaAuthority();
   clearInterval(mixerTimer);
   clearInterval(youtubeTimelineTimer);
+  stopEventLoopStallWatch();
 });
 
 server.on('error', (error: NodeJS.ErrnoException) => {
@@ -4670,6 +4677,7 @@ async function gracefulShutdown(signal: NodeJS.Signals) {
     // closed at the last full mixed frame that production actually accepted.
     clearInterval(mixerTimer);
     clearInterval(youtubeTimelineTimer);
+    stopEventLoopStallWatch();
     micTransportGrace.cancel();
     backingRuntime.cancelGrace();
 

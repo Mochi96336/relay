@@ -305,6 +305,23 @@ describe('Choir Audio prototype: actual PCM and one room output clock', () => {
     assert.equal(resumed.singers[1].availableSamples, FRAME);
   });
 
+  test('revoke then immediate fallback cannot interrupt its own fading output tail', () => {
+    const room = subject();
+    install(room, A);
+    packet(room, A, 0, new Int16Array(FRAME * 4).fill(14_000));
+    ready(render(room, 0));
+    assert.equal(room.revokeAnchor(A.participantId), true);
+    assert.equal(room.installAnchor(anchor(A, 0), 'sample-song-estimate'), false,
+      'must not truncate the remaining audible old source tail');
+    const tail = ready(render(room, FRAME));
+    assert.equal(tail.singers[0].calibration, 'none');
+    assert.ok(tail.pcm[0] > tail.pcm[FRAME - 1]);
+    assert.equal(room.installAnchor(anchor(A, 0), 'sample-song-estimate'), true);
+    const resumed = ready(render(room, FRAME * 2));
+    assert.equal(resumed.singers[0].calibration, 'sample-song-estimate');
+    assert.equal(resumed.singers[0].availableSamples, FRAME);
+  });
+
   test('revoking the last mic keeps a short output tail before releasing bus headroom', () => {
     const room = subject();
     install(room, A);

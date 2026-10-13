@@ -199,6 +199,7 @@ export class ChoirAudioPrototype {
     // freeze gate; this prototype alone cannot determine recording state.
     if (!track || options.takeFrozen === true || source === 'unavailable'
       || source === 'content-held'
+      || (track.anchor === null && track.fade > 0)
       || anchor.songEpoch !== track.identity.songEpoch
       || anchor.captureGeneration !== track.identity.captureGeneration
       || anchor.backingGeneration !== track.identity.backingGeneration

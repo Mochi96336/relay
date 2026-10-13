@@ -282,6 +282,66 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     assert.equal(output.frames[0].singers[1].expected, true);
   });
 
+  test('A to A2 to A3 rebind allocates strictly fresh media epochs and calibration authority', () => {
+    const coordinator = room();
+    const { a, b } = admitBoth(coordinator);
+    assert.equal(coordinator.receiveFromTransport('socket-A',
+      captured(FRAME, 8_000), RATE, 20), true);
+    assert.equal(coordinator.receiveFromTransport('socket-B',
+      captured(FRAME * 18, 6_000), RATE, 40), true);
+    assert.equal(coordinator.disconnectTransport('socket-A', 80), true);
+    for (const at of [220, 240, 260]) {
+      assert.equal(coordinator.renderDue(at).state, 'ready');
+    }
+    const a2 = coordinator.admitTrusted({
+      verifiedParticipantId: 'A', transportId: 'socket-A2',
+      seat: 'primary', expectedPrimaryId: 'A', nowMs: 261,
+    });
+    assert.equal(a2.ok, true);
+    if (!a2.ok) return;
+    assert.ok(a2.mediaEpoch > a.mediaEpoch);
+    assert.equal(coordinator.disconnectTransport('socket-A2', 270), true);
+    // A2 has no audible source and cannot endow A3 with any earlier calibration.
+    for (const at of [280, 300, 320]) {
+      assert.equal(coordinator.renderDue(at).state, 'ready');
+    }
+    const a3 = coordinator.admitTrusted({
+      verifiedParticipantId: 'A', transportId: 'socket-A3',
+      seat: 'primary', expectedPrimaryId: 'A', nowMs: 321,
+    });
+    assert.equal(a3.ok, true);
+    if (!a3.ok) return;
+    assert.ok(a3.mediaEpoch > a2.mediaEpoch);
+    assert.equal(coordinator.inspectTransport('socket-A'), null);
+    assert.equal(coordinator.inspectTransport('socket-A2'), null);
+    assert.equal(coordinator.inspectTransport('socket-A3')?.mediaEpoch, a3.mediaEpoch);
+    assert.equal(coordinator.inspectTransport('socket-B')?.mediaEpoch, b.mediaEpoch);
+    const valid = {
+      source: 'content' as const, advanceMs: 0,
+      sampleResidualMs: null, bootResidualMs: null,
+      sampleCandidateMs: null, bootCandidateMs: null,
+    };
+    assert.equal(coordinator.acceptTrustedReboundAlignment(
+      'socket-A2', a2.mediaEpoch, valid, 322), false);
+    assert.equal(coordinator.acceptTrustedReboundAlignment(
+      'socket-A3', a2.mediaEpoch, valid, 323), false);
+    assert.equal(coordinator.receiveFromTransport('socket-A2',
+      captured(FRAME, 12_000), RATE, 324), false);
+    assert.equal(coordinator.receiveFromTransport('socket-A3',
+      captured(FRAME, 12_000), RATE, 325), true);
+    const stillMuted = coordinator.renderDue(340);
+    assert.equal(stillMuted.state, 'ready');
+    if (stillMuted.state === 'ready') {
+      assert.equal(stillMuted.frames[0].singers[0].awaitingCalibration, true);
+      assert.equal(stillMuted.frames[0].singers[0].voicePeakAbs, 0);
+      assert.equal(stillMuted.frames[0].singers[1].mediaEpoch, b.mediaEpoch);
+    }
+    assert.equal(coordinator.acceptTrustedReboundAlignment(
+      'socket-A3', a3.mediaEpoch, valid, 341), true);
+    assert.equal(coordinator.acceptTrustedReboundAlignment(
+      'socket-A3', a3.mediaEpoch, valid, 342), false);
+  });
+
   test('expired reconnect grace cannot silently restore a revoked primary seat', () => {
     const coordinator = room();
     const { a, b } = admitBoth(coordinator);

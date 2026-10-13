@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { ChoirDeadlineRoomExperiment } from '../src/choir-deadline-room-experiment.js';
 import { laggedMultibandMusicPair } from './helpers/music-calibration.js';
+import { ChoirContentPcmBuffer } from '../src/choir-content-pcm-buffer.js';
+import { emptyPcmTimeline } from '../src/pcm-timeline.js';
 
 const RATE = 48_000;
 const FRAME = 960;
@@ -730,6 +732,81 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     assert.equal(stillFallback.frames[0].singers[0].calibrationSource, 'boot-probe-estimate');
     assert.equal(stillFallback.frames[0].singers[0].calibrationTargetMs, 0);
     assert.equal(stillFallback.frames[0].singers[1].mediaEpoch, b.mediaEpoch);
+  });
+
+  test('Robot pause or seek invalidates the entire Choir room rather than reusing Content', () => {
+    const coordinator = new ChoirDeadlineRoomExperiment({
+      sampleRate: RATE, frameMs: 20, prebufferMs: 400,
+      retentionMs: 3_000, roomEpochMs: 0, outputHoldbackMs: 200,
+      songEpoch: 7, backingGeneration: 9, videoId: 'abcdefghijk',
+    });
+    const { a, b } = admitBoth(coordinator);
+    assert.deepEqual(coordinator.analyzeTrustedCanonicalContent(
+      'socket-A', a.mediaEpoch, 0, 10),
+    { status: 'rejected', reason: 'robot-mapping-not-playing' });
+    const playing = {
+      mappingEpoch: 1, videoId: 'abcdefghijk',
+      songEpoch: 7, backingGeneration: 9,
+      robotCaptureGeneration: 9, playbackRate: 1, playing: true,
+    };
+    assert.equal(coordinator.setTrustedPlaybackMapping({
+      ...playing, robotCaptureGeneration: 10,
+    }, 11), false, 'mapping must belong to the fixed Robot capture generation');
+    assert.equal(coordinator.setTrustedPlaybackMapping(playing, 12), true);
+    assert.equal(coordinator.setTrustedPlaybackMapping(playing, 13), false,
+      'replaying the same Robot mapping epoch cannot change authority');
+    assert.equal(coordinator.receiveFromTransport('socket-A',
+      captured(FRAME, 8_000), RATE, 20), true);
+    assert.equal(coordinator.receiveTrustedBacking(
+      captured(FRAME, 5_000, 0, 9), RATE, 20), true);
+    const old = coordinator.renderDue(220);
+    assert.equal(old.state, 'ready');
+    assert.equal(coordinator.setTrustedPlaybackMapping({
+      ...playing, mappingEpoch: 2, playing: false,
+    }, 221), true);
+    assert.deepEqual(coordinator.renderDue(240), {
+      state: 'resync-required', frames: [], reason: 'playback-mapping-changed',
+    }, 'an old Content read-head cannot outlive a trusted pause');
+    assert.equal(coordinator.receiveFromTransport('socket-A',
+      captured(FRAME, 8_000, FRAME), RATE, 260), false);
+    assert.equal(coordinator.receiveTrustedBacking(
+      captured(FRAME, 5_000, FRAME, 9), RATE, 260), false);
+    assert.equal(coordinator.commitTrustedCanonicalContent(
+      'socket-A', a.mediaEpoch, 261, false), 'rejected');
+    assert.equal(coordinator.inspectTransport('socket-B')?.mediaEpoch, b.mediaEpoch,
+      'room invalidation does not silently hand song or Mic ownership to B');
+  });
+
+  test('the calibration cache cannot retain more than seven seconds per source', () => {
+    const cache = new ChoirContentPcmBuffer(RATE, 7_000);
+    const timeline = emptyPcmTimeline();
+    timeline.generation = 7;
+    timeline.sourceRate = RATE;
+    for (let i = 0; i < 12; i++) {
+      const before = timeline.chunks.length;
+      timeline.chunks.push({
+        start: i * RATE, samples: new Int16Array(RATE).fill(i + 1),
+        positioned: true,
+      });
+      timeline.totalSamples = (i + 1) * RATE;
+      cache.captureAccepted(timeline, before);
+      assert.ok(cache.sampleCount <= 7 * RATE);
+    }
+    assert.equal(cache.hasFullPositionedWindow(7, RATE, 6 * RATE, 6 * RATE), true);
+    assert.equal(cache.read(6 * RATE, 1)[0], 7);
+    assert.equal(cache.hasFullPositionedWindow(7, RATE, 0, 6 * RATE), false,
+      'expired PCM cannot be resurrected from the source playback timeline');
+    timeline.generation = 8;
+    const before = timeline.chunks.length;
+    timeline.chunks.push({
+      start: 12 * RATE, samples: new Int16Array(RATE).fill(100),
+      positioned: true,
+    });
+    timeline.totalSamples = 13 * RATE;
+    cache.captureAccepted(timeline, before);
+    assert.equal(cache.sampleCount, RATE);
+    assert.equal(cache.hasFullPositionedWindow(7, RATE, 6 * RATE, 6 * RATE), false,
+      'a capture generation change invalidates all old calibration PCM');
   });
 
   test('expired reconnect grace cannot silently restore a revoked primary seat', () => {

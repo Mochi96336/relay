@@ -54,6 +54,8 @@ type Slot = {
   identity: CanonicalChoirSingerId;
   mic: MicTrack;
   expected: boolean;
+  /** Separate entrance fade; room MixBus cannot detect an additional Mic. */
+  joinGain: number;
 };
 
 type RoomConfig = {
@@ -74,6 +76,7 @@ export class CanonicalChoirMixExperiment {
   private readonly micOptions: ConstructorParameters<typeof MicTrack>[0];
   private readonly sampleRate: number;
   private readonly voiceCeiling: number;
+  private readonly joinStep: number;
   private readonly songEpoch: number;
   private readonly backingGeneration: number;
   private nextRoomSample: number | null = null;
@@ -89,6 +92,10 @@ export class CanonicalChoirMixExperiment {
     ) throw new Error('Invalid canonical Choir experiment configuration');
     this.frameSamples = Math.round(config.sampleRate * config.frameMs / 1000);
     this.sampleRate = config.sampleRate;
+    // A second singer joining an already active Mic bus has no MixBus
+    // semantic ownership transition. Fade that *individual* contribution
+    // over 10ms rather than introducing an instantaneous PCM discontinuity.
+    this.joinStep = 1 / Math.max(1, Math.round(config.sampleRate * .010));
     this.songEpoch = config.songEpoch;
     this.backingGeneration = config.backingGeneration;
     this.micOptions = {
@@ -120,7 +127,9 @@ export class CanonicalChoirMixExperiment {
       || id.mediaEpoch < 0 || !id.participantId
       || this.slots.has(id.participantId) || this.slots.size >= 2) return false;
     const mic = new MicTrack(this.micOptions);
-    this.slots.set(id.participantId, { identity: { ...id }, mic, expected: true });
+    this.slots.set(id.participantId, {
+      identity: { ...id }, mic, expected: true, joinGain: 0,
+    });
     this.bus.setMicExpected(true, true);
     return true;
   }
@@ -257,7 +266,10 @@ export class CanonicalChoirMixExperiment {
           -this.voiceCeiling, Math.min(this.voiceCeiling, result.voice),
         );
         if (boundedVoice !== result.voice) evidence.limiterOvershootSamples++;
-        voices += boundedVoice * voiceWeight;
+        if (!missingAudible && slot.expected) {
+          slot.joinGain = Math.min(1, slot.joinGain + this.joinStep);
+        }
+        voices += boundedVoice * voiceWeight * slot.joinGain;
         if (result.limited) evidence.limitedSamples++;
         if (result.heavilyLimited) evidence.heavyLimitedSamples++;
         const clipped = read.inputClippingMask?.[i] === 1;

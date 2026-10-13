@@ -180,6 +180,30 @@ describe('canonical MicTrack N=2 through the production MixBus (no live server)'
     assert.ok(maximum > 0 && maximum <= 32767);
   });
 
+  test('B joins an already singing A without introducing a step in the shared Mic bus', () => {
+    const two = room();
+    const solo = room();
+    for (const mix of [two, solo]) {
+      assert.equal(mix.addSinger(A), true);
+      assert.equal(mix.setGainDb(A, 0), true);
+      assert.equal(mix.ingestMic(A, pcm(FRAME * 10, 6_000), RATE, FRAME * 10), true);
+      for (let n = 0; n < 3; n++) mix.render(n * FRAME);
+    }
+    assert.equal(two.addSinger(B), true);
+    assert.equal(two.setGainDb(B, 0), true);
+    assert.equal(two.ingestMic(B, pcm(FRAME * 3, 10_000), RATE, FRAME * 6), true);
+    const withB = two.render(3 * FRAME).pcm;
+    const withoutB = solo.render(3 * FRAME).pcm;
+    const firstJoinContribution = withB[0] - withoutB[0];
+    const fullJoinContribution = withB[FRAME - 1] - withoutB[FRAME - 1];
+    assert.ok(Math.abs(firstJoinContribution) < 100,
+      `a new Mic may not enter a running bus at full volume: delta=${firstJoinContribution}`);
+    assert.ok(fullJoinContribution > 1000,
+      `B should reach an audible contribution by the end of 10ms: delta=${fullJoinContribution}`);
+    assert.equal(two.render(4 * FRAME).singers[0].expected, true);
+    assert.equal(solo.render(4 * FRAME).singers[0].expected, true);
+  });
+
   test('room sample clock and source epochs cannot be silently replaced', () => {
     const mix = room();
     assert.equal(mix.addSinger({ ...A, songEpoch: 8 }), false);

@@ -324,6 +324,15 @@ export class ChoirDeadlineRoomExperiment {
       return { status: 'rejected', reason: 'untrusted-transport-or-song' };
     const participantId = active.participantId;
     this.pendingCanonicalContent.delete(participantId);
+    // Six seconds held in retention are not necessarily six seconds of
+    // CURRENT song playback. A caller cannot relabel an old PCM window by
+    // running the analyzer much later and using a fresh wall-clock timestamp.
+    const nowSample = Math.floor((nowMs - this.roomEpochMs) * this.sampleRate / 1000);
+    const endSample = startSample + 6 * this.sampleRate;
+    const maximumWindowSkew = this.sampleRate; // 1s, conservative experiment guard
+    if (!Number.isSafeInteger(nowSample) || !Number.isSafeInteger(endSample)
+      || Math.abs(nowSample - endSample) > maximumWindowSkew)
+      return { status: 'rejected', reason: 'stale-content-window' };
     const id = {
       participantId, mediaEpoch,
       songEpoch: this.songEpoch, backingGeneration: this.backingGeneration,

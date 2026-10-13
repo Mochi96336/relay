@@ -49,6 +49,10 @@ export type CanonicalChoirSingerEvidence = {
   /** Value applied to this frame by the canonical 1%-per-frame MicTrack slew. */
   calibrationAppliedMs: number | null;
   calibrationTargetMs: number | null;
+  /** Large Content disagreement staged without moving this audible read head. */
+  reacquisitionPending: boolean;
+  /** Next capture, not this one, must supply newly confirmed Content. */
+  requiresFreshContent: boolean;
 };
 
 export type CanonicalChoirFrame = {
@@ -67,6 +71,8 @@ type Slot = {
   joinGain: number;
   latePacketDrops: number;
   awaitingCalibration: boolean;
+  pendingReacquisition: { revision: number; targetMs: number } | null;
+  requiresFreshContent: boolean;
   /** Authority for the currently admitted capture only; never re-used on rebind. */
   authority: {
     source: 'content' | 'sample-song-estimate' | 'boot-probe-estimate';
@@ -149,6 +155,7 @@ export class CanonicalChoirMixExperiment {
     this.slots.set(id.participantId, {
       identity: { ...id }, mic, expected: true, joinGain: 0,
       latePacketDrops: 0, awaitingCalibration: false, authority: null,
+      pendingReacquisition: null, requiresFreshContent: false,
     });
     this.bus.setMicExpected(true, true);
     return true;
@@ -200,6 +207,8 @@ export class CanonicalChoirMixExperiment {
       latePacketDrops: 0,
       awaitingCalibration: true,
       authority: null,
+      pendingReacquisition: null,
+      requiresFreshContent: old.pendingReacquisition !== null,
     });
     this.bus.setMicExpected(true, true);
     return true;
@@ -213,6 +222,7 @@ export class CanonicalChoirMixExperiment {
   acceptReboundAlignment(id: CanonicalChoirSingerId, decision: ChoirAlignmentDecision): boolean {
     const slot = this.slots.get(id.participantId);
     if (!slot || !slot.expected || !slot.awaitingCalibration
+      || slot.requiresFreshContent
       || !this.matchesEpoch(id) || slot.identity.mediaEpoch !== id.mediaEpoch
       || !['content', 'sample-song-estimate', 'boot-probe-estimate'].includes(decision.source)
       || decision.advanceMs === null || !Number.isFinite(decision.advanceMs)
@@ -226,6 +236,80 @@ export class CanonicalChoirMixExperiment {
       firstAdvanceMs: decision.advanceMs,
       revision: 0,
       captureGeneration: slot.mic.timeline.generation,
+      sourceRate: slot.mic.timeline.sourceRate,
+    };
+    return true;
+  }
+
+  /**
+   * A large disagreement must not move a live Mic by a large PCM jump.
+   * Stage an explicit re-acquisition requirement while retaining the current
+   * fallback's actual output. Only disconnect + safe tail retirement + a NEW
+   * server-owned Media Epoch can satisfy this proposal.
+   *
+   * The revision and decision are assumed verified by the caller, not raw
+   * observations. A proposal itself grants NO playback authority.
+   */
+  stageLargeContentReacquisition(
+    id: CanonicalChoirSingerId, revision: number,
+    decision: ChoirAlignmentDecision, takeFrozen: boolean,
+  ): boolean {
+    const slot = this.slots.get(id.participantId);
+    if (!slot || !this.matchesEpoch(id) || slot.identity.mediaEpoch !== id.mediaEpoch
+      || !slot.expected || slot.awaitingCalibration || takeFrozen
+      || !slot.authority || slot.authority.source === 'content'
+      || slot.pendingReacquisition !== null
+      || !Number.isSafeInteger(revision) || revision <= slot.authority.revision
+      || decision.source !== 'content'
+      || decision.advanceMs === null || !Number.isFinite(decision.advanceMs)
+      || Math.abs(decision.advanceMs) > 2_800
+      || this.nextRoomSample === null) return false;
+    const mic = slot.mic;
+    if (mic.timeline.generation === null
+      || mic.timeline.generation !== slot.authority.captureGeneration
+      || mic.timeline.sourceRate !== slot.authority.sourceRate
+      || mic.alignmentState.calibratedMicLagMs === null
+      || mic.calibratedMicLagTargetMs === null) return false;
+    // Same 5ms policy as live Content recovery. Never staircase corrections.
+    if (Math.abs(decision.advanceMs - mic.calibratedMicLagTargetMs) <= 5
+      && Math.abs(decision.advanceMs - slot.authority.firstAdvanceMs) <= 5)
+      return false;
+    slot.pendingReacquisition = { revision, targetMs: decision.advanceMs };
+    // Deliberately do NOT assign calibratedMicLagTargetMs or mute the singer.
+    return true;
+  }
+
+  /**
+   * Fresh acoustic Content after an explicit Media-Epoch replacement.
+   * Capture generation must be observed in the NEW MicTrack. A plain
+   * acceptReboundAlignment() cannot satisfy requiresFreshContent.
+   * This method still relies on upstream independent evidence verification.
+   */
+  acceptReacquiredContent(
+    id: CanonicalChoirSingerId,
+    proof: { mediaEpoch: number; captureGeneration: number; revision: number },
+    decision: ChoirAlignmentDecision,
+  ): boolean {
+    const slot = this.slots.get(id.participantId);
+    if (!slot || !slot.requiresFreshContent || !slot.awaitingCalibration
+      || !slot.expected || !this.matchesEpoch(id)
+      || slot.identity.mediaEpoch !== id.mediaEpoch
+      || proof.mediaEpoch !== id.mediaEpoch
+      || !Number.isSafeInteger(proof.revision) || proof.revision < 1
+      || !Number.isSafeInteger(proof.captureGeneration)
+      || slot.mic.timeline.generation === null
+      || proof.captureGeneration !== slot.mic.timeline.generation
+      || decision.source !== 'content'
+      || decision.advanceMs === null || !Number.isFinite(decision.advanceMs)
+      || Math.abs(decision.advanceMs) > 2_800) return false;
+    slot.mic.alignmentState.calibratedMicLagMs = decision.advanceMs;
+    slot.mic.calibratedMicLagTargetMs = decision.advanceMs;
+    slot.mic.edge.beginReplacement();
+    slot.awaitingCalibration = false;
+    slot.requiresFreshContent = false;
+    slot.authority = {
+      source: 'content', firstAdvanceMs: decision.advanceMs, revision: proof.revision,
+      captureGeneration: proof.captureGeneration,
       sourceRate: slot.mic.timeline.sourceRate,
     };
     return true;
@@ -250,6 +334,7 @@ export class CanonicalChoirMixExperiment {
       || !slot.expected || slot.awaitingCalibration || takeFrozen
       || !slot.authority
       || slot.authority.source === 'content'
+      || slot.pendingReacquisition !== null
       || decision.source !== 'content'
       || decision.advanceMs === null || !Number.isFinite(decision.advanceMs)
       || Math.abs(decision.advanceMs) > 2_800
@@ -427,6 +512,8 @@ export class CanonicalChoirMixExperiment {
         calibrationSource: slot.authority?.source ?? null,
         calibrationAppliedMs: slot.mic.alignmentState.calibratedMicLagMs,
         calibrationTargetMs: slot.mic.calibratedMicLagTargetMs,
+        reacquisitionPending: slot.pendingReacquisition !== null,
+        requiresFreshContent: slot.requiresFreshContent,
       };
       if (!slot.awaitingCalibration) {
         slot.mic.lastEmittedMicFrameComplete =

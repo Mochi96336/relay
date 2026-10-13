@@ -519,11 +519,16 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
   test('actual six-second canonical PCM grants a single fresh-epoch Content authority', () => {
     const coordinator = new ChoirDeadlineRoomExperiment({
       sampleRate: RATE, frameMs: 20, prebufferMs: 400,
-      retentionMs: 10_000, roomEpochMs: 0, outputHoldbackMs: 200,
+      retentionMs: 3_000, roomEpochMs: 0, outputHoldbackMs: 200,
       songEpoch: 7, backingGeneration: 9, videoId: 'abcdefghijk',
       maxCatchupFrames: 8, reconnectGraceMs: 2_000,
     });
     const { a, b } = admitBoth(coordinator);
+    assert.equal(coordinator.setTrustedPlaybackMapping({
+      mappingEpoch: 1, videoId: 'abcdefghijk',
+      songEpoch: 7, backingGeneration: 9, robotCaptureGeneration: 9,
+      playbackRate: 1, playing: true,
+    }, 0), true);
     assert.equal(coordinator.receiveFromTransport('socket-A',
       captured(FRAME, 7_000), RATE, 20), true);
     assert.equal(coordinator.disconnectTransport('socket-A', 80), true);
@@ -563,6 +568,8 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
       }
       assert.equal(coordinator.renderDue(at).state, 'ready');
     }
+    assert.equal(coordinator.contentBufferSampleCounts.A.mic, 6 * RATE);
+    assert.equal(coordinator.contentBufferSampleCounts.A.backing, 6 * RATE);
     const candidate = coordinator.analyzeTrustedCanonicalContent(
       'socket-A2', a2.mediaEpoch, 0, 6_001);
     assert.equal(candidate.status, 'candidate',
@@ -617,11 +624,16 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
   test('a measured +120ms Content disagreement stages a live fallback without audio jump', () => {
     const coordinator = new ChoirDeadlineRoomExperiment({
       sampleRate: RATE, frameMs: 20, prebufferMs: 400,
-      retentionMs: 10_000, roomEpochMs: 0, outputHoldbackMs: 200,
+      retentionMs: 3_000, roomEpochMs: 0, outputHoldbackMs: 200,
       songEpoch: 7, backingGeneration: 9, videoId: 'abcdefghijk',
       maxCatchupFrames: 8, reconnectGraceMs: 2_000,
     });
     const { a, b } = admitBoth(coordinator);
+    assert.equal(coordinator.setTrustedPlaybackMapping({
+      mappingEpoch: 1, videoId: 'abcdefghijk',
+      songEpoch: 7, backingGeneration: 9, robotCaptureGeneration: 9,
+      playbackRate: 1, playing: true,
+    }, 0), true);
     coordinator.receiveFromTransport('socket-A', captured(FRAME, 5_000), RATE, 20);
     coordinator.disconnectTransport('socket-A', 80);
     for (const at of [220, 240, 260]) {
@@ -698,6 +710,8 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     }
     assert.ok(playableAt > 0,
       `source must actually become audible before large-lag staging: ${JSON.stringify(lastEmittedEvidence)}`);
+    assert.ok(coordinator.contentBufferSampleCounts.A.mic <= 7 * RATE);
+    assert.ok(coordinator.contentBufferSampleCounts.A.backing <= 7 * RATE);
     const measured = coordinator.analyzeTrustedCanonicalContent(
       'socket-A2', a2.mediaEpoch, 0, playableAt + 1);
     assert.equal(measured.status, 'candidate');

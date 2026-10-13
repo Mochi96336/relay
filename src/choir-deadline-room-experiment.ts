@@ -53,9 +53,9 @@ export type ChoirTrustedAdmissionResult =
  * fresh room/transport epoch, not silently rewinding an output sample cursor.
  */
 export class ChoirDeadlineRoomExperiment {
-  readonly registry: ChoirPublisherRegistry;
-  readonly room: CanonicalChoirMixExperiment;
-  readonly seats: ChoirSession;
+  private readonly registry: ChoirPublisherRegistry;
+  private readonly room: CanonicalChoirMixExperiment;
+  private readonly seats: ChoirSession;
 
   private readonly sampleRate: number;
   private readonly frameMs: number;
@@ -235,6 +235,21 @@ export class ChoirDeadlineRoomExperiment {
       this.nextFrameIndex++;
     }
     return { state: 'ready', frames };
+  }
+
+  /** Read-only diagnostic copies; callers cannot mutate admission or PCM state. */
+  snapshot() {
+    return {
+      seats: this.seats.snapshot(),
+      publishers: this.registry.snapshot().map(({ participantId, mediaEpoch, connected }) => ({
+        participantId, mediaEpoch, connected,
+      })),
+    };
+  }
+
+  /** Server diagnostic only; never accepts or grants transport credentials. */
+  inspectTransport(transportId: string) {
+    return this.registry.activePublisherForTransport(transportId);
   }
 
   /** Evidence-only view: no client credentials or private transport references. */

@@ -35,7 +35,7 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     const coordinator = room();
     const { a, b } = admitBoth(coordinator);
     assert.notEqual(a.mediaEpoch, b.mediaEpoch);
-    assert.equal(coordinator.registry.activePublisherForTransport('socket-B')?.participantId, 'B');
+    assert.equal(coordinator.inspectTransport('socket-B')?.participantId, 'B');
     assert.equal(coordinator.receiveFromTransport('socket-A', captured(FRAME * 5, 6_000), RATE, 100), true);
     assert.equal(coordinator.receiveFromTransport('socket-B', captured(FRAME * 5, 9_000), RATE, 100), true);
     assert.equal(coordinator.renderDue(219.999).state, 'not-due');
@@ -70,9 +70,9 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     assert.equal(coordinator.disconnectTransport('socket-A', 40), false);
     assert.equal(coordinator.receiveFromTransport('socket-B',
       captured(FRAME * 5, 9_000), RATE, 100), true);
-    assert.equal(coordinator.seats.primaryMicId, 'A',
+    assert.equal(coordinator.snapshot().seats.primaryMicId, 'A',
       'disconnect does not promote the secondary');
-    assert.equal(coordinator.seats.seatOf('B'), 'secondary');
+    assert.equal(coordinator.snapshot().seats.secondaryMicIds.includes('B') ? 'secondary' : null, 'secondary');
     const result = coordinator.renderDue(220);
     assert.equal(result.state, 'ready');
     if (result.state === 'ready') {
@@ -80,8 +80,8 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
       assert.equal(result.frames[0].singers[1].expected, true);
       assert.ok(result.frames[0].pcm[500] > 0);
     }
-    assert.equal(coordinator.registry.mayAcceptMedia('A', 'socket-A', a.mediaEpoch), false);
-    assert.equal(coordinator.registry.mayAcceptMedia('B', 'socket-B', b.mediaEpoch), true);
+    assert.equal(coordinator.inspectTransport('socket-A')?.mediaEpoch === a.mediaEpoch, false);
+    assert.equal(coordinator.inspectTransport('socket-B')?.mediaEpoch === b.mediaEpoch, true);
   });
 
   test('a late packet cannot fill an already sealed Mic frame after deadline', () => {
@@ -116,8 +116,8 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
       verifiedParticipantId: 'A', transportId: 'socket-A-new',
       seat: 'primary', expectedPrimaryId: 'A', nowMs: 30,
     }), { ok: false, reason: 'rebind-deferred' });
-    assert.equal(coordinator.registry.activePublisherForTransport('socket-A-new'), null);
-    assert.equal(coordinator.registry.mayAcceptMedia('B', 'socket-B', b.mediaEpoch), true);
+    assert.equal(coordinator.inspectTransport('socket-A-new'), null);
+    assert.equal(coordinator.inspectTransport('socket-B')?.mediaEpoch === b.mediaEpoch, true);
   });
 
   test('explicit B Take Mic requires authenticated transport and fresh CAS, no song takeover', () => {
@@ -133,13 +133,13 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     assert.equal(coordinator.takePrimaryTrusted('socket-A', 'A', 100), false,
       'primary cannot invoke secondary Take Mic');
     assert.equal(coordinator.takePrimaryTrusted('socket-B', 'A', 100), true);
-    assert.equal(coordinator.seats.primaryMicId, 'B');
-    assert.equal(coordinator.seats.songControllerId, 'A',
+    assert.equal(coordinator.snapshot().seats.primaryMicId, 'B');
+    assert.equal(coordinator.snapshot().seats.songControllerId, 'A',
       'song authority remains separate from the Mic ownership');
-    assert.equal(coordinator.registry.activePublisherForTransport('socket-A'), null);
-    assert.equal(coordinator.registry.mayAcceptMedia('A', 'socket-A', a.mediaEpoch), false);
-    assert.equal(coordinator.registry.mayAcceptMedia('B', 'socket-B', b.mediaEpoch), true);
-    assert.equal(coordinator.registry.activePublisherForTransport('socket-B')?.seat, 'primary');
+    assert.equal(coordinator.inspectTransport('socket-A'), null);
+    assert.equal(coordinator.inspectTransport('socket-A')?.mediaEpoch === a.mediaEpoch, false);
+    assert.equal(coordinator.inspectTransport('socket-B')?.mediaEpoch === b.mediaEpoch, true);
+    assert.equal(coordinator.inspectTransport('socket-B')?.seat, 'primary');
     assert.equal(coordinator.receiveFromTransport('socket-A',
       captured(FRAME, 16_000, FRAME * 5), RATE, 120), false);
     assert.equal(coordinator.receiveFromTransport('socket-B',
@@ -193,6 +193,6 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
       seat: 'primary', expectedPrimaryId: null, nowMs: 11,
     });
     assert.equal(attempted.ok, false, 'no implicit Take Mic');
-    assert.equal(coordinator.seats.primaryMicId, 'A');
+    assert.equal(coordinator.snapshot().seats.primaryMicId, 'A');
   });
 });

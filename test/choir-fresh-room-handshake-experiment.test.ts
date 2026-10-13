@@ -114,7 +114,7 @@ describe('Choir fresh room two-singer handshake', () => {
     assert.equal(flow.commitFreshContent(a, 5, false), false);
     assert.equal(flow.commitFreshContent(b, 5, false), false);
     assert.equal(flow.analyzeFreshContent(a, 0, 6).status, 'rejected');
-    const { mic, backing } = laggedMultibandMusicPair(6, RATE, 120, {
+    const { mic, backing } = laggedMultibandMusicPair(8, RATE, 120, {
       singerGain: 0.18,
     });
     const chunk = 2 * RATE;
@@ -139,6 +139,16 @@ describe('Choir fresh room two-singer handshake', () => {
         assert.equal(flow.receiveTrustedRobot(1, 7, robotFrame, RATE, at), true);
       }
       assert.equal(flow.advanceDue(1, at), true);
+      if (at >= 2_000) {
+        const evidence = flow.lastSingerEvidence();
+        assert.equal(evidence.length, 2);
+        for (const singer of evidence) {
+          assert.equal(singer.awaitingCalibration, true,
+            'initial Mic capture is muted despite receiving actual PCM');
+          assert.equal(singer.voicePeakAbs, 0,
+            'no singer is allowed to bypass first-room Content proof');
+        }
+      }
     }
     const aProof = flow.analyzeFreshContent(a, 0, 6_001);
     const bProof = flow.analyzeFreshContent(b, 0, 6_002);
@@ -152,8 +162,37 @@ describe('Choir fresh room two-singer handshake', () => {
       'a proof may be consumed only once');
     assert.equal(flow.commitFreshContent(b, 6_006, false), true);
     assert.deepEqual(flow.snapshot().contentVerifiedIds, ['A', 'B']);
-    assert.equal(flow.retireTrustedRoom(1, 6_007), true);
+    // Extend the SAME native Mic generations and Robot generation with
+    // continuous future PCM. This proves that successful Content authorization
+    // actually permits audible output once the canonical frontier is present.
+    const first = 6 * RATE;
+    const end = 8 * RATE;
+    assert.equal(flow.receiveVerifiedMic(a, {
+      generation: 7, firstSampleIndex: first,
+      pcm: mic.subarray(first * 2, end * 2),
+    }, RATE, 6_007), true);
+    assert.equal(flow.receiveVerifiedMic(b, {
+      generation: 8, firstSampleIndex: first,
+      pcm: mic.subarray(first * 2, end * 2),
+    }, RATE, 6_008), true);
+    assert.equal(flow.receiveTrustedRobot(1, 7, {
+      generation: 9, firstSampleIndex: first,
+      pcm: backing.subarray(first * 2, end * 2),
+    }, RATE, 6_009), true);
+    let audibleA = false;
+    let audibleB = false;
+    for (let at = 6_020; at <= 6_420; at += 20) {
+      assert.equal(flow.advanceDue(1, at), true);
+      for (const singer of flow.lastSingerEvidence()) {
+        assert.equal(singer.awaitingCalibration, false);
+        if (singer.participantId === 'A' && singer.voicePeakAbs > .01) audibleA = true;
+        if (singer.participantId === 'B' && singer.voicePeakAbs > .01) audibleB = true;
+      }
+    }
+    assert.equal(audibleA, true, 'new A really passes the PCM output edge');
+    assert.equal(audibleB, true, 'new B really passes the PCM output edge');
+    assert.equal(flow.retireTrustedRoom(1, 6_421), true);
     assert.deepEqual(flow.snapshot().contentVerifiedIds, []);
-    assert.equal(flow.commitFreshContent(b, 6_008, false), false);
+    assert.equal(flow.commitFreshContent(b, 6_422, false), false);
   });
 });

@@ -4,7 +4,11 @@ on:
   pull_request:
     paths:
       - 'src/choir-*.ts'
+      - 'src/mic-track.ts'
+      - 'src/audio-session.ts'
       - 'test/choir-*.test.ts'
+      - 'test/mic-track.test.ts'
+      - 'test/audio-session-golden.test.ts'
       - 'docs/CHOIR_*.md'
       - '.github/workflows/choir-experiment.yml'
   push:
@@ -26,5 +30,5 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
-      - name: Exercise Choir-only contracts
-        run: node --import tsx --test --test-concurrency=1 test/choir-*.test.ts
+      - name: Exercise Choir contracts and exact N=1 Golden PCM baseline
+        run: node --import tsx --test --test-concurrency=1 test/choir-*.test.ts test/mic-track.test.ts test/audio-session-golden.test.ts

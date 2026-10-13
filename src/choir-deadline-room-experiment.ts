@@ -42,7 +42,8 @@ export type ChoirDeadlineRoomOptions = {
 export type ChoirDeadlineResult =
   | { state: 'not-due'; frames: [] }
   | { state: 'ready'; frames: CanonicalChoirFrame[] }
-  | { state: 'resync-required'; frames: []; reason: 'late-clock' | 'time-regression' };
+  | { state: 'resync-required'; frames: []; reason: 'late-clock' | 'time-regression'
+      | 'playback-mapping-changed' };
 
 export type ChoirTrustedAdmissionResult =
   | { ok: true; mediaEpoch: number; idempotent: boolean }
@@ -87,7 +88,8 @@ export class ChoirDeadlineRoomExperiment {
   private nextFrameIndex = 0;
   private readonly sealedFrames: CanonicalChoirFrame[] = [];
   private lastNowMs = Number.NEGATIVE_INFINITY;
-  private invalidated: 'late-clock' | 'time-regression' | null = null;
+  private invalidated: 'late-clock' | 'time-regression'
+    | 'playback-mapping-changed' | null = null;
 
   constructor(config: ChoirDeadlineRoomOptions) {
     if (!Number.isFinite(config.roomEpochMs)
@@ -333,9 +335,7 @@ export class ChoirDeadlineRoomExperiment {
     }, nowMs: number,
   ): boolean {
     if (!this.sealDueNow(nowMs)) return false;
-    if (this.videoId === null || update.videoId !== this.videoId
-      || update.songEpoch !== this.songEpoch
-      || update.backingGeneration !== this.backingGeneration
+    if (this.videoId === null
       || !Number.isSafeInteger(update.mappingEpoch) || update.mappingEpoch < 1
       || !Number.isSafeInteger(update.robotCaptureGeneration)
       || update.robotCaptureGeneration < 0
@@ -343,13 +343,27 @@ export class ChoirDeadlineRoomExperiment {
       || typeof update.playing !== 'boolean'
       || (this.playbackMapping && update.mappingEpoch <= this.playbackMapping.mappingEpoch))
       return false;
+    const identityChanged = update.videoId !== this.videoId
+      || update.songEpoch !== this.songEpoch
+      || update.backingGeneration !== this.backingGeneration
+      || update.robotCaptureGeneration !== this.backingGeneration;
+    // The first playback mapping must match the fixed room epoch and be
+    // actively playing. A pause/seek/rate/video/source change after that
+    // must RECREATE the room, never keep rendering stale audible Content.
+    if (this.playbackMapping === null && (identityChanged || !update.playing))
+      return false;
+    this.pendingCanonicalContent.clear();
+    this.room.invalidateContentEvidenceHistory();
+    if (this.playbackMapping !== null) {
+      this.invalidated = 'playback-mapping-changed';
+      this.sealedFrames.length = 0;
+      return !identityChanged;
+    }
     this.playbackMapping = {
       mappingEpoch: update.mappingEpoch, videoId: update.videoId,
       robotCaptureGeneration: update.robotCaptureGeneration,
       playbackRate: update.playbackRate, playing: update.playing,
     };
-    this.pendingCanonicalContent.clear();
-    this.room.invalidateContentEvidenceHistory();
     return true;
   }
 

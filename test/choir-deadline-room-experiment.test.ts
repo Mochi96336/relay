@@ -777,6 +777,64 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
       'room invalidation does not silently hand song or Mic ownership to B');
   });
 
+  test('Robot capture generation or source-rate replacement latches playback mapping invalidation', () => {
+    for (const changed of [
+      { generation: 10, sourceRate: RATE },
+      { generation: 9, sourceRate: 44_100 },
+    ]) {
+      const coordinator = new ChoirDeadlineRoomExperiment({
+        sampleRate: RATE, frameMs: 20, prebufferMs: 400,
+        retentionMs: 3_000, roomEpochMs: 0, outputHoldbackMs: 200,
+        songEpoch: 7, backingGeneration: 9, videoId: 'abcdefghijk',
+      });
+      const { b } = admitBoth(coordinator);
+      assert.equal(coordinator.setTrustedPlaybackMapping({
+        mappingEpoch: 1, videoId: 'abcdefghijk', songEpoch: 7,
+        backingGeneration: 9, robotCaptureGeneration: 9,
+        playbackRate: 1, playing: true,
+      }, 0), true);
+      assert.equal(coordinator.receiveTrustedBacking(
+        captured(FRAME, 3_000, 0, 9), RATE, 20), true);
+      assert.equal(coordinator.receiveTrustedBacking(
+        captured(FRAME, 3_000, FRAME, changed.generation),
+        changed.sourceRate, 40), false);
+      assert.deepEqual(coordinator.renderDue(220), {
+        state: 'resync-required', frames: [], reason: 'playback-mapping-changed',
+      });
+      assert.equal(coordinator.inspectTransport('socket-B')?.mediaEpoch, b.mediaEpoch);
+      assert.equal(coordinator.analyzeTrustedCanonicalContent(
+        'socket-B', b.mediaEpoch, 0, 240).status, 'rejected');
+    }
+  });
+
+  test('trusted seek or video change requires a new Choir room, not just a proof revision', () => {
+    for (const update of [
+      { mappingEpoch: 2, videoId: 'abcdefghijk', playing: true },
+      { mappingEpoch: 2, videoId: 'mnopqrstuvw', playing: true },
+    ]) {
+      const coordinator = new ChoirDeadlineRoomExperiment({
+        sampleRate: RATE, frameMs: 20, prebufferMs: 400,
+        retentionMs: 3_000, roomEpochMs: 0, outputHoldbackMs: 200,
+        songEpoch: 7, backingGeneration: 9, videoId: 'abcdefghijk',
+      });
+      admitBoth(coordinator);
+      const current = {
+        mappingEpoch: 1, videoId: 'abcdefghijk', songEpoch: 7,
+        backingGeneration: 9, robotCaptureGeneration: 9,
+        playbackRate: 1, playing: true,
+      };
+      assert.equal(coordinator.setTrustedPlaybackMapping(current, 0), true);
+      // An authenticated Robot media transition that changes the mapping
+      // cannot ever keep the previous Mic song-time calibration active.
+      assert.equal(coordinator.setTrustedPlaybackMapping({
+        ...current, ...update,
+      }, 100), update.videoId === current.videoId);
+      assert.deepEqual(coordinator.renderDue(220), {
+        state: 'resync-required', frames: [], reason: 'playback-mapping-changed',
+      });
+    }
+  });
+
   test('the calibration cache cannot retain more than seven seconds per source', () => {
     const cache = new ChoirContentPcmBuffer(RATE, 7_000);
     const timeline = emptyPcmTimeline();

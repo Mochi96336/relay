@@ -162,6 +162,48 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     assert.equal(coordinator.inspectTransport('socket-B')?.mediaEpoch === b.mediaEpoch, true);
   });
 
+  test('A reconnects after old source tail fades; new media epoch fences old socket and preserves B', () => {
+    const coordinator = room();
+    const { a, b } = admitBoth(coordinator);
+    assert.equal(coordinator.receiveFromTransport('socket-A',
+      captured(FRAME, 8_000), RATE, 20), true);
+    assert.equal(coordinator.receiveFromTransport('socket-B',
+      captured(FRAME * 12, 6_000), RATE, 40), true);
+    assert.equal(coordinator.disconnectTransport('socket-A', 80), true);
+    assert.deepEqual(coordinator.admitTrusted({
+      verifiedParticipantId: 'A', transportId: 'socket-A2',
+      seat: 'primary', expectedPrimaryId: 'A', nowMs: 90,
+    }), { ok: false, reason: 'rebind-deferred' });
+    // Frame at 220 contains the old tail. The next two frames complete the
+    // old source missing edge; rebind is not allowed until then.
+    for (const dueMs of [220, 240, 260]) {
+      const due = coordinator.renderDue(dueMs);
+      assert.equal(due.state, 'ready');
+    }
+    const next = coordinator.admitTrusted({
+      verifiedParticipantId: 'A', transportId: 'socket-A2',
+      seat: 'primary', expectedPrimaryId: 'A', nowMs: 261,
+    });
+    assert.equal(next.ok, true);
+    if (!next.ok) return;
+    assert.equal(next.idempotent, false);
+    assert.notEqual(next.mediaEpoch, a.mediaEpoch);
+    assert.equal(coordinator.inspectTransport('socket-A'), null);
+    assert.equal(coordinator.inspectTransport('socket-A2')?.mediaEpoch, next.mediaEpoch);
+    assert.equal(coordinator.inspectTransport('socket-B')?.mediaEpoch, b.mediaEpoch);
+    assert.equal(coordinator.snapshot().seats.primaryMicId, 'A');
+    assert.equal(coordinator.snapshot().seats.songControllerId, 'A');
+    assert.equal(coordinator.receiveFromTransport('socket-A',
+      captured(FRAME, 9_000, FRAME), RATE, 262), false);
+    assert.equal(coordinator.receiveFromTransport('socket-A2',
+      captured(FRAME, 11_000), RATE, 263), true);
+    const output = coordinator.renderDue(280);
+    if (output.state !== 'ready') throw Error('must continue');
+    assert.equal(output.frames[0].singers[0].mediaEpoch, next.mediaEpoch);
+    assert.equal(output.frames[0].singers[1].mediaEpoch, b.mediaEpoch);
+    assert.equal(output.frames[0].singers[1].expected, true);
+  });
+
   test('explicit B Take Mic requires authenticated transport and fresh CAS, no song takeover', () => {
     const coordinator = room();
     const { a, b } = admitBoth(coordinator);

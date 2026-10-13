@@ -204,6 +204,39 @@ describe('canonical MicTrack N=2 through the production MixBus (no live server)'
     assert.equal(solo.render(4 * FRAME).singers[0].expected, true);
   });
 
+  test('replacement after ended A capture discards old calibration/clock/evidence and preserves B', () => {
+    const mix = room();
+    const A2 = { ...A, mediaEpoch: A.mediaEpoch + 10 };
+    assert.equal(mix.addSinger(A), true);
+    assert.equal(mix.addSinger(B), true);
+    mix.setGainDb(A, 0);
+    mix.setGainDb(B, 0);
+    mix.setConfirmedLag(A, 0);
+    mix.ingestMic(A, pcm(FRAME, 12_000), RATE, FRAME);
+    mix.ingestMic(B, pcm(FRAME * 9, 9_000), RATE, FRAME * 9);
+    assert.equal(mix.disconnect(A), true);
+    assert.equal(mix.canRebindDisconnected('singer-a'), false,
+      'the old capture still has real audible samples');
+    assert.equal(mix.replaceDisconnectedSinger(A2), false);
+    for (let n = 0; n < 3; n++) mix.render(n * FRAME);
+    assert.equal(mix.canRebindDisconnected('singer-a'), true,
+      'old source tail and source-output-edge have actually reached silence');
+    assert.equal(mix.replaceDisconnectedSinger({ ...A2, mediaEpoch: A.mediaEpoch }), false,
+      'old media epochs are never re-admitted');
+    assert.equal(mix.replaceDisconnectedSinger(A2), true);
+    assert.equal(mix.mediaEpochFor('singer-a'), A2.mediaEpoch);
+    assert.equal(mix.ingestMic(A, pcm(FRAME, 18_000), RATE, FRAME * 4), false);
+    const accepted = mix.ingestMic(A2, pcm(FRAME, 10_000), RATE, FRAME * 4);
+    assert.equal(accepted, true);
+    const f = mix.render(FRAME * 3);
+    assert.equal(f.singers[0].mediaEpoch, A2.mediaEpoch);
+    assert.equal(f.singers[1].mediaEpoch, B.mediaEpoch);
+    assert.equal(f.singers[0].latePacketDrops, 0);
+    assert.equal(f.singers[1].expected, true);
+    assert.ok(f.singers[1].voicePeakAbs > 0);
+    assert.equal(mix.setConfirmedLag(A, 0), false, 'stale A calibration rejected');
+  });
+
   test('future-dated, duplicate and stale capture packets never move one singer timeline', () => {
     const mix = room();
     assert.equal(mix.addSinger(A), true);

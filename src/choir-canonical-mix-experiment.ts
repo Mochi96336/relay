@@ -143,6 +143,43 @@ export class CanonicalChoirMixExperiment {
     return this.slots.get(participantId)?.identity.mediaEpoch ?? null;
   }
 
+  /**
+   * A disconnected capture is replaceable only AFTER every buffered sample
+   * that could become audible has passed the immutable output read head and
+   * its real missing-source fade has completed. The preceding PCM and capture
+   * calibration must never be spliced into the new authenticated media epoch.
+   */
+  canRebindDisconnected(participantId: string): boolean {
+    const slot = this.slots.get(participantId);
+    if (!slot || slot.expected || this.nextRoomSample === null) return false;
+    const old = slot.mic;
+    return old.edge.silenced
+      && old.lastEmittedMicSourceSample !== null
+      && old.lastEmittedMicSourceSample >= old.timeline.totalSamples - 1;
+  }
+
+  /**
+   * A server-authorized reconnect creates one fresh MicTrack in the SAME
+   * singer seat after the old tail reached silence. No simultaneous copies,
+   * no old calibration/trim/gain/evidence carryover, and no new mixer slot.
+   */
+  replaceDisconnectedSinger(id: CanonicalChoirSingerId): boolean {
+    if (!this.matchesEpoch(id)
+      || !Number.isSafeInteger(id.mediaEpoch) || id.mediaEpoch < 0
+      || !this.canRebindDisconnected(id.participantId)) return false;
+    const old = this.slots.get(id.participantId)!;
+    if (id.mediaEpoch <= old.identity.mediaEpoch) return false;
+    this.slots.set(id.participantId, {
+      identity: { ...id },
+      mic: new MicTrack(this.micOptions),
+      expected: true,
+      joinGain: 0,
+      latePacketDrops: 0,
+    });
+    this.bus.setMicExpected(true, true);
+    return true;
+  }
+
   /** End a publisher without promoting/reassigning the other singer. */
   disconnect(id: CanonicalChoirSingerId): boolean {
     const slot = this.slots.get(id.participantId);

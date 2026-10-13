@@ -144,7 +144,12 @@ export class ChoirDeadlineRoomExperiment {
         && bound.mediaEpoch === already) {
         return { ok: true, mediaEpoch: already, idempotent: true };
       }
-      return { ok: false, reason: 'rebind-deferred' };
+      // New authenticated socket is admitted only after the LAST audible
+      // old PCM sample and its output missing-edge have completed. Fresh
+      // mediaEpoch and a fresh MicTrack mean no reused capture source index.
+      if (!this.room.canRebindDisconnected(req.verifiedParticipantId)) {
+        return { ok: false, reason: 'rebind-deferred' };
+      }
     }
     const result = this.registry.admit({
       authenticatedParticipantId: req.verifiedParticipantId,
@@ -152,12 +157,15 @@ export class ChoirDeadlineRoomExperiment {
       expectedPrimaryId: req.expectedPrimaryId, nowMs: req.nowMs,
     });
     if (!result.ok) return { ok: false, reason: result.reason };
-    const admitted = this.room.addSinger({
+    const nextIdentity = {
       participantId: req.verifiedParticipantId,
       songEpoch: this.songEpoch,
       backingGeneration: this.backingGeneration,
       mediaEpoch: result.mediaEpoch,
-    });
+    };
+    const admitted = already === null
+      ? this.room.addSinger(nextIdentity)
+      : this.room.replaceDisconnectedSinger(nextIdentity);
     if (!admitted) {
       this.registry.release(req.verifiedParticipantId);
       return { ok: false, reason: 'room-rejected' };

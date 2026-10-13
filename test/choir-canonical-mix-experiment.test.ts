@@ -311,6 +311,9 @@ describe('canonical MicTrack N=2 through the production MixBus (no live server)'
       const frame = mix.render(i * FRAME);
       offsets.push(frame.singers[0].readStartSample - i * FRAME);
       assert.equal(frame.singers[0].calibrationSource, 'content');
+      assert.equal(frame.singers[0].calibrationTargetMs, 2);
+      assert.ok(frame.singers[0].calibrationAppliedMs !== null);
+      assert.ok(frame.singers[0].calibrationAppliedMs! <= 2);
       assert.equal(frame.singers[0].frontierMissingSamples, 0);
       assert.ok(frame.singers[0].voicePeakAbs > 0.1);
       assert.equal(frame.singers[1].mediaEpoch, B.mediaEpoch);

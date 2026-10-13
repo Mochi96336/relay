@@ -33,6 +33,8 @@ export type CanonicalChoirSingerEvidence = {
   inputClippedSamples: number;
   limitedSamples: number;
   heavyLimitedSamples: number;
+  /** Limiter attack overshoots its ceiling: explicit N=2 bus guard engaged. */
+  limiterOvershootSamples: number;
   expected: boolean;
 };
 
@@ -67,6 +69,7 @@ export class CanonicalChoirMixExperiment {
   private readonly frameSamples: number;
   private readonly micOptions: ConstructorParameters<typeof MicTrack>[0];
   private readonly sampleRate: number;
+  private readonly voiceCeiling: number;
   private readonly songEpoch: number;
   private readonly backingGeneration: number;
   private nextRoomSample: number | null = null;
@@ -93,6 +96,7 @@ export class CanonicalChoirMixExperiment {
       readHeadCrossfadeMs: 5,
     };
     const ceiling = new MicTrack(this.micOptions).limiter.ceiling;
+    this.voiceCeiling = ceiling;
     this.bus = new MixBus({
       sampleRate: config.sampleRate,
       backingGain: config.backingGain ?? .65,
@@ -199,6 +203,7 @@ export class CanonicalChoirMixExperiment {
         inputClippedSamples: 0,
         limitedSamples: 0,
         heavyLimitedSamples: 0,
+        limiterOvershootSamples: 0,
         expected: slot.expected,
       };
       slot.mic.lastEmittedMicFrameComplete =
@@ -236,7 +241,16 @@ export class CanonicalChoirMixExperiment {
           evidenceMissing: missingEvidence, audibleMissing: missingAudible,
         });
         if (!missingAudible) anyAudibleSource = true;
-        voices += result.voice * voiceWeight;
+        // The peak limiter has finite attack even with 3ms lookahead. Its
+        // transient output can overshoot the nominal ceiling during the first
+        // ~2ms of a hot capture. The N=2 bus must NOT reserve headroom based
+        // on a ceiling that has not actually been enforced. Record the excess
+        // explicitly before bounding each singer's bus contribution.
+        const boundedVoice = Math.max(
+          -this.voiceCeiling, Math.min(this.voiceCeiling, result.voice),
+        );
+        if (boundedVoice !== result.voice) evidence.limiterOvershootSamples++;
+        voices += boundedVoice * voiceWeight;
         if (result.limited) evidence.limitedSamples++;
         if (result.heavilyLimited) evidence.heavyLimitedSamples++;
         const clipped = read.inputClippingMask?.[i] === 1;

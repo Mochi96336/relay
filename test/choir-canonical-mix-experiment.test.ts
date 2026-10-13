@@ -72,8 +72,21 @@ describe('canonical MicTrack N=2 through the production MixBus (no live server)'
     }
     assert.equal(peakIndex(output), expectedEvent,
       'both independently timestamped true impulses land at the same output position');
-    assert.ok(output[expectedEvent] > 10_000,
-      'both half-headroom singers contribute audibly to a real MixBus sample');
+    // Compare with an A-only source under IDENTICAL two-slot gain/headroom.
+    // This proves B contributes, without treating the bus attenuation as 1.
+    const aOnly = room();
+    aOnly.addSinger(A); aOnly.addSinger(B);
+    aOnly.setGainDb(A, 0); aOnly.setGainDb(B, 0);
+    aOnly.setConfirmedLag(A, 120); aOnly.setConfirmedLag(B, -340);
+    aOnly.ingestMic(A, samples(signalA), RATE, 45_000);
+    aOnly.ingestMic(B, samples(new Int16Array(signalB.length)), RATE, 45_000);
+    let aOnlySample = 0;
+    for (let i = 0; i < 26; i++) {
+      const frame = aOnly.render(i * FRAME);
+      if (i === 20) aOnlySample = frame.pcm[320];
+    }
+    assert.ok(output[expectedEvent] > aOnlySample + 1500,
+      'the second independently placed Mic PCM impulse increases the real mixed output');
     assert.equal(perSinger.length, 2);
     assert.equal(perSinger[0].participantId, 'singer-a');
     assert.equal(perSinger[1].participantId, 'singer-b');
@@ -137,16 +150,22 @@ describe('canonical MicTrack N=2 through the production MixBus (no live server)'
     let clipped = 0;
     let limitedA = 0;
     let limitedB = 0;
+    let overshootA = 0;
+    let overshootB = 0;
     let maximum = 0;
     for (let i = 0; i < 3; i++) {
       const f = mix.render(i * FRAME);
       clipped += f.outputClippedSamples;
       limitedA += f.singers[0].limitedSamples;
       limitedB += f.singers[1].limitedSamples;
+      overshootA += f.singers[0].limiterOvershootSamples;
+      overshootB += f.singers[1].limiterOvershootSamples;
       maximum = Math.max(maximum, ...f.pcm);
     }
     assert.equal(clipped, 0, 'two singer ceilings share exactly one bus headroom budget');
     assert.ok(limitedA > 0 && limitedB > 0, 'each singer limiter was exercised');
+    assert.ok(overshootA > 0 && overshootB > 0,
+      'limiter finite attack must be reported rather than hidden by the output clamp');
     assert.ok(maximum > 0 && maximum <= 32767);
   });
 

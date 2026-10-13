@@ -95,6 +95,8 @@ type RoomConfig = {
   backingGain?: number;
   /** Separate six-second Content evidence cache; does not alter mixer retention. */
   contentHistoryMs?: number;
+  /** Strict fresh-room mode: even first admission is silent until new Content. */
+  requireInitialContent?: boolean;
 };
 
 export class CanonicalChoirMixExperiment {
@@ -102,6 +104,7 @@ export class CanonicalChoirMixExperiment {
   private readonly backing = emptyPcmTimeline();
   private readonly backingContentHistory: ChoirContentPcmBuffer | null;
   private readonly contentHistoryMs: number | null;
+  private readonly requireInitialContent: boolean;
   private backingCaptureOriginSample: number | null = null;
   private readonly bus: MixBus;
   private readonly frameSamples: number;
@@ -131,6 +134,7 @@ export class CanonicalChoirMixExperiment {
     this.songEpoch = config.songEpoch;
     this.backingGeneration = config.backingGeneration;
     this.contentHistoryMs = config.contentHistoryMs ?? null;
+    this.requireInitialContent = config.requireInitialContent === true;
     this.backingContentHistory = this.contentHistoryMs === null
       ? null : new ChoirContentPcmBuffer(config.sampleRate, this.contentHistoryMs);
     this.micOptions = {
@@ -167,8 +171,8 @@ export class CanonicalChoirMixExperiment {
       contentHistory: this.contentHistoryMs === null ? null
         : new ChoirContentPcmBuffer(this.sampleRate, this.contentHistoryMs),
       expected: true, joinGain: 0,
-      latePacketDrops: 0, awaitingCalibration: false, authority: null,
-      pendingReacquisition: null, requiresFreshContent: false,
+      latePacketDrops: 0, awaitingCalibration: this.requireInitialContent, authority: null,
+      pendingReacquisition: null, requiresFreshContent: this.requireInitialContent,
     });
     this.bus.setMicExpected(true, true);
     return true;

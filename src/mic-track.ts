@@ -9,6 +9,9 @@ import {
   readMicSlewedRange, crossfadeMicReadHeadJump, type MicSlewRead,
 } from './mic-frame-reader.js';
 import { classifyMicReadMotion } from './mic-read-plan.js';
+import {
+  stretchPcmSpanByOne, compressPcmSpanByOne,
+} from './pcm-timeline.js';
 import type { PcmFrame } from './pcm-frame.js';
 import {
   emptyPcmTimeline, readPcmEvidence, readPcmGapMask, readPcmRange, type PcmChunk,
@@ -131,6 +134,48 @@ export class MicTrack {
    * The caller still owns authenticated packet admission, timeline placement,
    * resampling, clock trim, gap concealment and the output room clock.
    */
+  /**
+   * Apply this capture's measured clock trim at an aligned source-packet
+   * boundary. A completed resampler prefix belongs to the preceding packet
+   * and must remain byte-for-byte untouched.
+   *
+   * No shared room, backing or other singer state is accessed here.
+   */
+  trimSourcePacket(input: {
+    samples: Int16Array;
+    sourceAlignedSampleOffset: number;
+    firstSourceSample: number;
+    sourceSampleCount: number;
+    sourceRate: number;
+    contiguous: boolean;
+  }): Int16Array {
+    const {
+      samples, sourceAlignedSampleOffset, firstSourceSample,
+      sourceSampleCount, sourceRate, contiguous,
+    } = input;
+    if (this.clockTrim.ppm === 0 || this.timeline.sourceFrontier === null) {
+      return samples;
+    }
+    const trim = this.clockTrim.next(
+      firstSourceSample + sourceSampleCount - this.timeline.sourceFrontier,
+      sourceRate,
+      contiguous,
+      samples.length - sourceAlignedSampleOffset,
+    );
+    if (trim === 0) return samples;
+    const prefix = samples.subarray(0, sourceAlignedSampleOffset);
+    const currentFrame = samples.subarray(sourceAlignedSampleOffset);
+    const trimmedCurrentFrame = trim > 0
+      ? stretchPcmSpanByOne(currentFrame)
+      : compressPcmSpanByOne(currentFrame);
+    const trimmed = new Int16Array(prefix.length + trimmedCurrentFrame.length);
+    trimmed.set(prefix, 0);
+    trimmed.set(trimmedCurrentFrame, prefix.length);
+    this.timeline.originOffset += trim;
+    this.clockTrim.applied(trim);
+    return trimmed;
+  }
+
   /** Capture-native frame index to this singer's trusted room PCM timeline. */
   sourceSampleToSessionSample(sourceSample: number, sourceRate: number): number {
     return Math.ceil((sourceSample * this.sampleRate) / sourceRate)

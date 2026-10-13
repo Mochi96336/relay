@@ -226,3 +226,18 @@ The former `AudioSession.resetMicLimiterState()`, limiter seed helpers and
 `restartBoundedDetectOffset()` now execute inside MicTrack. Tests check
 that two track instances apply different gains independently, while the
 existing N=1 Golden PCM captures any drift from the original limiter path.
+
+
+## Stage 10: singer-specific capture-clock PCM correction
+
+The old `AudioSession.ingest()` Mic clock-trim branch now calls
+`MicTrack.trimSourcePacket()`. It retains the exact same ppm gating,
+continuity requirement, source-clock debt accounting and one-sample
+stretch/compression helpers. Completed previous-packet resampler-prefix
+samples remain untouched. Only each MicTrack's native clock-trim state
+and its own timeline origin offset are changed.
+
+Tests exercise simultaneous opposing +500/-500 ppm adjustments, retained
+resampler prefixes, and a discontinuous packet that cannot pay trim debt.
+The generic PCM ingest/resampler still belongs to AudioSession and remains
+shared with the Backing capture. A genuine second Publisher is not yet wired.

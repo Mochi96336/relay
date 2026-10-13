@@ -373,6 +373,56 @@ describe('extracted MicTrack owns per-singer components independently', () => {
     assert.equal(mic.lastEmittedMicSourceSample, 1);
   });
 
+  test('independent Mic capture clock trims preserve deferred resampler prefixes', () => {
+    const a = new MicTrack(config);
+    const b = new MicTrack(config);
+    a.clockTrim.setPpm(500);
+    b.clockTrim.setPpm(-500);
+    a.timeline.sourceFrontier = 0;
+    b.timeline.sourceFrontier = 0;
+    const pcm = new Int16Array(3_100);
+    pcm[0] = -15_432; // the completed interpolation prefix from prior packet
+    for (let i = 1; i < pcm.length; i++) pcm[i] = (i % 500) - 250;
+    const params = {
+      samples: pcm, sourceAlignedSampleOffset: 1,
+      firstSourceSample: 0, sourceSampleCount: 3_100,
+      sourceRate: 48_000, contiguous: true,
+    };
+    const ap = a.trimSourcePacket(params);
+    const bp = b.trimSourcePacket(params);
+    assert.equal(ap.length, pcm.length + 1);
+    assert.equal(bp.length, pcm.length - 1);
+    assert.equal(ap[0], pcm[0]);
+    assert.equal(bp[0], pcm[0]);
+    assert.equal(a.timeline.originOffset, 1);
+    assert.equal(b.timeline.originOffset, -1);
+    assert.equal(a.clockTrim.samples, 1);
+    assert.equal(b.clockTrim.samples, -1);
+    assert.equal(pcm.length, 3_100, 'input packet is not modified');
+  });
+
+  test('source trim cannot pay clock debt on a noncontiguous packet', () => {
+    const a = new MicTrack(config);
+    a.clockTrim.setPpm(500);
+    a.timeline.sourceFrontier = 0;
+    const pcm = new Int16Array(3_000).fill(300);
+    const untrusted = a.trimSourcePacket({
+      samples: pcm, sourceAlignedSampleOffset: 0,
+      firstSourceSample: 0, sourceSampleCount: 3_000,
+      sourceRate: 48_000, contiguous: false,
+    });
+    assert.strictEqual(untrusted, pcm);
+    assert.equal(a.timeline.originOffset, 0);
+    assert.equal(a.clockTrim.samples, 0);
+    const settled = a.trimSourcePacket({
+      samples: pcm, sourceAlignedSampleOffset: 0,
+      firstSourceSample: 3_000, sourceSampleCount: 3_000,
+      sourceRate: 48_000, contiguous: true,
+    });
+    assert.equal(settled.length, pcm.length + 1);
+    assert.equal(a.clockTrim.samples, 1);
+  });
+
   test('current AudioSession still uses its actual existing Mic clock and limits', () => {
     const session = new AudioSession({
       sampleRate: 48_000, frameMs: 20, prebufferMs: 400,

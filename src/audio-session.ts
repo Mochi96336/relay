@@ -4,7 +4,6 @@ import { CaptureRestartBoundaries } from './capture-restart-boundaries.js';
 import { concealGap } from './packet-loss-concealment.js';
 import type { PcmFrame } from './pcm-frame.js';
 import {
-  compressPcmSpanByOne,
   emptyPcmTimeline,
   readPcmEvidence,
   readPcmGapMask,
@@ -1109,32 +1108,17 @@ export class AudioSession {
         }
       }
 
-      if (
-        timeline === this.mic
-        && this.micClockTrim.ppm !== 0
-        && timeline.sourceFrontier !== null
-      ) {
-        const trim = this.micClockTrim.next(
-          frame.firstSampleIndex! + sourceSampleCount - timeline.sourceFrontier,
+      if (timeline === this.mic) {
+        // Singer-owned capture drift compensation keeps the same PCM
+        // interpolation prefix and mutates only this MicTrack's clock state.
+        samples = this.micTrack.trimSourcePacket({
+          samples,
+          sourceAlignedSampleOffset,
+          firstSourceSample: frame.firstSampleIndex!,
+          sourceSampleCount,
           sourceRate,
-          sourceContinuous && start === timeline.totalSamples,
-          samples.length - sourceAlignedSampleOffset,
-        );
-        if (trim !== 0) {
-          // As for the Backing correction, a deferred previous-frame
-          // interpolation prefix stays byte-for-byte intact.
-          const prefix = samples.subarray(0, sourceAlignedSampleOffset);
-          const currentFrame = samples.subarray(sourceAlignedSampleOffset);
-          const trimmedCurrentFrame = trim > 0
-            ? stretchPcmSpanByOne(currentFrame)
-            : compressPcmSpanByOne(currentFrame);
-          const trimmed = new Int16Array(prefix.length + trimmedCurrentFrame.length);
-          trimmed.set(prefix, 0);
-          trimmed.set(trimmedCurrentFrame, prefix.length);
-          samples = trimmed;
-          timeline.originOffset += trim;
-          this.micClockTrim.applied(trim);
-        }
+          contiguous: sourceContinuous && start === timeline.totalSamples,
+        });
       }
       const sourceEnd = frame.firstSampleIndex! + sourceSampleCount;
       const previousSourceFrontier = timeline.sourceFrontier;

@@ -2,6 +2,7 @@ import { CanonicalChoirMixExperiment, type CanonicalChoirFrame } from './choir-c
 import { ChoirPublisherRegistry } from './choir-publisher-registry.js';
 import { ChoirSession, type ChoirSeat } from './choir-session.js';
 import type { PcmFrame } from './pcm-frame.js';
+import type { ChoirAlignmentDecision } from './choir-calibration-experiment.js';
 
 /**
  * OFFLINE server boundary for real canonical MicTracks. NOT connected to
@@ -203,6 +204,26 @@ export class ChoirDeadlineRoomExperiment {
       }
     }
     return true;
+  }
+
+  /**
+   * Server-only handoff after the separate Content/Sample/Boot experiment
+   * validates its capture identity and freshness for the NEW media epoch.
+   * A raw client alignment candidate must NEVER invoke this.
+   */
+  acceptTrustedReboundAlignment(
+    transportId: string, mediaEpoch: number,
+    decision: ChoirAlignmentDecision, nowMs: number,
+  ): boolean {
+    if (!this.sealDueNow(nowMs)) return false;
+    const active = this.registry.activePublisherForTransport(transportId);
+    if (!active || active.mediaEpoch !== mediaEpoch) return false;
+    return this.room.acceptReboundAlignment({
+      participantId: active.participantId,
+      mediaEpoch: active.mediaEpoch,
+      songEpoch: this.songEpoch,
+      backingGeneration: this.backingGeneration,
+    }, decision);
   }
 
   disconnectTransport(transportId: string, nowMs: number): boolean {

@@ -535,6 +535,33 @@ describe('extracted MicTrack owns per-singer components independently', () => {
     assert.equal(b.timeline.chunks.length, 1);
   });
 
+  test('source-rate change fences A even when wire generation is reused; B stays intact', () => {
+    const a = new MicTrack(config);
+    const b = new MicTrack(config);
+    const ingest = (track: MicTrack, generation: number, sourceRate: number,
+      count: number, roomNow: number) => track.ingestCapture({
+      frame: {
+        generation, firstSampleIndex: 0,
+        pcm: Buffer.from(new Int16Array(count).fill(5_000).buffer),
+      },
+      sourceRate, running: true, roomSampleNow: () => roomNow,
+    });
+    ingest(a, 7, 48_000, 960, 960);
+    ingest(b, 8, 48_000, 960, 960);
+    a.clockTrim.setPpm(300);
+    b.clockTrim.setPpm(-280);
+    const switched = ingest(a, 7, 44_100, 441, 2_400);
+    assert.equal(switched.captureRestarted, true);
+    assert.equal(a.timeline.generation, 7, 'generation can be reused by a bad sender');
+    assert.equal(a.timeline.sourceRate, 44_100, 'rate is part of Mic capture identity');
+    assert.equal(a.clockTrim.ppm, 0);
+    assert.equal(b.timeline.generation, 8);
+    assert.equal(b.timeline.sourceRate, 48_000);
+    assert.equal(b.timeline.totalSamples, 960);
+    assert.equal(b.timeline.originOffset, 0);
+    assert.equal(b.clockTrim.ppm, -280);
+  });
+
   test('current AudioSession still uses its actual existing Mic clock and limits', () => {
     const session = new AudioSession({
       sampleRate: 48_000, frameMs: 20, prebufferMs: 400,

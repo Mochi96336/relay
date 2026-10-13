@@ -223,8 +223,8 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     assert.equal(resumed.frames[0].singers[0].awaitingCalibration, false);
     assert.equal(resumed.frames[0].singers[0].voicePeakAbs, 0,
       'fresh calibration permits reading but cannot bypass the Mic frontier cushion');
-    assert.ok(resumed.frames[0].singers[0].frontierMissingSamples > 0,
-      'one captured frame is not enough buffered source PCM to start playback');
+    assert.ok(resumed.frames[0].singers[0].readStartSample < RATE * 0.263,
+      'this output frame is still before the new capture placement; no PCM is due yet');
     assert.equal(resumed.frames[0].singers[1].expected, true);
     // A2 was freshly captured at 263ms, hence it belongs near room sample
     // 12,624 and can only become audible when frame 12's 200ms-delayed

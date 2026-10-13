@@ -300,10 +300,18 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     assert.equal(a2.ok, true);
     if (!a2.ok) return;
     assert.ok(a2.mediaEpoch > a.mediaEpoch);
+    // A2 buffered real PCM but was NEVER calibrated, so none of its PCM has
+    // entered the canonical per-sample voice processor or acquired authority.
+    assert.equal(coordinator.receiveFromTransport('socket-A2',
+      captured(FRAME * 3, 9_000), RATE, 262), true);
     assert.equal(coordinator.disconnectTransport('socket-A2', 270), true);
-    // A2 has no audible source and cannot endow A3 with any earlier calibration.
     for (const at of [280, 300, 320]) {
-      assert.equal(coordinator.renderDue(at).state, 'ready');
+      const muted = coordinator.renderDue(at);
+      assert.equal(muted.state, 'ready');
+      if (muted.state === 'ready') {
+        assert.equal(muted.frames[0].singers[0].awaitingCalibration, true);
+        assert.equal(muted.frames[0].singers[0].voicePeakAbs, 0);
+      }
     }
     const a3 = coordinator.admitTrusted({
       verifiedParticipantId: 'A', transportId: 'socket-A3',

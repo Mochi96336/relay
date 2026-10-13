@@ -176,12 +176,11 @@ export class CanonicalChoirMixExperiment {
     const slot = this.slots.get(participantId);
     if (!slot || slot.expected || this.nextRoomSample === null) return false;
     const old = slot.mic;
-    // A never-authorized rebound has emitted no voice even if its transport
-    // buffered PCM: render() expressly bypasses processVoiceSample while
-    // awaitingCalibration. No old acoustic tail exists to finish. Discard
-    // that inaccessible PCM with the old MicTrack when a new epoch is claimed.
-    if (slot.awaitingCalibration && slot.authority === null
-      && slot.joinGain === 0 && old.lastEmittedMicSourceSample === null)
+    // A source with NO previously emitted audible trajectory has no
+    // acoustic tail to retire, even if PCM arrived or calibration was just
+    // accepted before the first output frame. Immutable due frames were
+    // already sealed before disconnect by the trusted coordinator.
+    if (slot.joinGain === 0 && old.lastEmittedMicSourceSample === null)
       return true;
     return old.edge.silenced
       && old.lastEmittedMicSourceSample !== null

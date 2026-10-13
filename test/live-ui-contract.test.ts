@@ -63,7 +63,7 @@ test('input ribbon follows the authoritative Room Mic without fabricated animati
   assert.match(liveComposition, /\.voice-presence-baseline/);
   assert.match(liveComposition, /\.voice-presence-wave/);
   assert.match(micPresence, /CENTER_Y = VIEWBOX_HEIGHT \/ 2/);
-  assert.match(micPresence, /envelopePath\(\)/);
+  assert.match(micPresence, /envelopePath\(drawn\)/);
   assert.match(micAnalysis, /function measureSpectrumBands\(\)/);
   assert.doesNotMatch(capture, /measureSpectrumBands|measureF0|runFft/);
   assert.doesNotMatch(micPresence, /voice-presence-slice|voice-presence-shape|voice-presence-band/);

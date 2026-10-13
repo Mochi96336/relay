@@ -139,3 +139,59 @@ test('late Room Mic frame cannot revive a superseded owner waveform or surface',
     globals.document = previous.document;
   }
 });
+
+test('a higher note draws denser ripples along the band; an unpitched one draws none', async () => {
+  const fakeWindow = new FakeWindow();
+  const meter = new FakeSvgNode();
+  fakeWindow.relayProductAuthority = {
+    authorityFresh: true,
+    lastKnownSnapshot: { room: { mic: { state: 'live', ownerId: 'owner-a' } } },
+  };
+  const globals = globalThis as any;
+  const previous = { window: globals.window, document: globals.document };
+  globals.window = fakeWindow;
+  globals.document = { body: { dataset: {} }, querySelector: (s: string) => (s === '#mic-input-meter' ? meter : null) };
+
+  // Ripples on the band's upper edge: local tops of the path's anchor points.
+  const ripples = () => {
+    const d = meter.querySelector('.voice-presence-wave')!.attributes.get('d') ?? '';
+    const ys = [...d.matchAll(/(?:M|, ) ?(-?[\d.]+) (-?[\d.]+)(?= C| L| Z|$)/g)]
+      .map((match) => Number(match[2]))
+      .filter((y) => y < 28);
+    // A top is where the edge turns from rising (y falling) to falling,
+    // ignoring steps too small to see.
+    let tops = 0;
+    let rising: boolean | null = null;
+    let anchor = ys[0];
+    for (const y of ys.slice(1)) {
+      if (Math.abs(y - anchor) < 0.3) continue;
+      const nowRising = y < anchor;
+      if (rising === true && !nowRising) tops += 1;
+      rising = nowRising;
+      anchor = y;
+    }
+    return tops;
+  };
+  const steady = (f0Hz: number | null, pitchConfidence: number) => {
+    for (let i = 0; i < 24; i += 1) {
+      fakeWindow.emit('relay-room-mic-presence', { ...presenceFrame('owner-a', 1), f0Hz, pitchConfidence });
+    }
+    return ripples();
+  };
+
+  try {
+    const moduleUrl = new URL('../public/mic-presence.js', import.meta.url);
+    moduleUrl.searchParams.set('runtime-test', `${Date.now()}-${Math.random()}`);
+    await import(moduleUrl.href);
+
+    assert.equal(steady(null, 0), 0, 'no pitch: a smooth edge');
+    const low = steady(130.8, 0.95);
+    const high = steady(523.3, 0.95);
+    // Both halves together: about 2 x 4.4 ripples at C3 and 2 x 14 at C5.
+    assert.ok(low >= 7 && low <= 12, `C3 draws about nine ripples (${low})`);
+    assert.ok(high >= 24, `C5 draws about twenty-eight ripples, every one visible (${high})`);
+  } finally {
+    globals.window = previous.window;
+    globals.document = previous.document;
+  }
+});

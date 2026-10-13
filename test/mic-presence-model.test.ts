@@ -37,14 +37,17 @@ test('same RMS with low/high F0 keeps amplitude while making high pitch visibly 
   const low = presenceSliceGeometry(createPresenceSlice(-28, [1, 0, 0, 0, 0], 100, 0.95));
   const high = presenceSliceGeometry(createPresenceSlice(-28, [1, 0, 0, 0, 0], 600, 0.95));
   assert.equal(low.amplitude, high.amplitude);
-  assert.ok(high.density > low.density * 3.5);
-  assert.ok(Math.abs(pitchLobeCount(80) - 1.25) < 0.01);
-  assert.ok(pitchLobeCount(100) > 1.8 && pitchLobeCount(100) < 2.0);
-  assert.ok(pitchLobeCount(150) > 3 && pitchLobeCount(150) < 3.2);
-  assert.ok(pitchLobeCount(300) > 5.7 && pitchLobeCount(300) < 5.9);
-  assert.ok(pitchLobeCount(440) > 7.2 && pitchLobeCount(440) < 7.4);
-  assert.equal(pitchLobeCount(600), 8.5);
-  assert.equal(pitchLobeCount(1000), 8.5);
+  assert.ok(high.density > low.density * 5);
+  // Evenly more ripples per octave: 1 at 80 Hz, 16 from 700 Hz up.
+  assert.ok(Math.abs(pitchLobeCount(80) - 1) < 0.01);
+  assert.ok(pitchLobeCount(100) > 2.5 && pitchLobeCount(100) < 2.6);
+  assert.ok(pitchLobeCount(150) > 5.3 && pitchLobeCount(150) < 5.4);
+  assert.ok(pitchLobeCount(300) > 10.1 && pitchLobeCount(300) < 10.2);
+  assert.ok(pitchLobeCount(440) > 12.7 && pitchLobeCount(440) < 12.9);
+  assert.ok(Math.abs((pitchLobeCount(160) - pitchLobeCount(80)) - (pitchLobeCount(320) - pitchLobeCount(160))) < 1e-9,
+    'each octave adds the same number of ripples');
+  assert.equal(pitchLobeCount(700), 16);
+  assert.equal(pitchLobeCount(1000), 16);
 });
 
 test('same F0 with different RMS keeps density while changing amplitude', () => {

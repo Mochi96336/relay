@@ -54,7 +54,7 @@ test('Room Mic is one centered full-bleed envelope backed by one 20-sample measu
   assert.match(model, /export function centerOriginX/);
   assert.match(presence, /CENTER_Y = VIEWBOX_HEIGHT \/ 2/);
   assert.match(presence, /presenceSliceGeometry/);
-  assert.match(presence, /envelopePath\(\)/);
+  assert.match(presence, /envelopePath\(drawn\)/);
   assert.match(presence, /smoothPath\(upper\)/);
   assert.match(liveStatus, /MIC_PRESENCE_TELEMETRY_INTERVAL_MS = 80/);
   assert.match(presence, /event\.detail\?\.spectrumBands/);
@@ -81,7 +81,12 @@ test('frequency evidence remains truthful timbre data and is not painted as fake
   assert.match(micAnalysis, /function measureSpectrumBands\(\)/);
   assert.doesNotMatch(capture, /runFft|measureSpectrumBands|measureF0|F0_YIN_THRESHOLD/);
   assert.match(composition, /not[\s\S]*presented as musical pitch until a real F0 estimate exists/);
-  assert.doesNotMatch(presence, /WebSocket|mix-health|requestAnimationFrame/);
+  assert.doesNotMatch(presence, /WebSocket|mix-health/);
+  // Animation frames only ease the drawn band toward the latest measured
+  // shape and stop once it arrives; no motion exists without a measurement.
+  assert.match(presence, /if \(moving\) frame = animationFrame\(step\);/);
+  assert.match(presence, /if \(frame === null\) frame = animationFrame\(step\);/);
+  assert.equal(presence.match(/animationFrame\(step\)/g)?.length, 2);
   assert.doesNotMatch(state, /@keyframes|voice-breathe|preparing-pulse/);
   assert.doesNotMatch(composition, /@keyframes|voice-breathe|preparing-pulse/);
 });
@@ -91,7 +96,8 @@ test('new Mic evidence stays at exact center while one stored history mirrors ou
   assert.match(model, /left: safeWidth \/ 2 - distance/);
   assert.match(model, /right: safeWidth \/ 2 \+ distance/);
   assert.match(model, /const next = \[\.\.\.previous, createPresenceSlice/);
-  assert.match(presence, /const right = history[\s\S]*?\.slice\(0, -1\)[\s\S]*?\.reverse\(\)/);
+  // Both halves are drawn from the one history, the newest slice shared at the centre.
+  assert.match(presence, /\[\.\.\.halfPoints\('left'\)\.reverse\(\), \.\.\.halfPoints\('right'\)\.slice\(1\)\]/);
 });
 
 test('performance actions stay in Sing -> Record -> Adjust -> Review order', () => {

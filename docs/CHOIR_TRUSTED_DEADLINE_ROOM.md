@@ -369,10 +369,12 @@ both already reconstructed at the canonical room sample rate. It requires:
   in the coordinator and cannot be overwritten through returned diagnostics.
 - The commit must match the same authenticated transport, participant,
   Media Epoch, room/song/backing generations, fixed video ID and native
-  Capture generation/source rate. The analysis is valid for at most 20 s;
-  disconnection, a newer candidate or an accepted new Media Epoch retires
-  the pending result. One accepted/rejected commit consumes it exactly once.
-  Frozen Take prevents the commit.
+  Capture generation/source rate. The commit also requires the original
+  six-second PCM window end to remain within one second of the trusted room
+  clock; the absolute 20-second pending-expiry is only an additional ceiling.
+  Disconnection, a newer candidate or an accepted new Media Epoch retires
+  the pending result. One accepted/rejected eligible commit consumes it
+  exactly once. Frozen Take prevents the commit.
 - The room *chooses* the only valid transition: first rebound Content,
   bounded live fallback-to-Content correction, large disagreement staging,
   or new-epoch Content reacquisition. It NEVER accepts a client selection

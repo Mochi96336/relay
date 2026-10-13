@@ -324,6 +324,55 @@ describe('extracted MicTrack owns per-singer components independently', () => {
     assert.equal(b.micLimiterResetPending, false);
   });
 
+  test('heavy limiting on A cannot compress the independent singer B', () => {
+    const a = new MicTrack(config);
+    const b = new MicTrack(config);
+    a.gain.setTargetDb(24, false);
+    b.gain.setTargetDb(0, false);
+    const hot = new Int16Array(1_300).fill(28_000);
+    let hotFlags = 0;
+    let coldFlags = 0;
+    let lastHot = 0;
+    let lastCold = 0;
+    for (let i = 0; i < 400; i++) {
+      const input = {
+        samples: hot, i, sourceSample: i, micReadStart: 0,
+        slew: null, slewFrameEndPosition: 0,
+        evidenceMissing: false, audibleMissing: false,
+      };
+      const ar = a.processVoiceSample(input);
+      const br = b.processVoiceSample(input);
+      if (ar.heavilyLimited) hotFlags++;
+      if (br.heavilyLimited) coldFlags++;
+      lastHot = ar.voice;
+      lastCold = br.voice;
+    }
+    assert.ok(hotFlags > 300, 'A hot microphone should trigger heavy limiting');
+    assert.equal(coldFlags, 0, 'B limiter is not coupled to A');
+    assert.ok(lastHot <= a.limiter.ceiling + 0.05, 'A processed voice is bounded');
+    assert.ok(lastCold > 0.8 && lastCold < 0.9, 'B stays close to its own unboosted PCM');
+  });
+
+  test('source gap suppresses limiter evidence without losing gain-state progression', () => {
+    const mic = new MicTrack(config);
+    mic.gain.setTargetDb(0, false);
+    const samples = new Int16Array(1_300).fill(8_000);
+    const missing = mic.processVoiceSample({
+      samples, i: 0, sourceSample: -1, micReadStart: -1,
+      slew: null, slewFrameEndPosition: 0,
+      evidenceMissing: true, audibleMissing: true,
+    });
+    assert.equal(missing.limited, false);
+    assert.equal(missing.heavilyLimited, false);
+    const recovered = mic.processVoiceSample({
+      samples, i: 1, sourceSample: 1, micReadStart: 0,
+      slew: null, slewFrameEndPosition: 0,
+      evidenceMissing: false, audibleMissing: false,
+    });
+    assert.ok(Number.isFinite(recovered.voice));
+    assert.equal(mic.lastEmittedMicSourceSample, 1);
+  });
+
   test('current AudioSession still uses its actual existing Mic clock and limits', () => {
     const session = new AudioSession({
       sampleRate: 48_000, frameMs: 20, prebufferMs: 400,

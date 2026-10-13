@@ -640,7 +640,8 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
       sampleCandidateMs: null, bootCandidateMs: 0,
     };
     assert.equal(coordinator.acceptTrustedReboundAlignment(
-      'socket-A2', a2.mediaEpoch, fallback, 262), true);
+      'socket-A2', a2.mediaEpoch, fallback, 262), false,
+      'cannot authorize an unknown native capture generation');
     const { mic, backing } = laggedMultibandMusicPair(6, RATE, 120, {
       singerGain: 0.18,
     });
@@ -658,6 +659,10 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
           generation: 9, firstSampleIndex: first,
           pcm: backing.subarray(first * 2, last * 2),
         }, RATE, at), true);
+        if (at === 2_000)
+          assert.equal(coordinator.acceptTrustedReboundAlignment(
+            'socket-A2', a2.mediaEpoch, fallback, at), true,
+            'fallback first binds to the capture generation actually ingested');
       }
       const output = coordinator.renderDue(at);
       assert.equal(output.state, 'ready');

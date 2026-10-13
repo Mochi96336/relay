@@ -19,7 +19,6 @@ function initialize() {
 
   let latestProductStatus = window.relayProductAuthority?.lastKnownSnapshot ?? null;
   let latestAction = latestProductStatus?.actions ?? null;
-  let latestTiming = latestProductStatus?.timing ?? null;
   let productAuthority = window.relayProductAuthority ?? authorityState({
     lastKnownSnapshot: latestProductStatus,
   });
@@ -165,7 +164,6 @@ function initialize() {
   window.addEventListener('relay-product-status', (event) => {
     latestProductStatus = event.detail ?? null;
     latestAction = latestProductStatus?.actions ?? null;
-    latestTiming = latestProductStatus?.timing ?? null;
     productAuthority = authorityState({
       authorityFresh: true,
       lastKnownSnapshot: latestProductStatus,
@@ -182,7 +180,6 @@ function initialize() {
     if (productAuthority.lastKnownSnapshot) {
       latestProductStatus = productAuthority.lastKnownSnapshot;
       latestAction = latestProductStatus?.actions ?? null;
-      latestTiming = latestProductStatus?.timing ?? null;
     }
     render();
   });

@@ -52,7 +52,6 @@ import {
 } from './uplink-evidence.js';
 
 const publisherButton = document.querySelector('#start-publisher');
-const releaseButton = document.querySelector('#release-mic');
 
 // Mic audio on a WebSocket-only page rides this socket: reconnect fast, back
 // off only while it keeps failing. See reconnect-backoff.js.

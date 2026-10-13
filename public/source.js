@@ -11,7 +11,6 @@ const sourceVolume = document.querySelector('#source-volume');
 const sourceVolumeValue = document.querySelector('#source-volume-value');
 const sourceMicGain = document.querySelector('#source-mic-gain');
 const sourceMicGainValue = document.querySelector('#source-mic-gain-value');
-const timingButton = document.querySelector('#start-timing-calibration');
 const timingStatus = document.querySelector('#timing-calibration-status');
 const gainAdvice = document.querySelector('#gain-advice');
 const vocalFineTune = document.querySelector('#vocal-fine-tune');
@@ -176,7 +175,6 @@ function parkSupersededRobot() {
   stateNode.textContent = 'Robot source superseded';
   detailNode.textContent = 'A newer robot source owns playback. This page is parked and will not reconnect.';
   mirrorState.textContent = 'superseded · muted';
-  timingButton.disabled = true;
 }
 
 function applyBalance() {
@@ -310,16 +308,8 @@ function renderCalibration() {
   const collecting = latestCalibration?.state === 'collecting';
   const probeActive = latestCalibration?.probeActive === true;
   // A Robot boot probe measures the two capture paths and needs no Song at all;
-  // only content correlation needs a playing phone timeline. The server policy
-  // already says so, so requiring a Song here just hides an action the room
-  // would have accepted.
+  // only content correlation needs a playing phone timeline.
   const needsPhonePlaying = latestCalibration?.robotRoute !== true;
-  timingButton.disabled = robotSuperseded
-    || collecting
-    || probeActive
-    || !sourceConnected
-    || !micConnected
-    || (needsPhonePlaying && !phonePlaying);
 
   if (robotSuperseded) {
     timingStatus.textContent = '這個 Robot Source 已被較新的頁面取代；不再參與播放或校正。';
@@ -332,14 +322,12 @@ function renderCalibration() {
     const max = Number(latestCalibration?.probeMaxAttempts) || 1;
     const target = phase.startsWith('backing') ? '歌曲路徑' : '手機麥克風';
     const attempt = Number(phase.startsWith('backing') ? attempts.backing : attempts.mic) || 1;
-    timingButton.textContent = 'Calibrating…';
     timingStatus.textContent = `校正中 · ${target} ${Math.min(attempt, max)}/${max} · 這段先不要唱。`;
     return;
   }
 
   if (collecting) {
     const progress = Math.round((Number(latestCalibration.progress) || 0) * 100);
-    timingButton.textContent = `Calibrating… ${progress}%`;
     const need = Number(latestCalibration.windowsNeeded) || 1;
     const rounds = need > 1
       ? ` · 已一致 ${Number(latestCalibration.windowsAgreed) || 0}/${need} 次`
@@ -352,8 +340,6 @@ function renderCalibration() {
       : `Collecting ${progress}%${rounds}${provisionalNote} · 手機保持喇叭播放，先不要說話。`;
     return;
   }
-
-  timingButton.textContent = 'Calibrate timing';
 
   if (latestCalibration?.state === 'complete') {
     const confidence = Number(latestCalibration.confidence);

@@ -273,3 +273,25 @@ A new capture-generation clock reset also uses
 trim and frontier. Synthetic tests verify A-only rebase and clock reset
 while B's state remains intact. This keeps the original room-calibration
 fold/unfold policy, with N=1 Golden PCM unchanged.
+
+
+## Stage 13: one shared, source-agnostic PCM ingest pipeline
+
+The 200-line `AudioSession.ingest()` placement/resampler engine now lives
+in `src/pcm-ingest.ts` as `ingestPcmTimeline()`. Both Mic and captured
+Backing call this same function, preserving every existing operation:
+source-generation/rate restart detection, streaming resampler phase/tail,
+resampler-prefix attribution, receiver gap/overlap semantics, delayed
+interpolation endpoint, new-clock placement, Backing clock correction,
+and capture source-frontier bookkeeping.
+
+`AudioSession` passes a lazy `roomSampleNow` callback so the actual
+room output epoch remains singular. Only the Mic caller supplies
+`onCaptureClockChanged` and `trimSourcePacket`, explicitly delegated to
+its own `MicTrack`. The generic helper never imports the room, MicTrack,
+Publisher identity, or mixer. Backing retains its original clock trim.
+
+**This is a relocation, not a new latency model.** The actual authenticated
+multi-Publisher ingress, room fan-in, per-singer clocks at runtime, and
+Listen/Take track evidence remain to be connected later. Golden PCM
+fixtures and existing browser tests must be unchanged.

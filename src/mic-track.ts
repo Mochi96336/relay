@@ -566,7 +566,7 @@ export class MicTrack {
   /** Capture-scoped detector state; cumulative limiter evidence stays intact. */
   resetLimiterState() {
     this.limiter.reset();
-    this.limiterResetPending = false;
+    this.micLimiterResetPending = false;
   }
 
   /**
@@ -610,7 +610,7 @@ export class MicTrack {
     currentMicGainDb: number,
   ) {
     this.seedMicLimiterFromWindow(samples, fromOffset, toOffset, currentMicGainDb);
-    this.limiterResetPending = false;
+    this.micLimiterResetPending = false;
   }
 
 

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { SongSession } from '../src/song-session.js';
+import { SourceRuntime } from '../src/source-runtime.js';
 import { ChoirDeadlineRoomExperiment } from '../src/choir-deadline-room-experiment.js';
 import { ChoirSongSessionBridgeExperiment } from '../src/choir-song-session-bridge-experiment.js';
 
@@ -17,10 +18,19 @@ const makeRoom = () => new ChoirDeadlineRoomExperiment({
   roomEpochMs: 0, outputHoldbackMs: 200, songEpoch: 7,
   backingGeneration: 9, videoId: VIDEO,
 });
-const bridgeFor = (songs: SongSession, room: ChoirDeadlineRoomExperiment) =>
-  new ChoirSongSessionBridgeExperiment(songs, room, {
-    videoId: VIDEO, songEpoch: 7, backingGeneration: 9,
-  });
+type RobotSocket = { id: string; open: boolean; isRobotSource?: boolean };
+function activeRobot() {
+  const runtime = new SourceRuntime<RobotSocket>({ isConnected: s => s.open });
+  const socket: RobotSocket = { id: 'robot-a', open: true };
+  runtime.attachRobot(socket);
+  return { runtime, socket };
+}
+const bridgeFor = (
+  songs: SongSession, room: ChoirDeadlineRoomExperiment,
+  robot = activeRobot().runtime,
+) => new ChoirSongSessionBridgeExperiment(songs, room, robot, {
+  videoId: VIDEO, songEpoch: 7, backingGeneration: 9,
+});
 
 describe('Choir offline bridge consumes real authenticated SongSession authority', () => {
   test('rejects missing and spoofed playback while allowing stable server projection', () => {
@@ -84,6 +94,44 @@ describe('Choir offline bridge consumes real authenticated SongSession authority
       // minutes of expired frames or incorrectly reporting late-clock.
       assert.equal(bridge.sync(detach ? 100 : 2_500), 'invalidated');
       assert.deepEqual(room.renderDue(detach ? 220 : 2_540), {
+        state: 'resync-required', frames: [], reason: 'playback-mapping-changed',
+      });
+    }
+  });
+
+  test('authenticated YouTube playing is insufficient without a live Robot source', () => {
+    const songs = new SongSession();
+    const room = makeRoom();
+    const robot = activeRobot();
+    robot.socket.open = false;
+    const bridge = bridgeFor(songs, room, robot.runtime);
+    assert.equal(songs.update(telemetry(), A, null, 0).accepted, true);
+    assert.equal(bridge.sync(0), 'awaiting-playback');
+    robot.socket.open = true;
+    assert.equal(bridge.sync(10), 'initialized');
+    robot.runtime.invalidateMapping();
+    assert.equal(bridge.sync(20), 'invalidated',
+      'a trusted Robot seek must not reuse an unaffected SongSession clock');
+    assert.deepEqual(room.renderDue(220), {
+      state: 'resync-required', frames: [], reason: 'playback-mapping-changed',
+    });
+  });
+
+  test('Robot source replacement and disconnected source both revoke Choir authority', () => {
+    for (const change of ['replace', 'disconnect'] as const) {
+      const songs = new SongSession();
+      const room = makeRoom();
+      const robot = activeRobot();
+      const bridge = bridgeFor(songs, room, robot.runtime);
+      assert.equal(songs.update(telemetry(), A, null, 0).accepted, true);
+      assert.equal(bridge.sync(0), 'initialized');
+      if (change === 'replace') {
+        robot.runtime.attachRobot({ id: 'robot-b', open: true });
+      } else {
+        assert.equal(robot.runtime.detachRobot(robot.socket), true);
+      }
+      assert.equal(bridge.sync(100), 'invalidated', change);
+      assert.deepEqual(room.renderDue(220), {
         state: 'resync-required', frames: [], reason: 'playback-mapping-changed',
       });
     }

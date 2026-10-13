@@ -44,6 +44,7 @@ export type CanonicalChoirSingerEvidence = {
   latePacketDrops: number;
   expected: boolean;
   awaitingCalibration: boolean;
+  calibrationSource: 'content' | 'sample-song-estimate' | 'boot-probe-estimate' | null;
 };
 
 export type CanonicalChoirFrame = {
@@ -62,6 +63,14 @@ type Slot = {
   joinGain: number;
   latePacketDrops: number;
   awaitingCalibration: boolean;
+  /** Authority for the currently admitted capture only; never re-used on rebind. */
+  authority: {
+    source: 'content' | 'sample-song-estimate' | 'boot-probe-estimate';
+    firstAdvanceMs: number;
+    revision: number;
+    captureGeneration: number | null;
+    sourceRate: number | null;
+  } | null;
 };
 
 type RoomConfig = {
@@ -135,7 +144,7 @@ export class CanonicalChoirMixExperiment {
     const mic = new MicTrack(this.micOptions);
     this.slots.set(id.participantId, {
       identity: { ...id }, mic, expected: true, joinGain: 0,
-      latePacketDrops: 0, awaitingCalibration: false,
+      latePacketDrops: 0, awaitingCalibration: false, authority: null,
     });
     this.bus.setMicExpected(true, true);
     return true;
@@ -183,6 +192,7 @@ export class CanonicalChoirMixExperiment {
       joinGain: 0,
       latePacketDrops: 0,
       awaitingCalibration: true,
+      authority: null,
     });
     this.bus.setMicExpected(true, true);
     return true;
@@ -204,6 +214,75 @@ export class CanonicalChoirMixExperiment {
     slot.mic.calibratedMicLagTargetMs = decision.advanceMs;
     slot.mic.edge.beginReplacement();
     slot.awaitingCalibration = false;
+    slot.authority = {
+      source: decision.source as 'content' | 'sample-song-estimate' | 'boot-probe-estimate',
+      firstAdvanceMs: decision.advanceMs,
+      revision: 0,
+      captureGeneration: slot.mic.timeline.generation,
+      sourceRate: slot.mic.timeline.sourceRate,
+    };
+    return true;
+  }
+
+  /**
+   * Experimental live recovery from an authorized fallback to fresh Content.
+   * The trusted coordinator supplies a monotonic proof revision; neither a raw
+   * client candidate nor a diagnostic residual is sufficient.
+   *
+   * Only a small correction within the INITIAL capture authority is allowed.
+   * This prevents many individually-small decisions staircasing a singer
+   * into a large, inaudible jump. Larger disagreements need a fresh, explicit
+   * capture reacquisition protocol, not a live read-head replacement.
+   */
+  recoverContentWithoutJump(
+    id: CanonicalChoirSingerId, revision: number,
+    decision: ChoirAlignmentDecision, takeFrozen: boolean,
+  ): boolean {
+    const slot = this.slots.get(id.participantId);
+    if (!slot || !this.matchesEpoch(id) || slot.identity.mediaEpoch !== id.mediaEpoch
+      || !slot.expected || slot.awaitingCalibration || takeFrozen
+      || !slot.authority
+      || slot.authority.source === 'content'
+      || decision.source !== 'content'
+      || decision.advanceMs === null || !Number.isFinite(decision.advanceMs)
+      || Math.abs(decision.advanceMs) > 2_800
+      || !Number.isSafeInteger(revision) || revision <= slot.authority.revision
+      || this.nextRoomSample === null) return false;
+    const mic = slot.mic;
+    const current = mic.alignmentState.calibratedMicLagMs;
+    const currentTarget = mic.calibratedMicLagTargetMs;
+    // Do not swap a target while an earlier correction or capture transition
+    // is in progress. An old source generation cannot authorize a new one.
+    if (current === null || currentTarget === null
+      || Math.abs(currentTarget - current) > 0.001
+      || !mic.lastEmittedMicFrameComplete
+      || mic.lastEmittedMicAdvanceSamples === null
+      || mic.timeline.generation === null
+      || mic.timeline.generation !== slot.authority.captureGeneration
+      || mic.timeline.sourceRate !== slot.authority.sourceRate) return false;
+    const delta = decision.advanceMs - currentTarget;
+    const MAX_LIVE_CORRECTION_MS = 5; // Unvalidated experimental guard, not a device-specific tolerance.
+    if (Math.abs(delta) > MAX_LIVE_CORRECTION_MS
+      || Math.abs(decision.advanceMs - slot.authority.firstAdvanceMs) > MAX_LIVE_CORRECTION_MS)
+      return false;
+    const nextRequest = mic.requestedMicAdvanceMs + delta;
+    if (Math.abs(mic.budgetedMicAdvanceMs(nextRequest) - nextRequest) > 0.001)
+      return false;
+    // Both trajectories, including the canonical limiter's look-ahead, need
+    // actual retained capture PCM before a live transition may be authorized.
+    const oldStart = Math.floor(this.nextRoomSample + mic.lastEmittedMicAdvanceSamples);
+    const newStart = Math.floor(oldStart + delta * this.sampleRate / 1_000);
+    const count = this.frameSamples + mic.limiter.lookaheadSamples + 2;
+    for (const start of [oldStart, newStart]) {
+      const evidence = readPcmEvidence(mic.timeline, start, count);
+      if (evidence.gapSamples !== 0 || evidence.frontierMissingSamples !== 0)
+        return false;
+    }
+    // MicTrack.planMicRead owns the existing 1%-per-frame fractional read
+    // slew, limiter, frontier and output edge. Do not copy or jump that code.
+    mic.calibratedMicLagTargetMs = decision.advanceMs;
+    slot.authority.source = 'content';
+    slot.authority.revision = revision;
     return true;
   }
 
@@ -338,6 +417,7 @@ export class CanonicalChoirMixExperiment {
         latePacketDrops: slot.latePacketDrops,
         expected: slot.expected,
         awaitingCalibration: slot.awaitingCalibration,
+        calibrationSource: slot.authority?.source ?? null,
       };
       if (!slot.awaitingCalibration) {
         slot.mic.lastEmittedMicFrameComplete =

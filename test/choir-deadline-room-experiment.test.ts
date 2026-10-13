@@ -614,6 +614,72 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     'retention alone must not make an old acoustic window fresh');
   });
 
+  test('a measured +120ms Content disagreement stages a live fallback without audio jump', () => {
+    const coordinator = new ChoirDeadlineRoomExperiment({
+      sampleRate: RATE, frameMs: 20, prebufferMs: 400,
+      retentionMs: 10_000, roomEpochMs: 0, outputHoldbackMs: 200,
+      songEpoch: 7, backingGeneration: 9, videoId: 'abcdefghijk',
+      maxCatchupFrames: 8, reconnectGraceMs: 2_000,
+    });
+    const { a, b } = admitBoth(coordinator);
+    coordinator.receiveFromTransport('socket-A', captured(FRAME, 5_000), RATE, 20);
+    coordinator.disconnectTransport('socket-A', 80);
+    for (const at of [220, 240, 260]) {
+      assert.equal(coordinator.renderDue(at).state, 'ready');
+    }
+    const a2 = coordinator.admitTrusted({
+      verifiedParticipantId: 'A', transportId: 'socket-A2',
+      seat: 'primary', expectedPrimaryId: 'A', nowMs: 261,
+    });
+    assert.equal(a2.ok, true);
+    if (!a2.ok) return;
+    assert.ok(a2.mediaEpoch > a.mediaEpoch);
+    const fallback = {
+      source: 'boot-probe-estimate' as const, advanceMs: 0,
+      sampleResidualMs: null, bootResidualMs: null,
+      sampleCandidateMs: null, bootCandidateMs: 0,
+    };
+    assert.equal(coordinator.acceptTrustedReboundAlignment(
+      'socket-A2', a2.mediaEpoch, fallback, 262), true);
+    const { mic, backing } = laggedMultibandMusicPair(6, RATE, 120, {
+      singerGain: 0.18,
+    });
+    const count = RATE * 2;
+    for (let at = 280; at <= 6_000; at += 20) {
+      if (at % 2_000 === 0) {
+        const first = (at / 2_000 - 1) * count;
+        const last = first + count;
+        assert.equal(coordinator.receiveFromTransport('socket-A2', {
+          generation: 7, firstSampleIndex: first,
+          pcm: mic.subarray(first * 2, last * 2),
+        }, RATE, at), true);
+        assert.equal(coordinator.receiveTrustedBacking({
+          generation: 9, firstSampleIndex: first,
+          pcm: backing.subarray(first * 2, last * 2),
+        }, RATE, at), true);
+      }
+      assert.equal(coordinator.renderDue(at).state, 'ready');
+    }
+    const measured = coordinator.analyzeTrustedCanonicalContent(
+      'socket-A2', a2.mediaEpoch, 0, 6_001);
+    assert.equal(measured.status, 'candidate');
+    if (measured.status !== 'candidate') return;
+    assert.ok(Math.abs(measured.lagMs - 120) <= 20);
+    assert.equal(coordinator.commitTrustedCanonicalContent(
+      'socket-A2', a2.mediaEpoch, 6_002, false), 'staged',
+      'a large measured Content mismatch must not jump the live Mic');
+    assert.equal(coordinator.commitTrustedCanonicalContent(
+      'socket-A2', a2.mediaEpoch, 6_003, false), 'rejected');
+    const stillFallback = coordinator.renderDue(6_020);
+    assert.equal(stillFallback.state, 'ready');
+    if (stillFallback.state !== 'ready') return;
+    assert.equal(stillFallback.frames[0].singers[0].mediaEpoch, a2.mediaEpoch);
+    assert.equal(stillFallback.frames[0].singers[0].reacquisitionPending, true);
+    assert.equal(stillFallback.frames[0].singers[0].calibrationSource, 'boot-probe-estimate');
+    assert.equal(stillFallback.frames[0].singers[0].calibrationTargetMs, 0);
+    assert.equal(stillFallback.frames[0].singers[1].mediaEpoch, b.mediaEpoch);
+  });
+
   test('expired reconnect grace cannot silently restore a revoked primary seat', () => {
     const coordinator = room();
     const { a, b } = admitBoth(coordinator);

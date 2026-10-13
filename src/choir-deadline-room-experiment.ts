@@ -1,5 +1,5 @@
 import { CanonicalChoirMixExperiment, type CanonicalChoirFrame } from './choir-canonical-mix-experiment.js';
-import { ChoirPublisherRegistry, type ChoirAdmitResult } from './choir-publisher-registry.js';
+import { ChoirPublisherRegistry } from './choir-publisher-registry.js';
 import { ChoirSession, type ChoirSeat } from './choir-session.js';
 import type { PcmFrame } from './pcm-frame.js';
 
@@ -41,7 +41,7 @@ export type ChoirDeadlineResult =
 export type ChoirTrustedAdmissionResult =
   | { ok: true; mediaEpoch: number; idempotent: boolean }
   | { ok: false; reason: 'invalid-clock' | 'rebind-deferred' | 'room-rejected'
-      | ChoirAdmitResult extends { ok: false; reason: infer R } ? R & string : never };
+      | 'invalid' | 'transport-in-use' | 'seat-rejected' };
 
 /**
  * A bounded proof that authenticated transports, independent MicTracks and

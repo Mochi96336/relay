@@ -733,7 +733,7 @@ export class AudioSession {
     );
     if (startsAfterGap && previousChunk && currentChunk) {
       if (!this.concealMicGap(previousChunk, currentChunk, previousTotalSamples)) {
-        this.declickSourceGap(previousChunk, currentChunk.samples, this.firstUnheardMicSample());
+        this.declickSourceGap(previousChunk, currentChunk.samples, this.micTrack.firstUnheardSample());
       }
     }
     return result;
@@ -1360,24 +1360,6 @@ export class AudioSession {
    * The first Mic timeline sample the mix has not read. A slewed read
    * interpolates, so the sample after a fractional position was read too.
    */
-  private firstUnheardMicSample() {
-    return this.micTrack.lastEmittedMicSourceSample === null
-      ? Number.NEGATIVE_INFINITY
-      : Math.ceil(this.micTrack.lastEmittedMicSourceSample) + 1;
-  }
-
-  private crossedRetainedMicRestartBoundary(sourceSample: number) {
-    const previous = this.micTrack.lastEmittedMicSourceSample;
-    if (previous === null || previous === sourceSample) return false;
-    return this.micCaptureRestartBoundaries.firstCrossing(previous, sourceSample) !== null;
-  }
-
-  private beginMicCaptureRestartEdgeIfDue(sourceSample: number) {
-    if (!this.crossedRetainedMicRestartBoundary(sourceSample)) return false;
-    this.micEdge.beginReplacement();
-    return true;
-  }
-
   private beginBackingCaptureRestartEdgeIfDue(sourceSample: number) {
     if (!this.backingCaptureRestartBoundaries.consumeThrough(sourceSample)) return;
     this.backingEdge.beginReplacement();
@@ -1393,18 +1375,6 @@ export class AudioSession {
     if (countLimitedSample && this.micLimiter.limiting) this.limitedSamples += 1;
     if (countLimitedSample && this.micLimiter.heavilyLimiting) this.heavyLimitedSamples += 1;
     return limited;
-  }
-
-  private advanceCalibrationSlew() {
-    const target = this.micTrack.calibratedMicLagTargetMs;
-    const current = this.micTrack.alignmentState.calibratedMicLagMs;
-    if (target === null || current === null || current === target) return;
-
-    const maximumStepMs = this.frameMs * RUNTIME_CALIBRATION_SLEW_FRACTION;
-    const deltaMs = target - current;
-    this.micTrack.alignmentState.calibratedMicLagMs = Math.abs(deltaMs) <= maximumStepMs
-      ? target
-      : current + Math.sign(deltaMs) * maximumStepMs;
   }
 
   /**
@@ -1432,7 +1402,7 @@ export class AudioSession {
     const previousAdvanceSamplesExact =
       previouslyEmittedAdvanceSamples ?? modeledPreviousAdvanceSamplesExact;
 
-    this.advanceCalibrationSlew();
+    this.micTrack.advanceCalibrationSlew();
     const startSample = frameIndex * this.frameSamples;
     this.updateMicFrontierCorrection(startSample);
 
@@ -1641,7 +1611,7 @@ export class AudioSession {
       // it. Keep old-capture limiting until the audible trajectory actually
       // crosses the semantic boundary. The first real replacement sample then
       // seeds fresh dynamics from replacement PCM itself.
-      if (this.beginMicCaptureRestartEdgeIfDue(micSourceSample)) {
+      if (this.micTrack.beginCaptureRestartEdgeIfDue(micSourceSample)) {
         this.micTrack.micLimiterResetPending = true;
       }
 

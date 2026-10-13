@@ -194,6 +194,24 @@ describe('extracted MicTrack owns per-singer components independently', () => {
     assert.equal(frame.crossfadeInputClippedSamplesDelta, 0);
   });
 
+  test('capture edges and calibration slew affect only their own track', () => {
+    const a = new MicTrack(config);
+    const b = new MicTrack(config);
+    a.alignmentState.calibratedMicLagMs = 100;
+    a.calibratedMicLagTargetMs = 120;
+    a.advanceCalibrationSlew();
+    assert.ok(Math.abs(a.alignmentState.calibratedMicLagMs! - 100.2) < 1e-9);
+    assert.equal(b.alignmentState.calibratedMicLagMs, null);
+
+    a.lastEmittedMicSourceSample = 99;
+    a.captureRestarts.queue(100);
+    assert.equal(a.firstUnheardSample(), 100);
+    assert.equal(a.beginCaptureRestartEdgeIfDue(100), true);
+    assert.equal(b.beginCaptureRestartEdgeIfDue(100), false);
+    assert.equal(b.captureRestarts.size, 0);
+    assert.equal(b.edge.replacementActive, false);
+  });
+
   test('current AudioSession still uses its actual existing Mic clock and limits', () => {
     const session = new AudioSession({
       sampleRate: 48_000, frameMs: 20, prebufferMs: 400,

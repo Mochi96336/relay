@@ -59,6 +59,8 @@ export class MicTrack {
   readonly frontier: MicFrontierCorrection;
   readonly clockTrim: MicClockTrim;
   private readonly sampleRate: number;
+  private readonly frameMs: number;
+  private readonly slewFraction: number;
   private readonly frameSamples: number;
   private readonly readHeadCrossfadeMs: number;
 
@@ -96,6 +98,8 @@ export class MicTrack {
   }) {
     const { sampleRate, frameMs, frameSamples, sourceEdgeFadeSamples, safetyMs, slewFraction } = options;
     this.sampleRate = sampleRate;
+    this.frameMs = frameMs;
+    this.slewFraction = slewFraction;
     this.frameSamples = frameSamples;
     this.readHeadCrossfadeMs = options.readHeadCrossfadeMs;
     this.gain = new MicGainRamp(sampleRate);
@@ -317,6 +321,38 @@ export class MicTrack {
       crossfadeUnheaderedSamplesDelta,
       crossfadeInputClippedSamplesDelta: crossfadeMicInputClippedSamplesDelta,
     };
+  }
+
+
+
+  firstUnheardSample() {
+    return this.lastEmittedMicSourceSample === null
+      ? Number.NEGATIVE_INFINITY
+      : Math.ceil(this.lastEmittedMicSourceSample) + 1;
+  }
+
+  private crossedRetainedRestartBoundary(sourceSample: number) {
+    const previous = this.lastEmittedMicSourceSample;
+    if (previous === null || previous === sourceSample) return false;
+    return this.captureRestarts.firstCrossing(previous, sourceSample) !== null;
+  }
+
+  beginCaptureRestartEdgeIfDue(sourceSample: number) {
+    if (!this.crossedRetainedRestartBoundary(sourceSample)) return false;
+    this.edge.beginReplacement();
+    return true;
+  }
+
+  advanceCalibrationSlew() {
+    const target = this.calibratedMicLagTargetMs;
+    const current = this.alignmentState.calibratedMicLagMs;
+    if (target === null || current === null || current === target) return;
+
+    const maximumStepMs = this.frameMs * this.slewFraction;
+    const deltaMs = target - current;
+    this.alignmentState.calibratedMicLagMs = Math.abs(deltaMs) <= maximumStepMs
+      ? target
+      : current + Math.sign(deltaMs) * maximumStepMs;
   }
 
 

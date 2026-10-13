@@ -98,6 +98,16 @@ voice/backing mixing. No new producer or audio codec has been introduced.
 different real PCM and missing-frontier evidence at the same room position.
 Existing N=1 Golden PCM digests must stay untouched.
 
+## Stage 5: remaining source-local continuity policy
+
+The canonical `MicTrack` now owns the actual capture-restart seam decision
+and `advanceCalibrationSlew()` policy. The room feeds the requested output
+source position, but the singer's own last-emitted PCM source position and
+queued restart boundaries decide whether its source transition begins.
+No other singer's `SourceOutputEdge` is touched.
+Readhead slew remains bounded by the unchanged per-frame percentage.
+Added independent A/B calibration-slew and restart-seam tests.
+
 ## Still *inside* AudioSession and must be extracted next
 
 The existing canonical methods continue to own:

@@ -722,56 +722,18 @@ export class AudioSession {
     const previousSourceRate = this.mic.sourceRate;
     const previousSourceFrontier = this.mic.sourceFrontier;
     const result = this.ingest(this.mic, frame, sourceRate, nowMs, false, true);
+    // Source-local capture metadata now belongs to the reusable MicTrack.
+    // The shared session still decides the capture-to-room sample placement
+    // and performs legacy gap concealment, preserving N=1 output exactly.
+    this.micTrack.observeIngest({
+      frame, sourceRate, running: this.running,
+      previousTotalSamples, previousChunk,
+      previousGeneration, previousSourceRate, previousSourceFrontier,
+      result,
+      mapSourceSample: (sourceSample, rate) =>
+        this.micSourceSampleToSessionSample(sourceSample, rate),
+    });
     const currentChunk = this.mic.chunks.at(-1) ?? null;
-    const addedChunk = currentChunk !== null && currentChunk !== previousChunk;
-    const captureClockChanged = result.captureRestarted
-      || previousGeneration !== this.mic.generation
-      || previousSourceRate !== this.mic.sourceRate;
-    if (captureClockChanged || (addedChunk && !previousChunk)) {
-      // Where this capture's own audio begins: its first chunk, or, when the
-      // whole first packet lay behind audio already retained and was trimmed
-      // away, the frontier its audio has to follow. Recorded only from the
-      // later chunk, the origin stayed with the retiring capture, and
-      // concealment learned a pitch period across the seam between them.
-      this.micTrack.micCaptureOriginSample = addedChunk ? currentChunk.start : this.mic.totalSamples;
-    }
-
-    const positioned = frame.firstSampleIndex !== null;
-    const sourceContinuous = Boolean(
-      positioned
-      && sourceRate
-      && !result.captureRestarted
-      && previousGeneration === frame.generation
-      && previousSourceRate === sourceRate
-      && previousSourceFrontier === frame.firstSampleIndex
-    );
-    if (!sourceContinuous) this.micInputClipping.resetRun();
-    if (
-      positioned
-      && sourceRate
-      && result.samples.length > 0
-    ) {
-      this.micInputClipping.observe(
-        frame,
-        (sourceSample) => this.micSourceSampleToSessionSample(sourceSample, sourceRate),
-        sourceContinuous ? null : result.start,
-      );
-    }
-    if (result.captureRestarted && this.running) {
-      this.micCaptureRestartBoundaries.queue(previousTotalSamples);
-    }
-
-    // Raw level belongs to the acoustic capture. A generation/source-clock
-    // replacement must not inherit the previous device or singer's meter decay.
-    // Limiter state is different: old capture PCM may still be queued, so that
-    // resets only when the audible read head reaches the retained boundary.
-    if (result.captureRestarted) this.micRawMeter.reset();
-
-    // Meter only samples attributable to this source frame. A streaming
-    // resampler may prepend one completed target sample that belongs to the
-    // previous source packet; counting it again here would double-charge the
-    // packet boundary in capture diagnostics.
-    this.micRawMeter.observe(result.samples);
 
     // Only same-capture positioned holes are edited in the retained timeline.
     // A capture-clock restart is an authority boundary whose raw replacement

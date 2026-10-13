@@ -62,6 +62,41 @@ describe('extracted MicTrack owns per-singer components independently', () => {
 
   });
 
+  test('Mic post-ingest capture evidence stays isolated from another singer', () => {
+    const a = new MicTrack(config);
+    const b = new MicTrack(config);
+    const firstChunk = {
+      start: 0, samples: new Int16Array(960).fill(14000), positioned: true,
+    };
+    a.timeline.chunks.push(firstChunk);
+    a.timeline.generation = 5;
+    a.timeline.sourceRate = 48_000;
+    a.timeline.totalSamples = 960;
+    const frame = {
+      generation: 5,
+      firstSampleIndex: 0,
+      pcm: Buffer.from(firstChunk.samples.buffer),
+    };
+    a.observeIngest({
+      frame,
+      sourceRate: 48_000,
+      running: true,
+      previousTotalSamples: 0,
+      previousChunk: null,
+      previousGeneration: null,
+      previousSourceRate: null,
+      previousSourceFrontier: null,
+      result: { captureRestarted: true, samples: firstChunk.samples, start: 0 },
+      mapSourceSample: (sample) => sample,
+    });
+    assert.equal(a.micCaptureOriginSample, 0);
+    assert.equal(a.captureRestarts.size, 1);
+    assert.ok(a.meter.peakDbfs !== null);
+    assert.equal(b.micCaptureOriginSample, null);
+    assert.equal(b.captureRestarts.size, 0);
+    assert.equal(b.meter.peakDbfs, null);
+  });
+
   test('current AudioSession still uses its actual existing Mic clock and limits', () => {
     const session = new AudioSession({
       sampleRate: 48_000, frameMs: 20, prebufferMs: 400,

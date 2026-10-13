@@ -70,13 +70,28 @@ This refactor keeps every existing computation in its original order;
 `AudioSession` still emits exactly one Mic source. New isolation assertions
 modify A's flags and verify that B's state remains at defaults.
 
+## Stage 3: source-specific post-ingest processor
+
+`MicTrack.observeIngest()` is now invoked by the canonical
+`AudioSession.ingestMic()`. It owns capture-origin placement, detecting
+source-clock continuity, collecting raw clipping evidence, queuing in-band
+restart boundaries and updating the raw Mic meter. All of these operations
+used to mutate those track-owned objects directly from AudioSession.
+
+Crucially, `AudioSession.ingest()` remains the only packet placement path.
+The track does **not** invent capture-to-room offsets or touch Robot backing.
+`AudioSession` also continues to run its original same-capture gap
+concealment and anti-click logic. The Golden PCM gate must remain byte-exact
+over its existing restart, clock drift, clipping and packet-loss cases.
+
 ## Still *inside* AudioSession and must be extracted next
 
 The existing canonical methods continue to own:
 
 - per-singer frame processing, source concealment application,
   input clipping and MixBus summing loop;
-- `ingestMic`, source sample-to-session mapping, trim/restart handling,
+- the remaining Mic PCM transport placement in `ingestMic`,
+  source sample-to-session mapping, trim/restart handling,
   `planMicRead`, `readMicFrame`, and `mixFrame`.
 
 **These must not be duplicated into the experimental ChoirAudioPrototype**

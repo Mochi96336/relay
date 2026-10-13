@@ -326,8 +326,12 @@ export class ChoirDeadlineRoomExperiment {
    * No old acoustic authority or queued room output survives this event.
    */
   invalidateTrustedPlaybackAuthority(nowMs: number): boolean {
-    if (!this.sealDueNow(nowMs)) return false;
-    if (this.playbackMapping === null) return false;
+    if (this.invalidated !== null || this.playbackMapping === null
+      || !this.validNow(nowMs) || nowMs < this.lastNowMs) return false;
+    // A lost trusted song clock is an emergency cancellation, not another
+    // playable source mutation. Never render stale deadlines just to discard
+    // them, and never let an unrelated catchup budget hide the real reason.
+    this.lastNowMs = nowMs;
     this.pendingCanonicalContent.clear();
     this.room.invalidateContentEvidenceHistory();
     this.invalidated = 'playback-mapping-changed';

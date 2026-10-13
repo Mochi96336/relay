@@ -1330,35 +1330,12 @@ export class AudioSession {
     return this.micTrack.planMicRead(frameIndex * this.frameSamples, this.bus.micExpected);
   }
 
-  /** How much arrived audio is left past this frame's reads; none left is starvation. */
+  /** Every Mic measures its own arrived source; backing stays room-owned. */
   private measureHeadroom(plan: MicReadPlan) {
-    const {
-      startSample,
-      previouslyEmittedAdvanceSamples,
-      previousAdvanceSamplesExact,
-      advanceSamplesExact,
-      boundedRuntimeAdvanceMoved,
-      canCrossfadeReadHeadJump,
-      crossfadeSamples,
-    } = plan;
-    // Reading ahead can outrun what has actually arrived. readPcmRange pads with
-    // zeros when that happens, so without this the vocal simply disappears in
-    // chunks and nothing anywhere says why.
-    // The limiter's look-ahead reads past the frame, so it is part of what has
-    // to have arrived for this frame to be complete.
-    const furthestAdvanceSamples = boundedRuntimeAdvanceMoved
-      ? Math.max(previousAdvanceSamplesExact, advanceSamplesExact)
-      : advanceSamplesExact;
-    const ordinaryMicReadEnd =
-      startSample + furthestAdvanceSamples + this.frameSamples + this.micLimiter.lookaheadSamples;
-    const crossfadeOldReadEnd = canCrossfadeReadHeadJump
-      && previouslyEmittedAdvanceSamples !== null
-      ? startSample + previouslyEmittedAdvanceSamples + crossfadeSamples + 2
-      : Number.NEGATIVE_INFINITY;
-    const micReadEnd = Math.ceil(Math.max(ordinaryMicReadEnd, crossfadeOldReadEnd));
-    this.micTrack.micHeadroomMs = ((this.mic.totalSamples - micReadEnd) / this.sampleRate) * 1000;
-    this.backingHeadroomMs = ((this.backing.totalSamples - (startSample + this.frameSamples)) / this.sampleRate) * 1000;
-    if (this.micTrack.micHeadroomMs < 0 && this.bus.micExpected) this.micTrack.micStarvedFrames += 1;
+    this.micTrack.measureReadHeadroom(plan, this.bus.micExpected);
+    const startSample = plan.startSample;
+    this.backingHeadroomMs =
+      ((this.backing.totalSamples - (startSample + this.frameSamples)) / this.sampleRate) * 1000;
     if (this.backingHeadroomMs < 0 && this.bus.backingExpected) this.backingStarvedFrames += 1;
   }
 

@@ -124,6 +124,18 @@ one room sample, plus one starved frontier with one healthy stream. They
 cannot turn into two authenticated live Publishers until the current
 AudioSession ingest/rebase and final mixer are separated and gated.
 
+## Stage 7: track-local Mic headroom and starvation
+
+`MicTrack.measureReadHeadroom(plan, expected)` now owns how much
+source PCM the singer has actually delivered beyond the entire requested
+read trajectory (including limiter lookahead and crossfade old leg). It
+increments **that singer's** starvation counter only when expected.
+`AudioSession.measureHeadroom()` retains room/backing headroom and backing
+starvation, without mixing A's network quality with B's.
+
+This remains an N=1 refactor; A/B isolation tests use distinct arrival
+frontiers on the same room sample. No real second publisher yet.
+
 ## Still *inside* AudioSession and must be extracted next
 
 The existing canonical methods continue to own:

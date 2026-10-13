@@ -525,4 +525,36 @@ export class MicTrack {
   }
 
 
+
+  /** How much arrived audio is left past this frame's reads; none left is starvation. */
+  measureReadHeadroom(plan: MicReadPlan, expected: boolean) {
+    const {
+      startSample,
+      previouslyEmittedAdvanceSamples,
+      previousAdvanceSamplesExact,
+      advanceSamplesExact,
+      boundedRuntimeAdvanceMoved,
+      canCrossfadeReadHeadJump,
+      crossfadeSamples,
+    } = plan;
+    // Reading ahead can outrun what has actually arrived. readPcmRange pads with
+    // zeros when that happens, so without this the vocal simply disappears in
+    // chunks and nothing anywhere says why.
+    // The limiter's look-ahead reads past the frame, so it is part of what has
+    // to have arrived for this frame to be complete.
+    const furthestAdvanceSamples = boundedRuntimeAdvanceMoved
+      ? Math.max(previousAdvanceSamplesExact, advanceSamplesExact)
+      : advanceSamplesExact;
+    const ordinaryMicReadEnd =
+      startSample + furthestAdvanceSamples + this.frameSamples + this.limiter.lookaheadSamples;
+    const crossfadeOldReadEnd = canCrossfadeReadHeadJump
+      && previouslyEmittedAdvanceSamples !== null
+      ? startSample + previouslyEmittedAdvanceSamples + crossfadeSamples + 2
+      : Number.NEGATIVE_INFINITY;
+    const micReadEnd = Math.ceil(Math.max(ordinaryMicReadEnd, crossfadeOldReadEnd));
+    this.micHeadroomMs = ((this.timeline.totalSamples - micReadEnd) / this.sampleRate) * 1000;
+    if (this.micHeadroomMs < 0 && expected) this.micStarvedFrames += 1;
+  }
+
+
 }

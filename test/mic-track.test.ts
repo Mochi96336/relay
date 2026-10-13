@@ -266,6 +266,25 @@ describe('extracted MicTrack owns per-singer components independently', () => {
     assert.ok(ap.micReadStart <= bp.micReadStart);
   });
 
+  test('A source starvation and B healthy read headroom stay separate', () => {
+    const a = new MicTrack(config);
+    const b = new MicTrack(config);
+    a.timeline.totalSamples = 20_000;
+    b.timeline.totalSamples = 24_000;
+    const sharedRoomSample = 19_000;
+    const aPlan = a.planMicRead(sharedRoomSample, false);
+    const bPlan = b.planMicRead(sharedRoomSample, false);
+    a.measureReadHeadroom(aPlan, true);
+    b.measureReadHeadroom(bPlan, true);
+    assert.ok(a.micHeadroomMs < 0, 'A has not delivered its limiter lookahead');
+    assert.ok(b.micHeadroomMs > 0, 'B still has healthy buffered PCM');
+    assert.equal(a.micStarvedFrames, 1);
+    assert.equal(b.micStarvedFrames, 0);
+    a.measureReadHeadroom(aPlan, false);
+    assert.equal(a.micStarvedFrames, 1,
+      'an unexpected / released source does not count starvation again');
+  });
+
   test('current AudioSession still uses its actual existing Mic clock and limits', () => {
     const session = new AudioSession({
       sampleRate: 48_000, frameMs: 20, prebufferMs: 400,

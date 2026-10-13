@@ -61,6 +61,12 @@ export class ChoirPublisherRegistry {
       return { ok: false, reason: 'transport-in-use' };
     }
 
+    // Reconnection after grace expiry is NOT a resumption of the old seat.
+    // Clear it before attempting a new explicit admission. This also prevents
+    // expired primary leases from appearing to be healthy again.
+    const prior = this.admissions.get(id);
+    if (prior && !prior.connected && prior.graceExpiresAt !== null
+      && nowMs >= prior.graceExpiresAt) this.release(id);
     const existing = this.admissions.get(id);
     if (existing?.connected && existing.transportId === transportId
       && this.seats.seatOf(id) === seat) {

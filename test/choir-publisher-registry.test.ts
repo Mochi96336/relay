@@ -48,6 +48,23 @@ describe('choir publisher admission and independent reconnect grace', () => {
     assert.deepEqual(registry.sweep(2_100), []);
   });
 
+  test('reconnect after expired grace is not a retained lease or implicit primary promotion', () => {
+    const { registry, seats, admit } = subject();
+    assert.equal(admit(A, 'mic-a1', 'primary').ok, true);
+    assert.equal(admit(B, 'mic-b1', 'secondary').ok, true);
+    assert.equal(registry.disconnect('mic-a1', 10), true);
+    assert.deepEqual(admit(A, 'mic-a2', 'primary', A, 2011), {
+      ok: false, reason: 'seat-rejected',
+    }, 'stale observed primary cannot reassert itself after grace expired');
+    assert.equal(seats.primaryMicId, null);
+    assert.equal(seats.seatOf(B), 'secondary');
+    assert.equal(seats.songControllerId, A);
+    const explicit = admit(A, 'mic-a2', 'primary', null, 2012);
+    assert.equal(explicit.ok, true, 'user explicitly takes the vacant primary seat');
+    if (!explicit.ok) return;
+    assert.equal(explicit.resumed, false, 'this is new admission');
+  });
+
   test('A reconnect supersedes only its own transport; old packet or close is rejected', () => {
     const { registry, admit } = subject();
     const a = admit(A, 'mic-a-1', 'primary');

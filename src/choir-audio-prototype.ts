@@ -23,6 +23,8 @@ export type ChoirAudioIdentity = {
 
 export type ChoirMicPacket = {
   participantId: string;
+  songEpoch: number;
+  backingGeneration: number;
   captureGeneration: number;
   firstSampleIndex: number;
   pcm: Int16Array;
@@ -147,11 +149,13 @@ export class ChoirAudioPrototype {
       || !nonnegativeSafe(identity.songEpoch)
       || !nonnegativeSafe(identity.captureGeneration)
       || !nonnegativeSafe(identity.backingGeneration)
-      || !positiveSafe(identity.micSampleRate)) return false;
+      || !positiveSafe(identity.micSampleRate)
+      || identity.micSampleRate < 8_000 || identity.micSampleRate > 192_000) return false;
     const current = this.tracks.get(identity.participantId);
     if (!current && this.tracks.size >= this.maxSingers) return false;
     if (current && sameIdentity(current.identity, identity)) return false;
     const capacity = Math.ceil(this.retentionMs * identity.micSampleRate / 1000) + 2;
+    if (!Number.isSafeInteger(capacity) || capacity > 1_000_000) return false;
     const stamps = new Float64Array(capacity);
     stamps.fill(-1);
     this.tracks.set(identity.participantId, {
@@ -224,8 +228,11 @@ export class ChoirAudioPrototype {
   receiveMic(packet: ChoirMicPacket): 'accepted' | 'late' | 'invalid' {
     const track = this.tracks.get(packet.participantId);
     if (!track || packet.captureGeneration !== track.identity.captureGeneration
+      || packet.songEpoch !== track.identity.songEpoch
+      || packet.backingGeneration !== track.identity.backingGeneration
       || !nonnegativeSafe(packet.firstSampleIndex)
       || !(packet.pcm instanceof Int16Array) || packet.pcm.length === 0
+      || packet.pcm.length > track.identity.micSampleRate * 2
       || !Number.isSafeInteger(packet.firstSampleIndex + packet.pcm.length)) return 'invalid';
 
     const end = packet.firstSampleIndex + packet.pcm.length;
@@ -234,11 +241,17 @@ export class ChoirAudioPrototype {
       track.latePackets++;
       return 'late';
     }
-    const start = Math.max(packet.firstSampleIndex, track.consumedExclusive, oldestRetained);
+    // Never iterate or write older-than-retention samples in a long packet.
+    // A ring slot already stamped with a newer source sample is immutable
+    // against a late, reordered packet.
+    const start = Math.max(
+      packet.firstSampleIndex, track.consumedExclusive,
+      oldestRetained, end - track.value.length,
+    );
     for (let index = start; index < end; index++) {
       const slot = index % track.value.length;
       // First authenticated arrival owns any overlapping sample.
-      if (track.stamps[slot] !== index) {
+      if (track.stamps[slot] < index) {
         track.value[slot] = packet.pcm[index - packet.firstSampleIndex];
         track.stamps[slot] = index;
       }

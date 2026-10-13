@@ -72,9 +72,17 @@ export class ChoirFollowerPolicy {
     }
 
     if (room.state === 'paused') {
-      return local.state === 'playing'
-        ? { action: 'pause' }
-        : { action: 'none', reason: 'paused', signedDriftMs: null };
+      if (local.state === 'playing') return { action: 'pause' };
+      // A can Seek while paused. Queue a local Seek instead of starting a
+      // follower from the previous verse on the next Play command.
+      const pausedDriftMs = (local.positionSeconds - room.positionSeconds) * 1000;
+      if (local.userGestureReady && Math.abs(pausedDriftMs) >= this.seekThresholdMs
+        && nowMs - this.lastSeekMs >= this.minSeekIntervalMs) {
+        this.lastSeekMs = nowMs;
+        return { action: 'seek', positionSeconds: room.positionSeconds,
+          signedDriftMs: pausedDriftMs };
+      }
+      return { action: 'none', reason: 'paused', signedDriftMs: pausedDriftMs };
     }
 
     if (!local.userGestureReady) {

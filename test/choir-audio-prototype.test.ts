@@ -40,6 +40,7 @@ function install(room: ChoirAudioPrototype, id: ChoirAudioIdentity, micAt = 0) {
 function packet(room: ChoirAudioPrototype, id: ChoirAudioIdentity, at: number, pcm: Int16Array) {
   return room.receiveMic({
     participantId: id.participantId,
+    songEpoch: id.songEpoch, backingGeneration: id.backingGeneration,
     captureGeneration: id.captureGeneration,
     firstSampleIndex: at,
     pcm,
@@ -125,8 +126,8 @@ describe('Choir Audio prototype: actual PCM and one room output clock', () => {
     install(room, A);
     packet(room, A, 0, new Int16Array(FRAME).fill(10_000));
     assert.equal(room.receiveMic({
-      participantId: A.participantId, captureGeneration: 15,
-      firstSampleIndex: 0, pcm: new Int16Array(FRAME),
+      participantId: A.participantId, songEpoch: SONG, backingGeneration: BACKING,
+      captureGeneration: 15, firstSampleIndex: 0, pcm: new Int16Array(FRAME),
     }), 'invalid');
     const invalidEpoch = room.render({
       roomStartSample: 0, nowRoomSample: FRAME + HOLD, songEpoch: SONG + 1,
@@ -189,6 +190,43 @@ describe('Choir Audio prototype: actual PCM and one room output clock', () => {
     assert.equal(frame.singers[0].availableSamples, FRAME);
     assert.equal(frame.singers[1].availableSamples, 0);
     assert.equal(room.holdAnchor(B.participantId), false);
+  });
+
+  test('old song/backing epochs cannot poison a reinitialized Mic with the same capture generation', () => {
+    const room = subject();
+    install(room, A);
+    assert.equal(room.addSinger({ ...A, songEpoch: SONG + 1 }), true);
+    assert.equal(packet(room, A, 0, new Int16Array(FRAME).fill(18_000)), 'invalid');
+    assert.equal(room.receiveMic({
+      participantId: A.participantId, songEpoch: SONG + 1,
+      backingGeneration: BACKING, captureGeneration: A.captureGeneration,
+      firstSampleIndex: 0, pcm: new Int16Array(FRAME).fill(10_000),
+    }), 'accepted');
+    assert.equal(room.addSinger({ ...A, songEpoch: SONG + 1, backingGeneration: BACKING + 1 }), true);
+    assert.equal(room.receiveMic({
+      participantId: A.participantId, songEpoch: SONG + 1,
+      backingGeneration: BACKING, captureGeneration: A.captureGeneration,
+      firstSampleIndex: 0, pcm: new Int16Array(FRAME).fill(12_000),
+    }), 'invalid');
+  });
+
+  test('giant packets and implausible rates cannot exhaust the native PCM ring', () => {
+    const room = subject();
+    assert.equal(room.addSinger({ ...A, micSampleRate: 10_000_000 }), false);
+    install(room, A);
+    assert.equal(packet(room, A, 0, new Int16Array(RATE * 3)), 'invalid');
+  });
+
+  test('ring keeps a newer sample when an older out-of-order packet shares its slot', () => {
+    const room = subject({ retentionMs: 150 });
+    install(room, A, 7200);
+    const newer = new Int16Array(FRAME).fill(12_000);
+    const old = new Int16Array(FRAME).fill(-12_000);
+    assert.equal(packet(room, A, 7200, newer), 'accepted');
+    assert.equal(packet(room, A, 200, old), 'accepted');
+    const frame = ready(render(room, 0));
+    assert.equal(frame.singers[0].availableSamples, FRAME);
+    assert.ok(frame.pcm[500] > 0, 'out-of-order packet did not corrupt future audio');
   });
 
   test('Sample/YouTube fallback candidate drives B read position only after explicit conversion', () => {

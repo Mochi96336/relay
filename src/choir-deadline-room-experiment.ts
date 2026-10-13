@@ -39,6 +39,8 @@ export type ChoirDeadlineRoomOptions = {
   reconnectGraceMs?: number;
   /** New trusted Room Epoch must allocate disjoint singer Media Epochs. */
   firstMediaEpoch?: number;
+  /** First admission in a new trusted room must prove fresh Content. */
+  requireInitialContent?: boolean;
 };
 
 export type ChoirDeadlineResult =

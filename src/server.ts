@@ -10,6 +10,7 @@ import type { loadRelayConfig } from './config.js';
 import { AudioSession } from './audio-session.js';
 import { BackingRuntime } from './backing-runtime.js';
 import { SourceRuntime } from './source-runtime.js';
+import { ChoirShadowLifecycleExperiment } from './choir-shadow-lifecycle-experiment.js';
 import { loadAudioTransportConfig } from './audio-transport-config.js';
 import { parseAudioUplinkHealth, type AudioUplinkHealth } from './audio-uplink-health.js';
 import { parseMicPresenceTelemetry } from './mic-presence-telemetry.js';
@@ -315,6 +316,25 @@ const takeController = new TakeController({
 const sourceRuntime = new SourceRuntime<RelaySocket>({
   isConnected: (socket) => socket.readyState === WebSocket.OPEN,
 });
+// Diagnostic shadow only. Disabled by default and disconnected from actual
+// Mic/Robot PCM ingress, WebSocket handlers, mix output, monitor and recording.
+// No restart handshake is exposed or authorized by this server.
+const choirShadow = relayConfig.choirShadow
+  ? new ChoirShadowLifecycleExperiment(youtubeTimeline, sourceRuntime, {
+    sampleRate: MIX_SAMPLE_RATE, frameMs: MIX_FRAME_MS,
+    prebufferMs: LIVE_MIX_PREBUFFER_MS, retentionMs: MIC_RETENTION_MS,
+    outputHoldbackMs: 200, contentHistoryMs: 7_000,
+  }) : null;
+function tickChoirShadow(nowMs: number) {
+  if (!choirShadow) return;
+  // The backing PCM origin and the Robot control source are independent.
+  // No authenticated Robot backing clock: no new Choir shadow room.
+  choirShadow.observe(nowMs, backingRuntime.isRobot
+    ? session.backingGeneration : null);
+}
+if (choirShadow) {
+  console.log('[choir-shadow] server-owned clock observation only; Choir audio/UI disabled');
+}
 const AUTO_CALIBRATE = relayConfig.autoCalibrate;
 const AUTO_CALIBRATION_RETRY_MS = relayConfig.autoCalibrationRetryMs;
 const CALIBRATION_AGREEMENT = relayConfig.calibrationAgreement;
@@ -3101,6 +3121,7 @@ function restartManualBootCalibration(nowMs: number) {
 
 const youtubeTimelineTimer = setInterval(() => {
   const nowMs = performance.now();
+  tickChoirShadow(nowMs);
   if (relayConfig.sampleSongFallback !== 'rtt') refreshLiveMicNetworkCompensation();
 
   if (
@@ -3362,6 +3383,7 @@ function youtubeTelemetryAccepted(input: {
     broadcastJson(timingCalibrationStatusPayload());
   }
 
+  tickChoirShadow(input.nowMs);
   lastTelemetryTimelineBroadcastAtMs = performance.now();
   broadcastJson(input.timelineStatus);
   broadcastJson(youtubeTimeline.roomStatusPayload(input.nowMs));
@@ -4382,6 +4404,7 @@ function robotSourceActivated(previous: RelaySocket | null, replaced: boolean) {
     takeController.noteQualityEvent('robot-source-connected');
   }
 
+  tickChoirShadow(performance.now());
   robotPlayerOffset.reset();
   robotContentTimeline.reset();
   clearRobotContentTransition();
@@ -4455,6 +4478,7 @@ function audioUplinkReceived(socket: RelaySocket, data: Buffer) {
     || (previousGeneration !== null && session.backingGeneration !== previousGeneration)
   ) {
     backingCaptureRestarted();
+    tickChoirShadow(nowMs);
   }
 
   noteRobotTransitionBackingFrame(frame, samples, start, nowMs);
@@ -4478,6 +4502,7 @@ function playbackClosed(socket: RelaySocket) {
   }
 
   if (youtubeTimeline.detach(identity)) {
+    tickChoirShadow(nowMs);
     broadcastJson(youtubeTimeline.statusPayload());
     broadcastJson(youtubeTimeline.roomStatusPayload());
   }
@@ -4489,6 +4514,7 @@ function robotSourceClosed(socket: RelaySocket) {
 
   takeController.noteQualityEvent('robot-source-disconnected');
   sourceRuntime.detachRobot(socket);
+  tickChoirShadow(performance.now());
   robotPlayerOffset.reset();
   robotContentTimeline.reset();
   clearRobotContentTransition();

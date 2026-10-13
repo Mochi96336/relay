@@ -156,6 +156,10 @@ export class CanonicalChoirMixExperiment {
     const slot = this.slots.get(participantId);
     if (!slot || slot.expected || this.nextRoomSample === null) return false;
     const old = slot.mic;
+    // A replacement disconnected before calibration with no captured PCM
+    // has never been eligible to emit a voice. It has no source tail to
+    // drain, unlike a previously audible capture.
+    if (slot.awaitingCalibration && old.timeline.totalSamples === 0) return true;
     return old.edge.silenced
       && old.lastEmittedMicSourceSample !== null
       && old.lastEmittedMicSourceSample >= old.timeline.totalSamples - 1;

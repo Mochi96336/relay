@@ -194,13 +194,13 @@ only after a fresh accepted decision and real PCM has arrived.
 ## Repeated rebind and calibration-source transition gates (2026-10-14)
 
 The A → A2 → A3 regression revealed a special case: A2 may be admitted,
-buffer real PCM, but disconnect **without ever obtaining calibration authority**.
-The mixer bypasses its per-sample voice processor while `awaitingCalibration`
-and keeps its output edge silent; thus no PCM from A2 was ever eligible for
-playback. Such a disconnected, never-authorized MicTrack may be discarded even
-if it held buffered PCM, provided it still has no authority, join gain or
-emitted source-read history. This does **not** relax the tail/frontier and
-SourceOutputEdge requirements for a previously authorized MicTrack. A3
+buffer real PCM, but disconnect **before its PCM ever becomes audible**.
+An uncalibrated mixer bypasses the per-sample voice processor; an already
+authorized replacement can likewise disconnect between its calibration
+acceptance and the next output tick. Both cases have zero join gain and no
+emitted source-read history. Such a never-rendered MicTrack may be discarded
+even if it held buffered PCM. This does **not** relax the tail/frontier and
+SourceOutputEdge requirements for any MicTrack that emitted a voice. A3
 receives a new media epoch and cannot inherit A2's PCM or calibration.
 
 Calibration authority must be distinguished from PCM availability:
@@ -287,8 +287,9 @@ The offline trusted-coordinator contract is:
 1. `requestTrustedLargeContentReacquisition(transportId, mediaEpoch,
    proofRevision, contentDecision, nowMs, takeFrozen)` may stage exactly
    one outstanding large disagreement on a **verified, still-connected**,
-   already-audible Sample/Boot rebound capture. It requires same singer
-   epoch/capture generation as the established fallback; held Content,
+   already-audible Sample/Boot rebound capture. It requires a complete
+   previously emitted Mic read and an active source join fade, plus the same
+   singer epoch/capture generation as the established fallback; held Content,
    duplicate/replayed revisions, Take freeze, nonfinite data and small
    differences are refused. This is an intent, not a replacement of the
    active Mic read head or permission to reuse the candidate as authority.

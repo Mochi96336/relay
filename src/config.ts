@@ -117,6 +117,9 @@ export function loadRelayConfig(env: Env = process.env) {
     })(),
     livePrebufferMs: envNumber(env, 'RELAY_LIVE_PREBUFFER_MS', 400, { min: 1 }),
     micOpusTrial: envBoolean(env, 'RELAY_MIC_OPUS_TRIAL', false),
+    // Control-plane shadow ONLY: no Choir media uplink, output, Mic admission,
+    // participant UI, monitor/recording or automatic restart is enabled.
+    choirShadow: envBoolean(env, 'RELAY_CHOIR_SHADOW', false),
     micRetentionMs: envNumber(env, 'RELAY_MIC_RETENTION_MS', 3_000, { min: 1 }),
     calibrationTimeoutMs: envNumber(env, 'RELAY_CALIBRATION_TIMEOUT_MS', 20_000, { min: 1 }),
     heartbeatMs: envNumber(env, 'RELAY_HEARTBEAT_MS', 8_000, { min: 100 }),

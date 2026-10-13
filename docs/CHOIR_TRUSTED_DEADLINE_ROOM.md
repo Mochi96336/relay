@@ -571,3 +571,60 @@ and Robot SourceRuntime generations cannot be silently recycled. Do not
 configure the feature on a production deployment expecting functional
 Choir audio: there is no such route yet. The entire single-Mic AudioSession
 remains the production signal path.
+
+## Experimental fresh-room A/B rejoin handshake (2026-10-14)
+
+The new `ChoirFreshRoomHandshakeExperiment` represents an explicit private
+fresh-room restart agreement **separate** from the existing default-off
+server `ChoirShadowLifecycleExperiment`. No production client transport,
+public endpoint, UI or Take/mixer/monitor/record output routes invoke this
+handshake yet. The future server integration must supply authenticated
+participant and transport identities, verified SongSession and Robot
+control-plane epochs, and an *explicit* restart decision; receiving an
+ordinary PLAYING heartbeat must never call `beginTrustedRoom`.
+
+In each new room:
+
+1. A verified trusted host fixes `roomEpoch`, `songEpoch`, video, Robot
+   backing generation, and the EXACT expected primary and secondary
+   participant IDs. Room and song epochs must strictly increase after every
+   retirement. No previously connected singer is silently admitted.
+2. The primary must rejoin through `admitVerifiedSinger` first, followed by
+   the secondary with an independent trusted transport. The secondary cannot
+   claim or automatically inherit primary status.
+3. Every admission receives a globally increasing server-issued
+   `mediaEpoch`, continued from the previous room's unissued frontier.
+   Old room tickets (including otherwise-correct transports/Media Epochs)
+   cannot ingest PCM, submit Content analysis or authorize audio in a new
+   room. An admission cannot alias another participant's transport.
+4. **Strict first-capture authorization:** the fresh-room option
+   `requireInitialContent=true` is forced by the handshake, so even the
+   very FIRST MicTrack for both A and B starts with `awaitingCalibration`
+   and `requiresFreshContent`. This fixes a regression uncovered by the
+   real 6-second A/B test: initial room admission previously allowed audible
+   Mic without proof. Older standalone Choir scenarios preserve their
+   original defaults, but not the secure restart handshake.
+5. Six seconds of fresh native-generation positioned Mic AND Robot PCM
+   must pass the original Content correlation algorithm for **each singer
+   independently**. The private coordinator alone consumes the retained
+   candidate exactly once, checks current transport, room/song/Media Epoch,
+   capture/source generation and playback mapping, and rejects Take freezes.
+   A valid A proof cannot unmute B, nor vice versa. No historical
+   Sample/Boot/Content decision carries across a room restart.
+6. Both singers retain independent PCM output edges, limiters and gains.
+   The test-only `advanceDue` drops all mixed PCM output instead of
+   routing it to listeners; `lastSingerEvidence` exposes only the numeric
+   mute/voice-peak diagnostics for proof that uncalibrated captures stay
+   silent and that independently validated new captures become audible.
+
+Disconnecting A does not promote or release B. A disconnected ticket is
+not reusable; the existing explicit capture-rebind/fade contracts govern any
+future same-room reconnect extension. Retiring a room erases all tickets,
+calibrated singer IDs, output diagnostics and buffered audio sources. Creating
+a new room requires higher Room/Song Epochs, without auto-resumption.
+
+**Remaining integration:** the default-off server shadow still only OBSERVES
+SongSession/SourceRuntime. It deliberately has no API that trusts client
+`beginTrustedRoom` or connects this handshake to actual sockets. A real
+two-singer media path, 2-device physical test, room-restart handshake and
+authorization of the remote user's explicit Mic Take are separate follow-ups.

@@ -320,6 +320,22 @@ export class ChoirDeadlineRoomExperiment {
   }
 
   /**
+   * The trusted SongSession adapter uses this when its already-authenticated
+   * leader loses freshness, ownership or media-clock authority. There may
+   * not be a new valid playback mapping to pass to setTrustedPlaybackMapping.
+   * No old acoustic authority or queued room output survives this event.
+   */
+  invalidateTrustedPlaybackAuthority(nowMs: number): boolean {
+    if (!this.sealDueNow(nowMs)) return false;
+    if (this.playbackMapping === null) return false;
+    this.pendingCanonicalContent.clear();
+    this.room.invalidateContentEvidenceHistory();
+    this.invalidated = 'playback-mapping-changed';
+    this.sealedFrames.length = 0;
+    return true;
+  }
+
+  /**
    * Explicitly trusted Robot-to-YouTube playback transition. The call is only
    * for the server's own Robot controller, NEVER a client PCM/control field.
    * Every pause, seek, video change or Robot source rebuild requires a NEW

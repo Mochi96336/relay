@@ -380,6 +380,58 @@ export class CanonicalChoirMixExperiment {
     return true;
   }
 
+  /**
+   * Six seconds of actual positioned, canonical room-coordinate PCM for the
+   * existing production Content analyzer. No caller-supplied PCM, zero padded
+   * frontier, synthetic gap concealment or unheadered source is ever proof.
+   *
+   * Backing generation is the fixed trusted Robot generation for this room.
+   * Callers needing this must configure retention >= 6s; unlike playback,
+   * Content analysis intentionally fails when earlier PCM was evicted.
+   */
+  readTrustedContentWindow(
+    id: CanonicalChoirSingerId, captureGeneration: number,
+    startSample: number,
+  ): { mic: Int16Array; backing: Int16Array } | null {
+    const slot = this.slots.get(id.participantId);
+    const count = 6 * this.sampleRate;
+    if (!slot || !slot.expected || !this.matchesEpoch(id)
+      || id.mediaEpoch !== slot.identity.mediaEpoch
+      || !Number.isSafeInteger(captureGeneration) || captureGeneration < 0
+      || slot.mic.timeline.generation !== captureGeneration
+      || slot.mic.timeline.sourceRate === null
+      || this.backing.generation !== this.backingGeneration
+      || !Number.isSafeInteger(startSample) || startSample < 0
+      || !Number.isSafeInteger(startSample + count)) return null;
+    for (const timeline of [slot.mic.timeline, this.backing]) {
+      if (startSample + count > timeline.totalSamples) return null;
+      const evidence = readPcmEvidence(timeline, startSample, count);
+      if (evidence.gapSamples !== 0
+        || evidence.frontierMissingSamples !== 0
+        || evidence.unheaderedSamples !== 0) return null;
+    }
+    return {
+      mic: readPcmRange(slot.mic.timeline, startSample, count),
+      backing: readPcmRange(this.backing, startSample, count),
+    };
+  }
+
+  /** Read-only trusted capture state for the experimental Content proof gate. */
+  contentProofState(id: CanonicalChoirSingerId) {
+    const slot = this.slots.get(id.participantId);
+    if (!slot || !slot.expected || !this.matchesEpoch(id)
+      || slot.identity.mediaEpoch !== id.mediaEpoch) return null;
+    return {
+      captureGeneration: slot.mic.timeline.generation,
+      sourceRate: slot.mic.timeline.sourceRate,
+      awaitingCalibration: slot.awaitingCalibration,
+      requiresFreshContent: slot.requiresFreshContent,
+      reacquisitionPending: slot.pendingReacquisition !== null,
+      authoritySource: slot.authority?.source ?? null,
+      authorityAdvanceMs: slot.mic.calibratedMicLagTargetMs,
+    };
+  }
+
   /** End a publisher without promoting/reassigning the other singer. */
   disconnect(id: CanonicalChoirSingerId): boolean {
     const slot = this.slots.get(id.participantId);

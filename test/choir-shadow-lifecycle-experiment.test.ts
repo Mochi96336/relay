@@ -5,7 +5,7 @@ import { SourceRuntime } from '../src/source-runtime.js';
 import { ChoirShadowLifecycleExperiment } from '../src/choir-shadow-lifecycle-experiment.js';
 
 const VIDEO = 'dQw4w9WgXcQ';
-const leader = { participantId: 'p-A', transportId: 'page-A', generation: 1 };
+const leader = { participantId: 'p-A', transportId: 'playback-tab-a', generation: 1 };
 type RobotSocket = { open: boolean; isRobotSource?: boolean };
 const observation = (values: Record<string, unknown> = {}) => ({
   videoId: VIDEO, state: 1, currentTime: 12, duration: 200,

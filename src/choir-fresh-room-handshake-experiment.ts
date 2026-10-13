@@ -10,7 +10,7 @@ import type { PcmFrame } from './pcm-frame.js';
  * freeze, user role and backing generation before granting a new room.
  */
 export type FreshChoirRoomSpec = Omit<ChoirDeadlineRoomOptions,
-  'firstMediaEpoch' | 'songEpoch' | 'backingGeneration' | 'videoId' | 'roomEpochMs'> & {
+  'firstMediaEpoch' | 'requireInitialContent' | 'songEpoch' | 'backingGeneration' | 'videoId' | 'roomEpochMs'> & {
   roomEpoch: number;
   songEpoch: number;
   backingGeneration: number;
@@ -69,6 +69,7 @@ export class ChoirFreshRoomHandshakeExperiment {
       || spec.primaryId === spec.secondaryId) return false;
     const room = new ChoirDeadlineRoomExperiment({
       ...spec, firstMediaEpoch: this.nextMediaEpoch,
+      requireInitialContent: true,
     });
     if (!room.setTrustedPlaybackMapping({
       mappingEpoch: spec.mappingEpoch, videoId: spec.videoId,

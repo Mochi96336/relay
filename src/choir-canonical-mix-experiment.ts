@@ -1,5 +1,6 @@
 import { MixBus } from './mix-bus.js';
 import { MicTrack } from './mic-track.js';
+import type { ChoirAlignmentDecision } from './choir-calibration-experiment.js';
 import { ingestPcmTimeline } from './pcm-ingest.js';
 import type { PcmFrame } from './pcm-frame.js';
 import {
@@ -42,6 +43,7 @@ export type CanonicalChoirSingerEvidence = {
   /** Newly arrived Mic PCM dropped after its source position was already emitted. */
   latePacketDrops: number;
   expected: boolean;
+  awaitingCalibration: boolean;
 };
 
 export type CanonicalChoirFrame = {
@@ -59,6 +61,7 @@ type Slot = {
   /** Separate entrance fade; room MixBus cannot detect an additional Mic. */
   joinGain: number;
   latePacketDrops: number;
+  awaitingCalibration: boolean;
 };
 
 type RoomConfig = {
@@ -132,7 +135,7 @@ export class CanonicalChoirMixExperiment {
     const mic = new MicTrack(this.micOptions);
     this.slots.set(id.participantId, {
       identity: { ...id }, mic, expected: true, joinGain: 0,
-      latePacketDrops: 0,
+      latePacketDrops: 0, awaitingCalibration: false,
     });
     this.bus.setMicExpected(true, true);
     return true;
@@ -175,8 +178,28 @@ export class CanonicalChoirMixExperiment {
       expected: true,
       joinGain: 0,
       latePacketDrops: 0,
+      awaitingCalibration: true,
     });
     this.bus.setMicExpected(true, true);
+    return true;
+  }
+
+  /**
+   * The new capture stays muted until server-side Content/Sample/Boot
+   * validation has explicitly accepted THIS media epoch. A Content hold,
+   * a raw unconfirmed candidate or an old media epoch cannot unmute it.
+   */
+  acceptReboundAlignment(id: CanonicalChoirSingerId, decision: ChoirAlignmentDecision): boolean {
+    const slot = this.slots.get(id.participantId);
+    if (!slot || !slot.expected || !slot.awaitingCalibration
+      || !this.matchesEpoch(id) || slot.identity.mediaEpoch !== id.mediaEpoch
+      || !['content', 'sample-song-estimate', 'boot-probe-estimate'].includes(decision.source)
+      || decision.advanceMs === null || !Number.isFinite(decision.advanceMs)
+      || Math.abs(decision.advanceMs) > 2_800) return false;
+    slot.mic.alignmentState.calibratedMicLagMs = decision.advanceMs;
+    slot.mic.calibratedMicLagTargetMs = decision.advanceMs;
+    slot.mic.edge.beginReplacement();
+    slot.awaitingCalibration = false;
     return true;
   }
 
@@ -291,7 +314,8 @@ export class CanonicalChoirMixExperiment {
       a.identity.participantId.localeCompare(b.identity.participantId)
     );
     const tracks = sorted.map(slot => {
-      const plan = slot.mic.planMicRead(roomStartSample, slot.expected);
+      const plan = slot.mic.planMicRead(roomStartSample,
+        slot.expected && !slot.awaitingCalibration);
       slot.mic.measureReadHeadroom(plan, slot.expected);
       const read = slot.mic.readMicFrame(plan);
       const evidence: CanonicalChoirSingerEvidence = {
@@ -309,10 +333,13 @@ export class CanonicalChoirMixExperiment {
         limiterOvershootSamples: 0,
         latePacketDrops: slot.latePacketDrops,
         expected: slot.expected,
+        awaitingCalibration: slot.awaitingCalibration,
       };
-      slot.mic.lastEmittedMicFrameComplete =
-        read.evidence.gapSamples === 0 && read.evidence.frontierMissingSamples === 0;
-      slot.mic.lastEmittedMicAdvanceSamples = plan.advanceSamplesExact;
+      if (!slot.awaitingCalibration) {
+        slot.mic.lastEmittedMicFrameComplete =
+          read.evidence.gapSamples === 0 && read.evidence.frontierMissingSamples === 0;
+        slot.mic.lastEmittedMicAdvanceSamples = plan.advanceSamplesExact;
+      }
       return { slot, plan, read, evidence };
     });
     const backing = readPcmRange(this.backing, roomStartSample, this.frameSamples);
@@ -330,6 +357,12 @@ export class CanonicalChoirMixExperiment {
       let voices = 0;
       let anyAudibleSource = false;
       for (const { slot, plan, read, evidence } of tracks) {
+        if (slot.awaitingCalibration) {
+          // Keep the source's output edge at silence. Never commit an
+          // audible read-head/limiter history before new verified alignment.
+          slot.mic.edge.apply(0, false, true);
+          continue;
+        }
         const sourceSample = read.slew
           ? read.slew.firstPosition + i * read.slew.rate
           : plan.micReadStart + i;

@@ -248,11 +248,14 @@ describe('canonical MicTrack N=2 through the production MixBus (no live server)'
     assert.equal(mix.acceptReboundAlignment(A2, valid), true);
     assert.equal(mix.acceptReboundAlignment(A2, valid), false,
       'replaying an old decision cannot change an already audible source');
-    assert.equal(mix.ingestMic(A2, pcm(FRAME, 10_000, FRAME), RATE, FRAME * 5),
-      true, 'confirmed new source can contribute its next real capture packet');
+    // Prebuffer the offline PCM probe sufficiently to keep the canonical
+    // 200ms frontier safety margin. A single 20ms packet is correctly allowed
+    // to stay silent while awaiting more uplink audio.
+    assert.equal(mix.ingestMic(A2, pcm(FRAME * 14, 10_000, FRAME), RATE, FRAME * 17),
+      true, 'confirmed new source can contribute after sufficient capture PCM arrived');
     const f = mix.render(FRAME * 4);
     assert.ok(f.singers[0].voicePeakAbs > 0.1,
-      'new source actually reaches audible canonical limiter after fresh alignment');
+      `fresh A2 must be heard after its 200ms frontier cushion: ${JSON.stringify(f.singers[0])}`);
     assert.ok(f.singers[1].voicePeakAbs > 0.1,
       'B stays audible during A capture replacement');
     assert.equal(f.singers[0].awaitingCalibration, false);

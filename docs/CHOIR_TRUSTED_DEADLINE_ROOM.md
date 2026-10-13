@@ -189,3 +189,37 @@ The offline tests cover rejection before old-tail retirement, new Media
 Epoch and Capture reset, old transport rejection, B continuity, held/
 unavailable/stale decision rejection, and the new source becoming audible
 only after a fresh accepted decision and real PCM has arrived.
+
+## Repeated rebind and calibration-source transition gates (2026-10-14)
+
+The A → A2 → A3 regression revealed a special case: A2 may be admitted,
+remain uncalibrated and ingest **zero PCM**, then disconnect. There is no
+captured source tail or permitted audible voice to retire. The coordinator now
+allows that never-calibrated, empty MicTrack to be replaced without waiting
+for a fictitious source-output fade. This exception is intentionally narrow:
+a track with captured PCM must still satisfy the original tail/frontier and
+SourceOutputEdge conditions. A3 receives a new media epoch and cannot accept
+A2's calibration, transport or captured PCM.
+
+Calibration authority must be distinguished from PCM availability:
+
+1. A fresh Content/Sample/Boot decision may clear `awaitingCalibration`,
+   but does not bypass source placement, prebuffer or Mic frontier protection.
+2. `content-held` is *not* a backup signal or audible authority, even if it
+   carries the last known Content advance for diagnosis.
+3. A Content `revoke` invalidates its previous confirmed authority. The
+   separate calibration experiment may then choose a fresh Sample/Boot
+   estimate; this is not an automatic live mixer switch.
+4. Sample and Boot differ across devices: neither is presumed more accurate.
+   A live coordinator must validate capture identity, generation, measured
+   freshness and fallback provenance before passing a trusted decision.
+5. Once audible, a subsequent alignment change must use the separate
+   read-head safety/revalidation protocol. Do not automatically jump from a
+   fallback position to recovered Content and do not treat a diagnostic
+   residual as permission to shift samples.
+
+**Remaining release blocker:** the trusted server calibration proof adapter,
+including per-media-epoch identity and independently verified Content/Boot
+evidence, is not wired. The offline coordinator accepts already-authorized
+decisions, not raw client evidence. These policies and tests must not be
+misreported as end-to-end authenticated live calibration.

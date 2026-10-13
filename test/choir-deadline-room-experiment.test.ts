@@ -867,6 +867,33 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
       'a capture generation change invalidates all old calibration PCM');
   });
 
+  test('independent Content buffer rejects captured gaps, concealment and unheadered PCM', () => {
+    for (const second of [
+      { start: 2 * RATE, positioned: true, concealed: false },
+      { start: RATE, positioned: true, concealed: true },
+      { start: RATE, positioned: false, concealed: false },
+    ]) {
+      const cache = new ChoirContentPcmBuffer(RATE, 7_000);
+      const timeline = emptyPcmTimeline();
+      timeline.generation = 4;
+      timeline.sourceRate = RATE;
+      timeline.chunks.push({
+        start: 0, samples: new Int16Array(RATE).fill(2_000),
+        positioned: true,
+      });
+      timeline.totalSamples = RATE;
+      cache.captureAccepted(timeline, 0);
+      timeline.chunks.push({
+        start: second.start, samples: new Int16Array(5 * RATE).fill(2_000),
+        positioned: second.positioned, concealed: second.concealed,
+      });
+      timeline.totalSamples = second.start + 5 * RATE;
+      cache.captureAccepted(timeline, 1);
+      assert.equal(cache.hasFullPositionedWindow(4, RATE, 0, 6 * RATE), false,
+        'even six seconds of output samples are not six seconds of verified real PCM');
+    }
+  });
+
   test('expired reconnect grace cannot silently restore a revoked primary seat', () => {
     const coordinator = room();
     const { a, b } = admitBoth(coordinator);

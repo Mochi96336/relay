@@ -602,6 +602,16 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     assert.equal(coordinator.commitTrustedCanonicalContent(
       'socket-A2', a2.mediaEpoch, 6_023, false), 'rejected',
       'an old correlation cannot be relabeled as a new capture-generation proof');
+    assert.deepEqual(coordinator.analyzeTrustedCanonicalContent(
+      'socket-A2', a2.mediaEpoch, 0, 6_024),
+    { status: 'rejected', reason: 'incomplete-or-stale-pcm-window' },
+    'the six-second window still in retention belongs to generation 7, not 8');
+    for (let at = 6_040; at <= 8_000; at += 20)
+      assert.equal(coordinator.renderDue(at).state, 'ready');
+    assert.deepEqual(coordinator.analyzeTrustedCanonicalContent(
+      'socket-A2', a2.mediaEpoch, 0, 8_001),
+    { status: 'rejected', reason: 'stale-content-window' },
+    'retention alone must not make an old acoustic window fresh');
   });
 
   test('expired reconnect grace cannot silently restore a revoked primary seat', () => {

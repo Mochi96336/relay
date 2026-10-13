@@ -100,6 +100,36 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     assert.equal(coordinator.registry.mayAcceptMedia('B', 'socket-B', b.mediaEpoch), true);
   });
 
+  test('explicit B Take Mic requires authenticated transport and fresh CAS, no song takeover', () => {
+    const coordinator = room();
+    const { a, b } = admitBoth(coordinator);
+    assert.equal(coordinator.receiveFromTransport('socket-A',
+      captured(FRAME * 5, 6_000), RATE, 100), true);
+    assert.equal(coordinator.receiveFromTransport('socket-B',
+      captured(FRAME * 5, 9_000), RATE, 100), true);
+    assert.equal(coordinator.takePrimaryTrusted('socket-B', null, 100), false,
+      'stale CAS cannot displace A');
+    assert.equal(coordinator.takePrimaryTrusted('unknown', 'A', 100), false);
+    assert.equal(coordinator.takePrimaryTrusted('socket-A', 'A', 100), false,
+      'primary cannot invoke secondary Take Mic');
+    assert.equal(coordinator.takePrimaryTrusted('socket-B', 'A', 100), true);
+    assert.equal(coordinator.seats.primaryMicId, 'B');
+    assert.equal(coordinator.seats.songControllerId, 'A',
+      'song authority remains separate from the Mic ownership');
+    assert.equal(coordinator.registry.activePublisherForTransport('socket-A'), null);
+    assert.equal(coordinator.registry.mayAcceptMedia('A', 'socket-A', a.mediaEpoch), false);
+    assert.equal(coordinator.registry.mayAcceptMedia('B', 'socket-B', b.mediaEpoch), true);
+    assert.equal(coordinator.registry.activePublisherForTransport('socket-B')?.seat, 'primary');
+    assert.equal(coordinator.receiveFromTransport('socket-A',
+      captured(FRAME, 16_000, FRAME * 5), RATE, 120), false);
+    assert.equal(coordinator.receiveFromTransport('socket-B',
+      captured(FRAME, 10_000, FRAME * 5), RATE, 120), true);
+    const due = coordinator.renderDue(220);
+    if (due.state !== 'ready') throw Error('not ready');
+    assert.equal(due.frames[0].singers[0].expected, false);
+    assert.equal(due.frames[0].singers[1].expected, true);
+  });
+
   test('timer stalls beyond bounded catch-up never replay old singing', () => {
     const coordinator = room(3);
     admitBoth(coordinator);

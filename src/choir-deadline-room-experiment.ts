@@ -131,6 +131,38 @@ export class ChoirDeadlineRoomExperiment {
     return { ok: true, mediaEpoch: result.mediaEpoch, idempotent: false };
   }
 
+  /**
+   * Only an EXPLICIT control action on the verified transport can Take Mic.
+   * A stale compare-and-swap fails; losing A's publisher never self-promotes B.
+   * Keeps B's already running media epoch and independent MicTrack intact.
+   * This does not transfer song playback authority.
+   */
+  takePrimaryTrusted(
+    transportId: string, expectedPrimaryId: string | null, nowMs: number,
+  ): boolean {
+    if (!this.validNow(nowMs) || this.invalidated !== null) return false;
+    const active = this.registry.activePublisherForTransport(transportId);
+    if (!active || active.seat !== 'secondary') return false;
+    const before = this.seats.primaryMicId;
+    const result = this.seats.claimPrimary(active.participantId, expectedPrimaryId);
+    if (!result.ok) return false;
+    if (before !== null && before !== active.participantId) {
+      const evicted = this.registry.snapshot().find(
+        admission => admission.participantId === before,
+      );
+      if (evicted) {
+        this.room.disconnect({
+          participantId: before,
+          songEpoch: this.songEpoch,
+          backingGeneration: this.backingGeneration,
+          mediaEpoch: evicted.mediaEpoch,
+        });
+        this.registry.release(before);
+      }
+    }
+    return true;
+  }
+
   disconnectTransport(transportId: string, nowMs: number): boolean {
     if (!this.validNow(nowMs)) return false;
     const active = this.registry.activePublisherForTransport(transportId);

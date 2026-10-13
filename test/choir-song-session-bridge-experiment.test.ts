@@ -28,7 +28,7 @@ describe('Choir offline bridge consumes real authenticated SongSession authority
     const room = makeRoom();
     const bridge = bridgeFor(songs, room);
     assert.equal(bridge.sync(0), 'awaiting-playback');
-    assert.equal(songs.update(telemetry({ videoId: 'wrong-video' }), A, null, 0).accepted,
+    assert.equal(songs.update(telemetry({ videoId: 'bad' }), A, null, 0).accepted,
       false, 'malformed video identity cannot seize SongSession');
     assert.equal(bridge.sync(0), 'awaiting-playback');
     assert.equal(songs.update(telemetry(), A, null, 1).accepted, true);

@@ -67,6 +67,7 @@ type Track = {
   latePackets: number;
   anchor: ChoirTrackAnchor | null;
   calibration: ChoirCalibrationSource | 'none';
+  pending: { anchor: ChoirTrackAnchor; source: ChoirCalibrationSource } | null;
   fade: number;
   lastVoice: number;
 };
@@ -113,6 +114,7 @@ export class ChoirAudioPrototype {
   private readonly bus: MixBus;
   private readonly tracks = new Map<string, Track>();
   private nextOutputSample: number | null = null;
+  private roomEpoch: { songEpoch: number; backingGeneration: number } | null = null;
 
   constructor(options: ChoirAudioOptions) {
     if (!positiveSafe(options.sampleRate) || !positiveSafe(options.frameSamples)
@@ -152,6 +154,10 @@ export class ChoirAudioPrototype {
       || !positiveSafe(identity.micSampleRate)
       || identity.micSampleRate < 8_000 || identity.micSampleRate > 192_000) return false;
     const current = this.tracks.get(identity.participantId);
+    if (this.roomEpoch && (
+      identity.songEpoch !== this.roomEpoch.songEpoch
+      || identity.backingGeneration !== this.roomEpoch.backingGeneration
+    )) return false;
     if (!current && this.tracks.size >= this.maxSingers) return false;
     if (current && sameIdentity(current.identity, identity)) return false;
     const capacity = Math.ceil(this.retentionMs * identity.micSampleRate / 1000) + 2;
@@ -161,8 +167,11 @@ export class ChoirAudioPrototype {
     this.tracks.set(identity.participantId, {
       identity: { ...identity }, value: new Int16Array(capacity), stamps,
       latestWrittenExclusive: 0, consumedExclusive: 0, latePackets: 0,
-      anchor: null, calibration: 'none', fade: 0, lastVoice: 0,
+      anchor: null, calibration: 'none', pending: null, fade: 0, lastVoice: 0,
     });
+    if (this.roomEpoch === null) {
+      this.roomEpoch = { songEpoch: identity.songEpoch, backingGeneration: identity.backingGeneration };
+    }
     this.syncMicIntent();
     return true;
   }
@@ -194,8 +203,41 @@ export class ChoirAudioPrototype {
         backingGeneration: anchor.backingGeneration,
         roomStartSample: anchor.roomSampleAtAnchor, frameSamples: this.frameSamples,
       })) return false;
+    if (track.anchor) {
+      const referenceRoomSample = this.nextOutputSample ?? Math.max(
+        track.anchor.roomSampleAtAnchor, anchor.roomSampleAtAnchor,
+      );
+      const request = {
+        participantId: anchor.participantId,
+        songEpoch: anchor.songEpoch,
+        captureGeneration: anchor.captureGeneration,
+        backingGeneration: anchor.backingGeneration,
+        roomStartSample: referenceRoomSample,
+        frameSamples: this.frameSamples,
+      };
+      const prior = planChoirRead(track.anchor, request);
+      const next = planChoirRead(anchor, request);
+      if (!prior || !next) return false;
+      const shiftMs = (next.micFirstSample - prior.micFirstSample) * 1000 / anchor.micSampleRate;
+      // A large fallback disagreement is not permission to jump a live read
+      // head by hundreds of milliseconds. Require explicit revoke/reacquire
+      // instead; this experiment cannot authorize acoustic route changes.
+      if (!Number.isFinite(shiftMs) || Math.abs(shiftMs) > 5) return false;
+      if (Math.abs(shiftMs) < 1e-7) {
+        // A repeated confirmed result must not restart a singer's fade.
+        track.calibration = source;
+        track.pending = null;
+        return true;
+      }
+      // Even a 1-5 ms phase jump is audible if installed immediately.
+      // Fade out the *old* timeline first and adopt the new anchor only
+      // at a frame boundary, then fade back in next frame.
+      track.pending = { anchor: { ...anchor }, source };
+      return true;
+    }
     track.anchor = { ...anchor };
     track.calibration = source;
+    track.pending = null;
     track.fade = 0;
     track.lastVoice = 0;
     this.syncMicIntent();
@@ -212,16 +254,20 @@ export class ChoirAudioPrototype {
     const track = this.tracks.get(participantId);
     if (!track?.anchor) return false;
     track.anchor = null;
+    track.pending = null;
     track.calibration = 'none';
-    track.fade = 0;
-    track.lastVoice = 0;
+    // Keep the prior audible sample and fade it out on the next emitted
+    // frame, rather than cutting it to digital zero at this instant.
     this.syncMicIntent();
     return true;
   }
 
   private syncMicIntent() {
     this.bus.setMicExpected([...this.tracks.values()].some(track => track.anchor !== null), true);
-    if (!this.bus.micExpected) this.bus.releaseMicHold();
+    if (!this.bus.micExpected
+      && ![...this.tracks.values()].some(track => track.fade > 0)) {
+      this.bus.releaseMicHold();
+    }
   }
 
   /** Returns 'late' for irrevocably emitted material. No frame is rewritten. */
@@ -236,6 +282,25 @@ export class ChoirAudioPrototype {
       || !Number.isSafeInteger(packet.firstSampleIndex + packet.pcm.length)) return 'invalid';
 
     const end = packet.firstSampleIndex + packet.pcm.length;
+    if (track.anchor) {
+      const nextRoomPosition = this.nextOutputSample ?? track.anchor.roomSampleAtAnchor;
+      const plan = planChoirRead(track.anchor, {
+        participantId: track.identity.participantId,
+        songEpoch: track.identity.songEpoch,
+        captureGeneration: track.identity.captureGeneration,
+        backingGeneration: track.identity.backingGeneration,
+        roomStartSample: nextRoomPosition,
+        frameSamples: this.frameSamples,
+      });
+      if (!plan) return 'invalid';
+      // Future packets must not move the entire ring frontier past audio
+      // still due to be mixed. Absolute capture indices may be large, so
+      // compare against that capture's trusted anchor, never sample index 0.
+      const maximumFutureEnd = Math.ceil(
+        plan.micFirstSample + track.value.length + this.frameSamples * plan.micStep,
+      );
+      if (end > maximumFutureEnd) return 'invalid';
+    }
     const oldestRetained = Math.max(0, track.latestWrittenExclusive - track.value.length);
     if (end <= track.consumedExclusive || end <= oldestRetained) {
       track.latePackets++;
@@ -277,6 +342,12 @@ export class ChoirAudioPrototype {
       || input.backing.length !== this.frameSamples) {
       throw new RangeError('Invalid Choir render input.');
     }
+    if (this.roomEpoch && (
+      input.songEpoch !== this.roomEpoch.songEpoch
+      || input.backingGeneration !== this.roomEpoch.backingGeneration
+    )) {
+      throw new Error('Choir room epoch must be reinitialized after a song or backing restart.');
+    }
     if (this.nextOutputSample !== null && input.roomStartSample !== this.nextOutputSample) {
       throw new Error('Choir output position must advance by exactly one frame.');
     }
@@ -306,7 +377,9 @@ export class ChoirAudioPrototype {
         if (sample !== null) {
           availableSamples++;
           micRealAt[i] = 1;
-          track.fade = Math.min(1, track.fade + this.fadeStep);
+          track.fade = track.pending
+            ? Math.max(0, track.fade - this.fadeStep)
+            : Math.min(1, track.fade + this.fadeStep);
           track.lastVoice = sample;
           voices[i] += sample * track.fade * 0.45;
         } else {
@@ -314,6 +387,12 @@ export class ChoirAudioPrototype {
           track.fade = Math.max(0, track.fade - this.fadeStep);
           voices[i] += track.lastVoice * track.fade * 0.45;
         }
+      }
+      if (track.pending && track.fade === 0) {
+        track.anchor = track.pending.anchor;
+        track.calibration = track.pending.source;
+        track.pending = null;
+        track.lastVoice = 0;
       }
       if (plan) {
         // Only the rendered sample trajectory becomes irrevocable.
@@ -343,6 +422,12 @@ export class ChoirAudioPrototype {
       pcm[i] = Math.round(Math.max(-1, Math.min(32767 / 32768, value)) * 32768);
     }
     this.nextOutputSample = input.roomStartSample + this.frameSamples;
+    // The departing last voice has now finished its audible tail. The existing
+    // MixBus can relinquish its held two-source headroom safely.
+    if (!this.bus.micExpected
+      && ![...this.tracks.values()].some(track => track.fade > 0)) {
+      this.bus.releaseMicHold();
+    }
     return {
       state: 'ready', roomStartSample: input.roomStartSample,
       pcm, singers: evidence, outputClippedSamples,

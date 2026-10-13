@@ -129,11 +129,12 @@ describe('Choir Audio prototype: actual PCM and one room output clock', () => {
       participantId: A.participantId, songEpoch: SONG, backingGeneration: BACKING,
       captureGeneration: 15, firstSampleIndex: 0, pcm: new Int16Array(FRAME),
     }), 'invalid');
-    const invalidEpoch = room.render({
+    assert.throws(() => room.render({
       roomStartSample: 0, nowRoomSample: FRAME + HOLD, songEpoch: SONG + 1,
       backingGeneration: BACKING, backing: new Int16Array(FRAME),
-    });
-    assert.equal(ready(invalidEpoch).singers[0].missingSamples, FRAME);
+    }), /room epoch/);
+    assert.equal(ready(render(room, 0)).singers[0].availableSamples, FRAME);
+    assert.equal(room.addSinger({ ...B, songEpoch: SONG + 1 }), false);
     assert.equal(room.addSinger({ ...A, captureGeneration: 3 }), true);
     assert.equal(packet(room, A, FRAME, new Int16Array(FRAME)), 'invalid');
     assert.equal(room.installAnchor(anchor(A, 0), 'content'), false);
@@ -172,8 +173,8 @@ describe('Choir Audio prototype: actual PCM and one room output clock', () => {
     packet(room, A, 0, new Int16Array(FRAME).fill(-10_000));
     const frame = ready(render(room, 0));
     assert.ok(frame.pcm[500] > 0, 'first authenticated sample arrival owns overlap');
-    // A discontinuous huge future packet pushes the old ring window forward.
-    packet(room, A, 300_000, new Int16Array(FRAME).fill(9_000));
+    // A discontinuous huge future packet must NOT poison the ring frontier.
+    assert.equal(packet(room, A, 300_000, new Int16Array(FRAME).fill(9_000)), 'invalid');
     assert.equal(packet(room, A, 0, new Int16Array(FRAME).fill(9_000)), 'late');
   });
 
@@ -227,6 +228,75 @@ describe('Choir Audio prototype: actual PCM and one room output clock', () => {
     const frame = ready(render(room, 0));
     assert.equal(frame.singers[0].availableSamples, FRAME);
     assert.ok(frame.pcm[500] > 0, 'out-of-order packet did not corrupt future audio');
+  });
+
+  test('far-future mic timestamp cannot evict audio that is still scheduled', () => {
+    const room = subject({ retentionMs: 150 });
+    install(room, A);
+    assert.equal(packet(room, A, 0, new Int16Array(FRAME * 2).fill(13_000)), 'accepted');
+    assert.equal(packet(room, A, 300_000, new Int16Array(FRAME).fill(25_000)), 'invalid');
+    const first = ready(render(room, 0));
+    assert.equal(first.singers[0].availableSamples, FRAME);
+    assert.equal(first.singers[0].missingSamples, 0);
+    const second = ready(render(room, FRAME));
+    assert.equal(second.singers[0].availableSamples, FRAME);
+  });
+
+  test('identical confirmed re-application does not silence a stable voice', () => {
+    const room = subject();
+    install(room, A);
+    packet(room, A, 0, new Int16Array(FRAME * 3).fill(13_000));
+    ready(render(room, 0));
+    assert.equal(room.installAnchor(anchor(A, 0), 'content'), true);
+    const unchanged = ready(render(room, FRAME));
+    assert.equal(unchanged.singers[0].availableSamples, FRAME);
+    assert.ok(unchanged.pcm[0] > 1000,
+      'same anchor must not restart the 10ms fade on next frame');
+  });
+
+  test('unsafe backup jump cannot replace confirmed Content mid-song', () => {
+    const room = subject();
+    install(room, A);
+    packet(room, A, 0, new Int16Array(FRAME * 3).fill(13_000));
+    ready(render(room, 0));
+    assert.equal(room.installAnchor(anchor(A, 17_280), 'sample-song-estimate'), false,
+      '360ms read-head jump requires explicit revalidation, not a live jump');
+    const frame = ready(render(room, FRAME));
+    assert.equal(frame.singers[0].calibration, 'content');
+    assert.equal(frame.singers[0].availableSamples, FRAME);
+  });
+
+  test('small anchor changes fade the existing voice out before switching only that singer', () => {
+    const room = subject();
+    install(room, A);
+    install(room, B);
+    packet(room, A, 0, new Int16Array(FRAME * 4).fill(19_000));
+    packet(room, B, 0, new Int16Array(FRAME * 4).fill(19_000));
+    ready(render(room, 0));
+    assert.equal(room.installAnchor(anchor(B, 96), 'sample-song-estimate'), true,
+      '2ms change is allowed, but should not install with a hard cut');
+    const fading = ready(render(room, FRAME));
+    assert.equal(fading.singers[0].availableSamples, FRAME);
+    assert.equal(fading.singers[1].calibration, 'content',
+      'B still reads the old position while fading down');
+    const resumed = ready(render(room, FRAME * 2));
+    assert.equal(resumed.singers[0].calibration, 'content');
+    assert.equal(resumed.singers[1].calibration, 'sample-song-estimate');
+    assert.equal(resumed.singers[0].availableSamples, FRAME);
+    assert.equal(resumed.singers[1].availableSamples, FRAME);
+  });
+
+  test('revoking the last mic keeps a short output tail before releasing bus headroom', () => {
+    const room = subject();
+    install(room, A);
+    packet(room, A, 0, new Int16Array(FRAME * 3).fill(15_000));
+    ready(render(room, 0));
+    assert.equal(room.revokeAnchor(A.participantId), true);
+    const trailing = ready(render(room, FRAME));
+    assert.equal(trailing.singers[0].availableSamples, 0);
+    assert.ok(trailing.pcm[0] > trailing.pcm[FRAME - 1],
+      'mic output decays instead of cutting immediately to zero');
+    assert.equal(room.holdAnchor(A.participantId), false);
   });
 
   test('Sample/YouTube fallback candidate drives B read position only after explicit conversion', () => {

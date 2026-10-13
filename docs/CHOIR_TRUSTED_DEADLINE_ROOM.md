@@ -356,9 +356,11 @@ both already reconstructed at the canonical room sample rate. It requires:
   song epoch and backing generation. The caller must still be the active
   transport for the server-owned Media Epoch.
 - Exactly six seconds of **real positioned PCM** at a caller-selected room
-  start sample, all present on both timelines. Any gap, concealed source,
-  absent future sample, unheadered chunk, outdated Robot generation,
-  unknown native Capture generation or a window already evicted by
+  start sample, all present on both timelines. The six-second window must end
+  within one second of the current trusted room clock (an experimental bound).
+  Any gap, concealed source, absent future sample, unheadered chunk, outdated
+  Robot generation, unknown native Capture generation, **PCM predating the
+  current Mic or Robot capture origin**, or a window already evicted by
   retention causes an explicit rejection, **not silence padding**.
 - The original production `analyzeTimingCalibration()` algorithm must
   accept the measured six-second correlation, including its spectral,

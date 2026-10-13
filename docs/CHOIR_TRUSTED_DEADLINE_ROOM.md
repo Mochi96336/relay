@@ -531,3 +531,43 @@ Actual server wiring needs the trusted Robot source clock and the backing
 PCM ingest boundary plus a room restart handshake. In particular, a
 fresh SongSession timeline proves admission/clock control, not by itself
 that a physical singer heard the correct YouTube position.
+
+## Default-off server shadow boundary and explicit restart epoch (2026-10-14)
+
+PR #576 now introduces `RELAY_CHOIR_SHADOW` as an **explicitly disabled by
+default** server setting, validated by `loadRelayConfig`. Even with this
+flag enabled, this is **only a control-plane observer**, not a Choir server
+transport, media mixer, recorder, monitor, speaker output, microphone
+publisher or UI. Its implementation deliberately does not receive Mic or
+Robot PCM packets and cannot admit any Choir singer.
+
+When enabled, `startRelayServer()` privately owns a
+`ChoirShadowLifecycleExperiment` reading its existing
+`youtubeTimeline: SongSession`, `sourceRuntime: SourceRuntime`, and the
+actual session's Robot backing PCM generation. Its observation hooks run
+after accepted SongSession telemetry, on playback detach, Robot source
+attach/close, backing PCM capture restart and from the existing 250 ms
+timeline timer. No new always-running timer, public socket type or
+new client command is introduced. With the flag disabled, these hooks
+immediately no-op.
+
+On a new verified playing song and active Robot with a real backing
+generation, the observer creates a fresh private shadow room with a
+server-monotonic room/song epoch. A stable YouTube projection does not
+recreate the room. Loss of playback authority, seek/pause/rate/video
+revision, Robot identity replacement, clock jump or PCM backing-generation
+change irreversibly retires the room. The old instance and proof caches
+cannot be recovered by a later PLAYING heartbeat. A new room needs a
+strictly newer room epoch and song epoch explicitly approved through a
+private `authorizeExplicitFreshRoom(retiredRoomEpoch, proposedRoomEpoch,
+proposedSongEpoch)` method, which is **not called by production**.
+
+**Important boundary:** this is an offline restart gate proving epoch
+fencing. It is not yet a two-singer resume handshake, and authenticating
+a user before admitting a new Mic capture is still a separate
+production prerequisite. The shadow's verification is useful for detecting
+where production events occur and confirming that stale SongSession
+and Robot SourceRuntime generations cannot be silently recycled. Do not
+configure the feature on a production deployment expecting functional
+Choir audio: there is no such route yet. The entire single-Mic AudioSession
+remains the production signal path.

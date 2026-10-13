@@ -337,3 +337,62 @@ media-epoch binding, accepted source, Take freeze and evidence age from a
 private authoritative verifier. An authenticated user merely supplying a
 new `proofRevision` is **not** enough. No production adapter, UI, live two-phone
 test or automatic primary-Mic succession is introduced here.
+
+## Server-owned six-second canonical Content proof (offline experiment)
+
+The new opt-in proof path is `analyzeTrustedCanonicalContent(transportId,
+mediaEpoch, startSample, nowMs)` followed by
+`commitTrustedCanonicalContent(transportId, mediaEpoch, nowMs, takeFrozen)`.
+It exists solely on `ChoirDeadlineRoomExperiment`; it is **not** exposed by
+WebSocket, WebTransport, `server.ts` or the client.
+
+Unlike older `acceptTrusted*` fixtures, this new path does not accept a
+client-supplied lag, revision number, confidence, source label, Content
+candidate or arbitrary PCM array. The room uses the currently authenticated
+publisher's `MicTrack.timeline` plus the trusted Robot backing timeline,
+both already reconstructed at the canonical room sample rate. It requires:
+
+- A room configured with a valid, fixed 11-character `videoId`, a fixed
+  song epoch and backing generation. The caller must still be the active
+  transport for the server-owned Media Epoch.
+- Exactly six seconds of **real positioned PCM** at a caller-selected room
+  start sample, all present on both timelines. Any gap, concealed source,
+  absent future sample, unheadered chunk, outdated Robot generation,
+  unknown native Capture generation or a window already evicted by
+  retention causes an explicit rejection, **not silence padding**.
+- The original production `analyzeTimingCalibration()` algorithm must
+  accept the measured six-second correlation, including its spectral,
+  distinct-peak and cross-window consistency guards. Analysis runs on
+  internally copied reconstructed PCM. The numeric result is kept PRIVATE
+  in the coordinator and cannot be overwritten through returned diagnostics.
+- The commit must match the same authenticated transport, participant,
+  Media Epoch, room/song/backing generations, fixed video ID and native
+  Capture generation/source rate. The analysis is valid for at most 20 s;
+  disconnection, a newer candidate or an accepted new Media Epoch retires
+  the pending result. One accepted/rejected commit consumes it exactly once.
+  Frozen Take prevents the commit.
+- The room *chooses* the only valid transition: first rebound Content,
+  bounded live fallback-to-Content correction, large disagreement staging,
+  or new-epoch Content reacquisition. It NEVER accepts a client selection
+  of those modes or a replacement signed-lag parameter.
+
+This directly connects **real** PCM correlation to the experimental
+scheduler and PCM playback, but still has important non-production limits:
+the test room normally retains only three seconds of PCM, so its opt-in
+six-second proof path requires at least six seconds of retained media
+(10 seconds in the regression fixture); the eventual service needs a
+separate bounded six-second calibration collection buffer or a consciously
+larger per-source retention budget. The trusted **Robot-to-YouTube media
+mapping, seek/pause/video changes and fresh timing origin** also need a
+real server authority adapter; a static constructor `videoId` is not proof
+that two arbitrary audio streams are from the same live song epoch.
+Furthermore, the older `acceptTrusted*` experimental methods remain
+low-level stubs accepting prevalidated input and must not be exposed as
+user-callable handlers. No deployed endpoint is changed.
+
+The new tests feed six seconds of distinct multi-band, +120 ms ground-truth
+music as actual positioned Mic/Robot packets, call the original analyzer,
+verify a valid one-shot Content authorization, reject closed/old transports,
+block Take-frozen commits, and reject a pending analysis after a native
+capture-generation restart. This is NOT equivalent to two physical devices
+or a complete production evidence adapter.

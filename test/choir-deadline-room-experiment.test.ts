@@ -645,6 +645,7 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
       singerGain: 0.18,
     });
     const count = RATE * 2;
+    let lastEmittedEvidence: unknown = null;
     for (let at = 280; at <= 6_000; at += 20) {
       if (at % 2_000 === 0) {
         const first = (at / 2_000 - 1) * count;
@@ -658,7 +659,10 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
           pcm: backing.subarray(first * 2, last * 2),
         }, RATE, at), true);
       }
-      assert.equal(coordinator.renderDue(at).state, 'ready');
+      const output = coordinator.renderDue(at);
+      assert.equal(output.state, 'ready');
+      if (at === 6_000 && output.state === 'ready')
+        lastEmittedEvidence = output.frames[0].singers[0];
     }
     const measured = coordinator.analyzeTrustedCanonicalContent(
       'socket-A2', a2.mediaEpoch, 0, 6_001);
@@ -667,7 +671,7 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     assert.ok(Math.abs(measured.lagMs - 120) <= 20);
     assert.equal(coordinator.commitTrustedCanonicalContent(
       'socket-A2', a2.mediaEpoch, 6_002, false), 'staged',
-      'a large measured Content mismatch must not jump the live Mic');
+      `a large measured Content mismatch must not jump the live Mic: ${JSON.stringify(lastEmittedEvidence)}`);
     assert.equal(coordinator.commitTrustedCanonicalContent(
       'socket-A2', a2.mediaEpoch, 6_003, false), 'rejected');
     const stillFallback = coordinator.renderDue(6_020);

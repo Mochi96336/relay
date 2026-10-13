@@ -1,0 +1,202 @@
+{
+  "scope": {
+    "head": "1bc6b50",
+    "date": "2026-10-13",
+    "timezone": "Asia/Taipei",
+    "userRequirement": "Both speaker and headphone singing; user confirms only speaker path currently calibrates successfully."
+  },
+  "observation": {
+    "start": "2026-10-12T17:35:50.315Z",
+    "end": "2026-10-12T17:36:20.369Z",
+    "seconds": 30.07,
+    "states": [
+      "degraded"
+    ],
+    "micConnected": false,
+    "backingFrameAgeRangeMs": [
+      9,
+      42
+    ],
+    "monitorDropDelta": 0,
+    "listeners": [
+      {
+        "label": "A",
+        "playing": true,
+        "queuedMs": 213.70833333333334,
+        "underrunDelta": 0,
+        "starvedDeltaMs": 0.0,
+        "trimmedDeltaMs": 0.0
+      },
+      {
+        "label": "B",
+        "playing": true,
+        "queuedMs": 250,
+        "underrunDelta": 0,
+        "starvedDeltaMs": 0.0,
+        "trimmedDeltaMs": 0.0
+      }
+    ]
+  },
+  "takes": [
+    {
+      "endedAtMs": 1791391012900.7334,
+      "durationMs": 88880,
+      "verdict": "degraded",
+      "networkEstimateMs": 88880,
+      "micGapMs": 12487.5,
+      "backingGapMs": 0,
+      "micStarvedMs": 0,
+      "backingStarvedMs": 15448.0625,
+      "limitedMs": 50185.166666666664,
+      "clippedMs": 0,
+      "issues": [
+        "mic-unavailable",
+        "mic-pcm-gap",
+        "backing-starvation",
+        "timing-fallback",
+        "robot-delta-missing",
+        "transport-instability"
+      ]
+    },
+    {
+      "endedAtMs": 1791479145441.0894,
+      "durationMs": 202680,
+      "verdict": "review",
+      "networkEstimateMs": 202680,
+      "micGapMs": 229.5,
+      "backingGapMs": 0,
+      "micStarvedMs": 0,
+      "backingStarvedMs": 0,
+      "limitedMs": 108654.33333333333,
+      "clippedMs": 0,
+      "issues": [
+        "mic-pcm-gap",
+        "timing-fallback",
+        "robot-delta-missing"
+      ]
+    },
+    {
+      "endedAtMs": 1791479610901.2139,
+      "durationMs": 204100,
+      "verdict": "review",
+      "networkEstimateMs": 204100,
+      "micGapMs": 0,
+      "backingGapMs": 0,
+      "micStarvedMs": 0,
+      "backingStarvedMs": 0,
+      "limitedMs": 99693.79166666667,
+      "clippedMs": 0,
+      "issues": [
+        "timing-fallback"
+      ]
+    },
+    {
+      "endedAtMs": 1791824894494.3464,
+      "durationMs": 168400,
+      "verdict": "review",
+      "networkEstimateMs": 168400,
+      "micGapMs": 0,
+      "backingGapMs": 0,
+      "micStarvedMs": 0,
+      "backingStarvedMs": 0,
+      "limitedMs": 77457.95833333334,
+      "clippedMs": 0,
+      "issues": [
+        "timing-fallback"
+      ]
+    }
+  ],
+  "probeFailure": {
+    "localTimeRange": "2026-10-13 01:04:44–01:04:55 +08:00",
+    "inputClass": "Windows Chrome; Bluetooth headset",
+    "correlations": [
+      0.299,
+      0.374,
+      0.385
+    ],
+    "minimumCorrelation": 0.5,
+    "attempts": 3,
+    "voiceProcessing": {
+      "echoCancellation": false,
+      "noiseSuppression": false,
+      "autoGainControl": false
+    }
+  },
+  "build": {
+    "runningProcessAndHtml": "d848aced5c4d",
+    "workingTree": "08db18b667fa",
+    "servedYoutubeModuleMatchesWorkingTree": true
+  },
+  "policyReproduction": {
+    "heldBoot": {
+      "applicability": "hold",
+      "calibrationValid": true,
+      "mixerTimingMode": "acoustic-calibration",
+      "productTiming": "fallback",
+      "issue": {
+        "code": "timing-recovering",
+        "scope": "timing",
+        "severity": "warning",
+        "cause": "timing-fallback",
+        "affects": [
+          "timing",
+          "recording"
+        ],
+        "recovery": "recalibrate"
+      },
+      "remoteWarnings": [
+        "robot player delta is stale; alignment fell back to the network estimate"
+      ]
+    },
+    "recordingFallback": {
+      "issue": {
+        "code": "timing-recovering",
+        "scope": "timing",
+        "severity": "warning",
+        "cause": "timing-fallback",
+        "affects": [
+          "timing",
+          "recording"
+        ],
+        "recovery": "recalibrate"
+      },
+      "canStartCalibration": false,
+      "blockedReason": "take-active"
+    },
+    "idleRobot": {
+      "ok": true,
+      "state": "degraded",
+      "faults": [],
+      "warnings": [
+        "robot player delta is stale; alignment fell back to the network estimate"
+      ]
+    }
+  },
+  "uiReproduction": {
+    "issue": "時間對齊正在恢復\n\n目前先用網路估計來對齊時間。\n\n影響：時間對齊 · 錄音\n按「重新對齊」重新量一次。",
+    "realignDisabled": true,
+    "realignStatus": "停止錄音後才能重新對齊",
+    "scrollWidth": 390,
+    "viewport": 390
+  },
+  "validation": {
+    "typecheck": "passed",
+    "calibration": {
+      "tests": 84,
+      "failed": 0
+    },
+    "transport": {
+      "tests": 113,
+      "failed": 0
+    },
+    "ux": {
+      "tests": 91,
+      "failed": 0
+    },
+    "browserDomAndGeometry": {
+      "tests": 50,
+      "failed": 0,
+      "runtime": "system Chromium on aarch64; deterministic audio/socket harness"
+    }
+  }
+}

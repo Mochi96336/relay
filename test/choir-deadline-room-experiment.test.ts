@@ -246,6 +246,42 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     assert.equal(otherAudible, true, 'B canonical PCM continues across A2 rebind');
   });
 
+  test('a calibration decision racing with a second disconnect cannot unmute the retired capture', () => {
+    const coordinator = room();
+    const { a, b } = admitBoth(coordinator);
+    assert.equal(coordinator.receiveFromTransport('socket-A',
+      captured(FRAME, 8_000), RATE, 20), true);
+    assert.equal(coordinator.receiveFromTransport('socket-B',
+      captured(FRAME * 12, 6_000), RATE, 40), true);
+    assert.equal(coordinator.disconnectTransport('socket-A', 80), true);
+    for (const at of [220, 240, 260]) {
+      assert.equal(coordinator.renderDue(at).state, 'ready');
+    }
+    const replacement = coordinator.admitTrusted({
+      verifiedParticipantId: 'A', transportId: 'socket-A2',
+      seat: 'primary', expectedPrimaryId: 'A', nowMs: 261,
+    });
+    assert.equal(replacement.ok, true);
+    if (!replacement.ok) return;
+    assert.notEqual(replacement.mediaEpoch, a.mediaEpoch);
+    assert.equal(coordinator.disconnectTransport('socket-A2', 270), true);
+    const confirmed = {
+      source: 'content' as const, advanceMs: 0,
+      sampleResidualMs: null, bootResidualMs: null,
+      sampleCandidateMs: null, bootCandidateMs: null,
+    };
+    assert.equal(coordinator.acceptTrustedReboundAlignment(
+      'socket-A2', replacement.mediaEpoch, confirmed, 271), false);
+    assert.equal(coordinator.acceptTrustedReboundAlignment(
+      'socket-A', a.mediaEpoch, confirmed, 272), false);
+    const output = coordinator.renderDue(280);
+    assert.equal(output.state, 'ready');
+    if (output.state !== 'ready') return;
+    assert.equal(output.frames[0].singers[0].voicePeakAbs, 0);
+    assert.equal(output.frames[0].singers[1].mediaEpoch, b.mediaEpoch);
+    assert.equal(output.frames[0].singers[1].expected, true);
+  });
+
   test('expired reconnect grace cannot silently restore a revoked primary seat', () => {
     const coordinator = room();
     const { a, b } = admitBoth(coordinator);

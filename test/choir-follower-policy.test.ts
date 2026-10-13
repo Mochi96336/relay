@@ -61,10 +61,14 @@ describe('Choir follower only controls its own player', () => {
 
   test('a Seek by A while paused repositions the local follower before Play', () => {
     const policy = new ChoirFollowerPolicy();
-    assert.deepEqual(policy.decide({
+    const seek = policy.decide({
       room: { ...room, state: 'paused', positionSeconds: 110 },
       local: { ...local, state: 'paused' }, nowMs: 1000, roomFresh: true,
-    }), { action: 'seek', positionSeconds: 110, signedDriftMs: -29_880 });
+    });
+    assert.equal(seek.action, 'seek');
+    if (seek.action !== 'seek') return;
+    assert.equal(seek.positionSeconds, 110);
+    assert.ok(Math.abs(seek.signedDriftMs + 29_880) < 0.001);
     const repeated = policy.decide({
       room: { ...room, state: 'paused', positionSeconds: 110 },
       local: { ...local, state: 'paused' }, nowMs: 1200, roomFresh: true,

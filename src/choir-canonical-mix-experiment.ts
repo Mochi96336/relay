@@ -27,6 +27,10 @@ export type CanonicalChoirSingerId = {
 export type CanonicalChoirSingerEvidence = {
   participantId: string;
   mediaEpoch: number;
+  /** Read-head location of this frame in the singer's own session PCM. */
+  readStartSample: number;
+  /** Peak absolute canonical voice AFTER limiter+edge, BEFORE group headroom. */
+  voicePeakAbs: number;
   gapSamples: number;
   frontierMissingSamples: number;
   unheaderedSamples: number;
@@ -196,6 +200,8 @@ export class CanonicalChoirMixExperiment {
       const evidence: CanonicalChoirSingerEvidence = {
         participantId: slot.identity.participantId,
         mediaEpoch: slot.identity.mediaEpoch,
+        readStartSample: plan.micReadStart,
+        voicePeakAbs: 0,
         gapSamples: read.evidence.gapSamples,
         frontierMissingSamples: read.evidence.frontierMissingSamples,
         unheaderedSamples: read.evidence.unheaderedSamples
@@ -241,6 +247,7 @@ export class CanonicalChoirMixExperiment {
           evidenceMissing: missingEvidence, audibleMissing: missingAudible,
         });
         if (!missingAudible) anyAudibleSource = true;
+        evidence.voicePeakAbs = Math.max(evidence.voicePeakAbs, Math.abs(result.voice));
         // The peak limiter has finite attack even with 3ms lookahead. Its
         // transient output can overshoot the nominal ceiling during the first
         // ~2ms of a hot capture. The N=2 bus must NOT reserve headroom based

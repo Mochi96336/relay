@@ -86,7 +86,7 @@ describe('canonical MicTrack N=2 through the production MixBus (no live server)'
       if (i === 20) aOnlySample = frame.pcm[320];
     }
     assert.ok(output[expectedEvent] > aOnlySample + 1500,
-      `second Mic source contribution: both=${output[expectedEvent]}, A-only=${aOnlySample}, delta=${output[expectedEvent]-aOnlySample}`);
+      `second Mic source contribution: both=${output[expectedEvent]}, A-only=${aOnlySample}, delta=${output[expectedEvent]-aOnlySample}; tracks=${JSON.stringify(perSinger)}`);
     assert.equal(perSinger.length, 2);
     assert.equal(perSinger[0].participantId, 'singer-a');
     assert.equal(perSinger[1].participantId, 'singer-b');

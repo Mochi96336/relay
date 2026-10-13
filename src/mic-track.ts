@@ -250,7 +250,7 @@ export class MicTrack {
    * The Mic samples this frame mixes, with the limiter's look-ahead after
    * them, and the evidence for exactly the source samples that feed them.
    */
-  private readMicFrame(plan: MicReadPlan) {
+  readMicFrame(plan: MicReadPlan) {
     const {
       startSample,
       previouslyEmittedAdvanceSamples,

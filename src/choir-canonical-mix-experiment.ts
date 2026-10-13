@@ -96,6 +96,7 @@ type RoomConfig = {
 export class CanonicalChoirMixExperiment {
   private readonly slots = new Map<string, Slot>();
   private readonly backing = emptyPcmTimeline();
+  private backingCaptureOriginSample: number | null = null;
   private readonly bus: MixBus;
   private readonly frameSamples: number;
   private readonly micOptions: ConstructorParameters<typeof MicTrack>[0];
@@ -400,6 +401,10 @@ export class CanonicalChoirMixExperiment {
       || !Number.isSafeInteger(captureGeneration) || captureGeneration < 0
       || slot.mic.timeline.generation !== captureGeneration
       || slot.mic.timeline.sourceRate === null
+      || slot.mic.micCaptureOriginSample === null
+      || startSample < slot.mic.micCaptureOriginSample
+      || this.backingCaptureOriginSample === null
+      || startSample < this.backingCaptureOriginSample
       || this.backing.generation !== this.backingGeneration
       || !Number.isSafeInteger(startSample) || startSample < 0
       || !Number.isSafeInteger(startSample + count)) return null;
@@ -505,10 +510,16 @@ export class CanonicalChoirMixExperiment {
     if (!Number.isSafeInteger(roomNowSample) || roomNowSample < 0
       || !Number.isInteger(sourceRate) || sourceRate < 8_000 || sourceRate > 192_000)
       return false;
-    ingestPcmTimeline({
+    const previousGeneration = this.backing.generation;
+    const result = ingestPcmTimeline({
       timeline: this.backing, frame, sourceRate, mixRate: this.sampleRate,
       roomSampleNow: () => roomNowSample, trackSourceClock: true,
     });
+    // Retained chunks can outlive a Robot capture-generation restart.
+    // Content evidence must never combine old chunks with a new source label.
+    if (previousGeneration !== this.backing.generation
+      && result.samples.length > 0)
+      this.backingCaptureOriginSample = result.start;
     return true;
   }
 

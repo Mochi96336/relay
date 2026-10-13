@@ -268,7 +268,10 @@ export class CanonicalChoirMixExperiment {
       || mic.timeline.generation !== slot.authority.captureGeneration
       || mic.timeline.sourceRate !== slot.authority.sourceRate
       || mic.alignmentState.calibratedMicLagMs === null
-      || mic.calibratedMicLagTargetMs === null) return false;
+      || mic.calibratedMicLagTargetMs === null
+      || slot.joinGain <= 0
+      || mic.lastEmittedMicSourceSample === null
+      || !mic.lastEmittedMicFrameComplete) return false;
     // Same 5ms policy as live Content recovery. Never staircase corrections.
     if (Math.abs(decision.advanceMs - mic.calibratedMicLagTargetMs) <= 5
       && Math.abs(decision.advanceMs - slot.authority.firstAdvanceMs) <= 5)

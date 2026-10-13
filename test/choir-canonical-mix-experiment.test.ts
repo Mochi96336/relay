@@ -100,7 +100,7 @@ describe('canonical MicTrack N=2 through the production MixBus (no live server)'
     assert.equal(hole.singers[1].gapSamples, 0);
     assert.equal(hole.singers[1].frontierMissingSamples, 0);
     assert.ok(hole.pcm[FRAME / 2] > 0,
-      'healthy B remains audible even while A's source chunk is concealed');
+      "healthy B remains audible even while A source chunk is concealed");
     assert.equal(hole.outputClippedSamples, 0);
   });
 

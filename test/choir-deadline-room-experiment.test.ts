@@ -242,6 +242,34 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     assert.equal(otherAudible, true, 'B canonical PCM continues across A2 rebind');
   });
 
+  test('expired reconnect grace cannot silently restore a revoked primary seat', () => {
+    const coordinator = room();
+    const { a, b } = admitBoth(coordinator);
+    assert.equal(coordinator.receiveFromTransport('socket-A',
+      captured(FRAME, 8_000), RATE, 20), true);
+    assert.equal(coordinator.disconnectTransport('socket-A', 40), true);
+    // Advance the room output clock with bounded batches (no stale playback).
+    for (let clock = 220; clock <= 2_060; clock += 100) {
+      assert.equal(coordinator.renderDue(clock).state, 'ready');
+    }
+    assert.deepEqual(coordinator.admitTrusted({
+      verifiedParticipantId: 'A', transportId: 'socket-A-new',
+      seat: 'primary', expectedPrimaryId: 'A', nowMs: 2_061,
+    }), { ok: false, reason: 'seat-rejected' },
+    'after lease expiry the old primary CAS cannot be reused');
+    assert.equal(coordinator.snapshot().seats.primaryMicId, null);
+    assert.equal(coordinator.snapshot().seats.songControllerId, 'A');
+    assert.equal(coordinator.snapshot().seats.secondaryMicIds.includes('B'), true);
+    const next = coordinator.admitTrusted({
+      verifiedParticipantId: 'A', transportId: 'socket-A-new',
+      seat: 'primary', expectedPrimaryId: null, nowMs: 2_062,
+    });
+    assert.equal(next.ok, true, 'only a new explicit seat claim may re-enter');
+    if (next.ok) assert.notEqual(next.mediaEpoch, a.mediaEpoch);
+    assert.equal(coordinator.inspectTransport('socket-A'), null);
+    assert.equal(coordinator.inspectTransport('socket-B')?.mediaEpoch, b.mediaEpoch);
+  });
+
   test('explicit B Take Mic requires authenticated transport and fresh CAS, no song takeover', () => {
     const coordinator = room();
     const { a, b } = admitBoth(coordinator);

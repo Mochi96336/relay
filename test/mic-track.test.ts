@@ -510,6 +510,31 @@ describe('extracted MicTrack owns per-singer components independently', () => {
     assert.equal(b.clockTrim.ppm, -380);
   });
 
+  test('two Mic captures can ingest independently and A restart cannot reset B', () => {
+    const a = new MicTrack(config);
+    const b = new MicTrack(config);
+    const capture = (track: MicTrack, generation: number, first: number, value: number, now: number) =>
+      track.ingestCapture({
+        frame: {
+          generation, firstSampleIndex: first,
+          pcm: Buffer.from(new Int16Array(960).fill(value).buffer),
+        },
+        sourceRate: 48_000, running: true, roomSampleNow: () => now,
+      });
+    assert.equal(capture(a, 1, 0, 6_000, 960).start, 0);
+    assert.equal(capture(b, 8, 0, -9_000, 960).start, 0);
+    assert.equal(a.timeline.totalSamples, 960);
+    assert.equal(b.timeline.totalSamples, 960);
+    const restarted = capture(a, 2, 0, 7_000, 3840);
+    assert.equal(restarted.captureRestarted, true);
+    assert.equal(restarted.start, 2_880);
+    assert.equal(a.timeline.originOffset, 2_880);
+    assert.equal(a.timeline.generation, 2);
+    assert.equal(b.timeline.originOffset, 0);
+    assert.equal(b.timeline.generation, 8);
+    assert.equal(b.timeline.chunks.length, 1);
+  });
+
   test('current AudioSession still uses its actual existing Mic clock and limits', () => {
     const session = new AudioSession({
       sampleRate: 48_000, frameMs: 20, prebufferMs: 400,

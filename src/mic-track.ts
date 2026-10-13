@@ -1,6 +1,7 @@
 import { CaptureRestartBoundaries } from './capture-restart-boundaries.js';
 import { concealGap } from './packet-loss-concealment.js';
-import { fadeInSourceEdge } from './pcm-source-edge-taper.js';
+import { ingestPcmTimeline, type PcmIngestResult } from './pcm-ingest.js';
+import { fadeInSourceEdge, declickSourceGap } from './pcm-source-edge-taper.js';
 import { MicClockTrim } from './mic-clock-trim.js';
 import { MicFrontierCorrection } from './mic-frontier-correction.js';
 import { MicGainRamp } from './mic-gain-ramp.js';
@@ -187,6 +188,62 @@ export class MicTrack {
     this.clockTrim.applied(trim);
     return trimmed;
   }
+
+  /**
+   * Canonical Mic capture ingestion. The room supplies only its authoritative
+   * output clock; source generations, PCM evidence and concealment are local.
+   */
+  ingestCapture(input: {
+    frame: PcmFrame;
+    sourceRate: number | null;
+    running: boolean;
+    roomSampleNow: () => number;
+  }): PcmIngestResult {
+    const { frame, sourceRate, running, roomSampleNow } = input;
+    const previousTotalSamples = this.timeline.totalSamples;
+    const previousChunk = this.timeline.chunks.at(-1) ?? null;
+    const previousGeneration = this.timeline.generation;
+    const previousSourceRate = this.timeline.sourceRate;
+    const previousSourceFrontier = this.timeline.sourceFrontier;
+    const result = ingestPcmTimeline({
+      timeline: this.timeline,
+      frame, sourceRate, mixRate: this.sampleRate, roomSampleNow,
+      sourceRateDefinesCapture: true,
+      onCaptureClockChanged: () => this.onCaptureClockReplaced(),
+      trimSourcePacket: (args) => this.trimSourcePacket(args),
+    });
+    // Source-local capture metadata now belongs to the reusable MicTrack.
+    // Only the room supplies its authoritative output clock.
+    this.observeIngest({
+      frame, sourceRate, running,
+      previousTotalSamples, previousChunk,
+      previousGeneration, previousSourceRate, previousSourceFrontier,
+      result,
+    });
+    const currentChunk = this.timeline.chunks.at(-1) ?? null;
+
+    // Only same-capture positioned holes are edited in the retained timeline.
+    // A capture-clock restart is an authority boundary whose raw replacement
+    // samples stay exact; bind-time replacement edges are tapered at mix output.
+    const startsAfterGap = Boolean(
+      !result.captureRestarted
+      && previousChunk
+      && currentChunk
+      && currentChunk !== previousChunk
+      && currentChunk.samples.length > 0
+      && currentChunk.start > previousTotalSamples
+    );
+    if (startsAfterGap && previousChunk && currentChunk) {
+      if (!this.concealCaptureGap(previousChunk, currentChunk, previousTotalSamples)) {
+        declickSourceGap(
+          previousChunk, currentChunk.samples,
+          this.firstUnheardSample(), this.sourceEdgeFadeSamples,
+        );
+      }
+    }
+    return result;
+  }
+
 
   /** Capture-native frame index to this singer's trusted room PCM timeline. */
   sourceSampleToSessionSample(sourceSample: number, sourceRate: number): number {

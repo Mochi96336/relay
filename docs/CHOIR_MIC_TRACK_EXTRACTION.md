@@ -295,3 +295,18 @@ Publisher identity, or mixer. Backing retains its original clock trim.
 multi-Publisher ingress, room fan-in, per-singer clocks at runtime, and
 Listen/Take track evidence remain to be connected later. Golden PCM
 fixtures and existing browser tests must be unchanged.
+
+
+## Stage 14: canonical Mic ingest is a MicTrack method
+
+`AudioSession.ingestMic()` now delegates to
+`MicTrack.ingestCapture()`, supplying only the shared room's output
+clock and running state. Each track invokes the same `ingestPcmTimeline()`
+as Backing, with its own source-generation restart and clock-trim hooks,
+then performs the existing post-ingest clipping/meter, boundary and
+pitch-synchronous concealment logic. A/B tests deliver independent real
+PCM capture frames and confirm A's source restart does not move B's data.
+
+This still does NOT admit a live second Publisher. The verified server-side
+participant/media identity, generation fencing and final fan-in into one
+MixBus remain explicit release blockers.

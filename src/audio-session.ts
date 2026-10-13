@@ -591,43 +591,10 @@ export class AudioSession {
   }
 
   ingestMic(frame: PcmFrame, sourceRate: number | null, nowMs = performance.now()) {
-    const previousTotalSamples = this.mic.totalSamples;
-    const previousChunk = this.mic.chunks.at(-1) ?? null;
-    const previousGeneration = this.mic.generation;
-    const previousSourceRate = this.mic.sourceRate;
-    const previousSourceFrontier = this.mic.sourceFrontier;
-    const result = this.ingest(this.mic, frame, sourceRate, nowMs, false, true);
-    // Source-local capture metadata now belongs to the reusable MicTrack.
-    // The shared session still decides the capture-to-room sample placement
-    // and performs legacy gap concealment, preserving N=1 output exactly.
-    this.micTrack.observeIngest({
+    return this.micTrack.ingestCapture({
       frame, sourceRate, running: this.running,
-      previousTotalSamples, previousChunk,
-      previousGeneration, previousSourceRate, previousSourceFrontier,
-      result,
+      roomSampleNow: () => this.currentSessionSample(nowMs),
     });
-    const currentChunk = this.mic.chunks.at(-1) ?? null;
-
-    // Only same-capture positioned holes are edited in the retained timeline.
-    // A capture-clock restart is an authority boundary whose raw replacement
-    // samples stay exact; bind-time replacement edges are tapered at mix output.
-    const startsAfterGap = Boolean(
-      !result.captureRestarted
-      && previousChunk
-      && currentChunk
-      && currentChunk !== previousChunk
-      && currentChunk.samples.length > 0
-      && currentChunk.start > previousTotalSamples
-    );
-    if (startsAfterGap && previousChunk && currentChunk) {
-      if (!this.micTrack.concealCaptureGap(previousChunk, currentChunk, previousTotalSamples)) {
-        declickSourceGap(
-          previousChunk, currentChunk.samples,
-          this.micTrack.firstUnheardSample(), this.sourceEdgeFadeSamples,
-        );
-      }
-    }
-    return result;
   }
 
   ingestBacking(

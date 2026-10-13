@@ -642,7 +642,7 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     assert.equal(coordinator.acceptTrustedReboundAlignment(
       'socket-A2', a2.mediaEpoch, fallback, 262), false,
       'cannot authorize an unknown native capture generation');
-    const { mic, backing } = laggedMultibandMusicPair(6, RATE, 120, {
+    const { mic, backing } = laggedMultibandMusicPair(7, RATE, 120, {
       singerGain: 0.18,
     });
     const count = RATE * 2;
@@ -663,23 +663,52 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
           assert.equal(coordinator.acceptTrustedReboundAlignment(
             'socket-A2', a2.mediaEpoch, fallback, at), true,
             'fallback first binds to the capture generation actually ingested');
+        if (at === 6_000) {
+          // The analyzer consumes the first six seconds. The extra one-second
+          // CONTIGUOUS source window provides actual future PCM for the
+          // canonical 200ms frontier cushion and limiter lookahead.
+          const next = 6 * RATE;
+          assert.equal(coordinator.receiveFromTransport('socket-A2', {
+            generation: 7, firstSampleIndex: next,
+            pcm: mic.subarray(next * 2, (next + RATE) * 2),
+          }, RATE, at), true);
+          assert.equal(coordinator.receiveTrustedBacking({
+            generation: 9, firstSampleIndex: next,
+            pcm: backing.subarray(next * 2, (next + RATE) * 2),
+          }, RATE, at), true);
+        }
       }
       const output = coordinator.renderDue(at);
       assert.equal(output.state, 'ready');
       if (at === 6_000 && output.state === 'ready')
         lastEmittedEvidence = output.frames[0].singers[0];
     }
+    let playableAt = 0;
+    for (let at = 6_020; at <= 6_300; at += 20) {
+      const due = coordinator.renderDue(at);
+      assert.equal(due.state, 'ready');
+      if (due.state !== 'ready') return;
+      const evidence = due.frames[0].singers[0];
+      lastEmittedEvidence = evidence;
+      if (evidence.voicePeakAbs > 0.05
+        && evidence.gapSamples === 0 && evidence.frontierMissingSamples === 0) {
+        playableAt = at;
+        break;
+      }
+    }
+    assert.ok(playableAt > 0,
+      `source must actually become audible before large-lag staging: ${JSON.stringify(lastEmittedEvidence)}`);
     const measured = coordinator.analyzeTrustedCanonicalContent(
-      'socket-A2', a2.mediaEpoch, 0, 6_001);
+      'socket-A2', a2.mediaEpoch, 0, playableAt + 1);
     assert.equal(measured.status, 'candidate');
     if (measured.status !== 'candidate') return;
     assert.ok(Math.abs(measured.lagMs - 120) <= 20);
     assert.equal(coordinator.commitTrustedCanonicalContent(
-      'socket-A2', a2.mediaEpoch, 6_002, false), 'staged',
+      'socket-A2', a2.mediaEpoch, playableAt + 2, false), 'staged',
       `a large measured Content mismatch must not jump the live Mic: ${JSON.stringify(lastEmittedEvidence)}`);
     assert.equal(coordinator.commitTrustedCanonicalContent(
-      'socket-A2', a2.mediaEpoch, 6_003, false), 'rejected');
-    const stillFallback = coordinator.renderDue(6_020);
+      'socket-A2', a2.mediaEpoch, playableAt + 3, false), 'rejected');
+    const stillFallback = coordinator.renderDue(playableAt + 20);
     assert.equal(stillFallback.state, 'ready');
     if (stillFallback.state !== 'ready') return;
     assert.equal(stillFallback.frames[0].singers[0].mediaEpoch, a2.mediaEpoch);

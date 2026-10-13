@@ -213,30 +213,37 @@ describe('extracted MicTrack owns per-singer components independently', () => {
     assert.equal(b.edge.replacementActive, false);
   });
 
-  test('independent planners honor per-singer Content and fallback lag on same room tick', () => {
+  test('two independently signed calibrations read the correct true PCM events', () => {
     const a = new MicTrack(config);
     const b = new MicTrack(config);
-    const pcmA = new Int16Array(30_000).fill(7_000);
-    const pcmB = new Int16Array(30_000).fill(-9_000);
+    const pcmA = new Int16Array(30_000);
+    const pcmB = new Int16Array(30_000);
+    const roomSample = 20_000;
+    const eventWithinFrame = 400;
+    const advanceA = 5_760; // +120ms at 48 kHz
+    const advanceB = -16_320; // -340ms at 48 kHz
+    // Ground truth is fixed from the intended source timeline, NOT
+    // computed from the planner's output.
+    pcmA[roomSample + advanceA + eventWithinFrame] = 10_000;
+    pcmB[roomSample + advanceB + eventWithinFrame] = 16_000;
     for (const [track, samples] of [[a, pcmA], [b, pcmB]] as const) {
       track.timeline.chunks.push({ start: 0, samples, positioned: true });
       track.timeline.totalSamples = samples.length;
     }
     a.alignmentState.calibratedMicLagMs = 120;
     b.alignmentState.calibratedMicLagMs = -340;
-    const roomSample = 12_000;
-    // +120ms ahead is within the 200ms budget. -340ms behind is within
-    // retention. No arbitrary YouTube or network clock is involved.
     const planA = a.planMicRead(roomSample, false);
     const planB = b.planMicRead(roomSample, false);
-    assert.equal(planA.micReadStart, roomSample + 5_760);
-    assert.equal(planB.micReadStart, roomSample - 16_320);
+    assert.equal(planA.micReadStart, roomSample + advanceA);
+    assert.equal(planB.micReadStart, roomSample + advanceB);
     assert.equal(planA.canCrossfadeReadHeadJump, false);
     assert.equal(planB.canCrossfadeReadHeadJump, false);
-    assert.equal(a.readMicFrame(planA).samples[100], 7_000);
-    // B's negative read position is structural preroll and must remain zero;
-    // it cannot pull A's samples or overwrite A's calibration.
-    assert.equal(b.readMicFrame(planB).samples[100], 0);
+    const frameA = a.readMicFrame(planA);
+    const frameB = b.readMicFrame(planB);
+    assert.equal(frameA.samples[eventWithinFrame], 10_000);
+    assert.equal(frameB.samples[eventWithinFrame], 16_000);
+    assert.equal(frameA.evidence.gapSamples, 0);
+    assert.equal(frameB.evidence.frontierMissingSamples, 0);
     assert.equal(a.alignmentState.calibratedMicLagMs, 120);
     assert.equal(b.alignmentState.calibratedMicLagMs, -340);
   });

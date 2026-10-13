@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { computeRelayBuild, validPageBuild } from '../src/relay-build.js';
+import { computeRelayBuild, createRelayBuildTracker, validPageBuild } from '../src/relay-build.js';
 
 test('the build follows the served files and nothing else', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'relay-build-'));
@@ -31,6 +31,37 @@ test('the build follows the served files and nothing else', async () => {
 
     await writeFile(path.join(publicDir, 'nested', 'a.css'), 'a { color: red }\n');
     assert.notEqual(computeRelayBuild([publicDir, sharedDir]), changed, 'a nested file edit is a new build');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('the tracked build follows files updated after startup', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'relay-build-tracker-'));
+  try {
+    const publicDir = path.join(root, 'public');
+    const sharedDir = path.join(root, 'shared');
+    await mkdir(publicDir);
+    await mkdir(sharedDir);
+    await writeFile(path.join(publicDir, 'youtube.js'), 'export const v = 1;\n');
+    await writeFile(path.join(sharedDir, 'policy.js'), 'export const p = 1;\n');
+
+    let nowMs = 0;
+    const tracker = createRelayBuildTracker([publicDir, sharedDir], { maxAgeMs: 2_000, now: () => nowMs });
+    const started = tracker.current();
+    assert.equal(started, computeRelayBuild([publicDir, sharedDir]));
+
+    // Deploying a front-end fix without restarting Relay.
+    await writeFile(path.join(publicDir, 'youtube.js'), 'export const v = 22;\n');
+    nowMs = 500;
+    assert.equal(tracker.current(), started, 'rechecked at most every maxAgeMs');
+    nowMs = 2_500;
+    const updated = tracker.current();
+    assert.notEqual(updated, started, 'the served files changed, so the build did');
+    assert.equal(updated, computeRelayBuild([publicDir, sharedDir]));
+
+    nowMs = 5_000;
+    assert.equal(tracker.current(), updated, 'unchanged files keep the build');
   } finally {
     await rm(root, { recursive: true, force: true });
   }

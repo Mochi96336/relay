@@ -12,8 +12,8 @@ export type RelayHttpReadiness = {
 
 export type RelayHttpServerOptions = {
   publicDir: string;
-  /** The page build (relay-build.ts) written into the served index.html. */
-  build: string;
+  /** The page build (relay-build.ts) written into the served index.html, read per request. */
+  build: string | (() => string);
   takeDir: string;
   relayKey: string | null;
   remoteStatus: () => unknown;
@@ -66,7 +66,7 @@ export function createRelayHttpServer(options: RelayHttpServerOptions): Server {
       res.setHeader('Cache-Control', 'no-cache');
       res.type('html').send(html.replace(
         '<head>',
-        `<head>\n    <meta name="relay-build" content="${options.build}" />`,
+        `<head>\n    <meta name="relay-build" content="${typeof options.build === 'function' ? options.build() : options.build}" />`,
       ));
     } catch (error) {
       next(error);

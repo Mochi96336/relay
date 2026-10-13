@@ -153,6 +153,28 @@ export class ChoirPublisherRegistry {
       && entry.mediaEpoch === mediaEpoch && this.seats.seatOf(authenticatedParticipantId));
   }
 
+  /**
+   * Server-owned lookup for an already authenticated transport. The receiving
+   * PCM frame cannot name its singer, seat, or mediaEpoch; only this registry can.
+   * A disconnected or superseded transport resolves to no active publisher.
+   */
+  activePublisherForTransport(transportId: string): {
+    participantId: string;
+    mediaEpoch: number;
+    seat: ChoirSeat;
+  } | null {
+    const id = this.byTransport.get(transportId);
+    const admission = id ? this.admissions.get(id) : null;
+    if (!admission || !admission.connected || admission.transportId !== transportId)
+      return null;
+    const seat = this.seats.seatOf(admission.participantId);
+    return seat === null ? null : {
+      participantId: admission.participantId,
+      mediaEpoch: admission.mediaEpoch,
+      seat,
+    };
+  }
+
   snapshot() {
     return [...this.admissions.values()].map(x => ({ ...x }));
   }

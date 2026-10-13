@@ -120,6 +120,28 @@ describe('choir publisher admission and independent reconnect grace', () => {
     assert.equal(registry.release(B), false);
   });
 
+  test('transport-only active publisher lookup never trusts packet-supplied identity', () => {
+    const { registry, admit } = subject();
+    const a = admit(A, 'transport-a', 'primary');
+    const b = admit(B, 'transport-b', 'secondary');
+    if (!a.ok || !b.ok) throw new Error('setup');
+    assert.deepEqual(registry.activePublisherForTransport('transport-a'), {
+      participantId: A, mediaEpoch: a.mediaEpoch, seat: 'primary',
+    });
+    assert.deepEqual(registry.activePublisherForTransport('transport-b'), {
+      participantId: B, mediaEpoch: b.mediaEpoch, seat: 'secondary',
+    });
+    assert.equal(registry.activePublisherForTransport('unknown'), null);
+    assert.equal(registry.disconnect('transport-a', 250), true);
+    assert.equal(registry.activePublisherForTransport('transport-a'), null);
+    const reattached = admit(A, 'transport-a-new', 'primary', A, 500);
+    if (!reattached.ok) throw new Error('reattach');
+    assert.equal(registry.activePublisherForTransport('transport-a'), null);
+    assert.equal(registry.activePublisherForTransport('transport-a-new')?.mediaEpoch,
+      reattached.mediaEpoch);
+    assert.notEqual(a.mediaEpoch, reattached.mediaEpoch);
+  });
+
   test('transport cannot be claimed by another authenticated participant', () => {
     const { registry, admit } = subject();
     admit(A, 'mic-shared', 'primary');

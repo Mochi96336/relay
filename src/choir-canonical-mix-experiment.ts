@@ -134,6 +134,11 @@ export class CanonicalChoirMixExperiment {
     return true;
   }
 
+  /** Used only to preflight explicit server admission; never user-supplied auth. */
+  mediaEpochFor(participantId: string): number | null {
+    return this.slots.get(participantId)?.identity.mediaEpoch ?? null;
+  }
+
   /** End a publisher without promoting/reassigning the other singer. */
   disconnect(id: CanonicalChoirSingerId): boolean {
     const slot = this.slots.get(id.participantId);

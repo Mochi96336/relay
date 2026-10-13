@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { ChoirDeadlineRoomExperiment } from '../src/choir-deadline-room-experiment.js';
+import { laggedMultibandMusicPair } from './helpers/music-calibration.js';
 
 const RATE = 48_000;
 const FRAME = 960;
@@ -513,6 +514,83 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
       assert.equal(actual.frames[0].singers[1].mediaEpoch, b.mediaEpoch);
       assert.ok(actual.frames[0].singers[1].voicePeakAbs > 0.1);
     }
+  });
+
+  test('actual six-second canonical PCM grants a single fresh-epoch Content authority', () => {
+    const coordinator = new ChoirDeadlineRoomExperiment({
+      sampleRate: RATE, frameMs: 20, prebufferMs: 400,
+      retentionMs: 10_000, roomEpochMs: 0, outputHoldbackMs: 200,
+      songEpoch: 7, backingGeneration: 9, videoId: 'abcdefghijk',
+      maxCatchupFrames: 8, reconnectGraceMs: 2_000,
+    });
+    const { a, b } = admitBoth(coordinator);
+    assert.equal(coordinator.receiveFromTransport('socket-A',
+      captured(FRAME, 7_000), RATE, 20), true);
+    assert.equal(coordinator.disconnectTransport('socket-A', 80), true);
+    for (const at of [220, 240, 260]) assert.equal(coordinator.renderDue(at).state, 'ready');
+    const a2 = coordinator.admitTrusted({
+      verifiedParticipantId: 'A', transportId: 'socket-A2',
+      seat: 'primary', expectedPrimaryId: 'A', nowMs: 261,
+    });
+    assert.equal(a2.ok, true);
+    if (!a2.ok) return;
+    assert.equal(coordinator.analyzeTrustedCanonicalContent(
+      'socket-A2', a2.mediaEpoch, 0, 262).status, 'rejected',
+      'missing six-second PCM must not be turned into zero-filled proof');
+    assert.equal(coordinator.analyzeTrustedCanonicalContent(
+      'socket-A', a.mediaEpoch, 0, 263).status, 'rejected');
+
+    const { mic, backing } = laggedMultibandMusicPair(6, RATE, 120, {
+      singerGain: 0.18,
+    });
+    const chunkSamples = RATE * 2;
+    for (let at = 280; at <= 6_000; at += 20) {
+      if (at === 2_000 || at === 4_000 || at === 6_000) {
+        const index = at / 2_000 - 1;
+        const first = index * chunkSamples;
+        const end = first + chunkSamples;
+        const micFrame = {
+          generation: 7, firstSampleIndex: first,
+          pcm: mic.subarray(first * 2, end * 2),
+        };
+        const backingFrame = {
+          generation: 9, firstSampleIndex: first,
+          pcm: backing.subarray(first * 2, end * 2),
+        };
+        assert.equal(coordinator.receiveFromTransport(
+          'socket-A2', micFrame, RATE, at), true);
+        assert.equal(coordinator.receiveTrustedBacking(backingFrame, RATE, at), true);
+      }
+      assert.equal(coordinator.renderDue(at).state, 'ready');
+    }
+    const candidate = coordinator.analyzeTrustedCanonicalContent(
+      'socket-A2', a2.mediaEpoch, 0, 6_001);
+    assert.equal(candidate.status, 'candidate',
+      `real Content correlation did not validate: ${JSON.stringify(candidate)}`);
+    if (candidate.status !== 'candidate') return;
+    assert.ok(Math.abs(candidate.lagMs - 120) <= 20,
+      `real 6s PCM should recover known +120ms: ${candidate.lagMs}`);
+    assert.equal(coordinator.commitTrustedCanonicalContent(
+      'socket-A', a.mediaEpoch, 6_002, false), 'rejected');
+    assert.equal(coordinator.commitTrustedCanonicalContent(
+      'socket-A2', a.mediaEpoch, 6_003, false), 'rejected');
+    assert.equal(coordinator.commitTrustedCanonicalContent(
+      'socket-A2', a2.mediaEpoch, 6_004, true), 'rejected',
+      'Take freeze cannot move a capture even with verified acoustic proof');
+    assert.equal(coordinator.commitTrustedCanonicalContent(
+      'socket-A2', a2.mediaEpoch, 6_005, false), 'applied');
+    assert.equal(coordinator.commitTrustedCanonicalContent(
+      'socket-A2', a2.mediaEpoch, 6_006, false), 'rejected',
+      'the stored proof cannot be consumed twice');
+    const output = coordinator.renderDue(6_020);
+    assert.equal(output.state, 'ready');
+    if (output.state !== 'ready') return;
+    assert.equal(output.frames[0].singers[0].mediaEpoch, a2.mediaEpoch);
+    assert.equal(output.frames[0].singers[0].awaitingCalibration, false);
+    assert.equal(output.frames[0].singers[0].calibrationSource, 'content');
+    assert.ok(Math.abs(output.frames[0].singers[0].calibrationTargetMs! - 120) <= 20);
+    assert.equal(output.frames[0].singers[1].mediaEpoch, b.mediaEpoch);
+    assert.equal(output.frames[0].singers[1].expected, true);
   });
 
   test('expired reconnect grace cannot silently restore a revoked primary seat', () => {

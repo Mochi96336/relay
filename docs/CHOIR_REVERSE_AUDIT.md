@@ -134,3 +134,52 @@ Not tested:
 
 **Product contract:** primary lost != secondary disconnected.
 Primary lost != song controller automatically transferred.
+
+## 2026-10-13 follow-up hardening — after initial audit
+
+Additional patches in Draft #576:
+
+- PCM ring writes now reject implausibly distant future packets using the
+  trusted singer anchor, so one bogus sequence number cannot slide retention
+  past samples that still belong to upcoming frames. The limit is in native
+  sample coordinates; arbitrary capture origin does not require starting at 0.
+- Song/backing epochs are now a room-wide invariant. A changed song or Robot
+  backing cannot be inserted into the old Choir audio instance; create an
+  explicitly new room audio epoch. A mismatched render is rejected before the
+  room's read head is consumed. Actual seamless epoch handoff remains to build.
+- Reinstalling an identical confirmed anchor does not reset the audible voice.
+  Small updates (<=5 ms in this **experimental** policy) first fade out the
+  old read trajectory, then adopt the new anchor at a frame boundary and fade
+  back in. Larger jumps are rejected pending *explicit* revalidation/retirement
+  rather than silently skipping/repeating a verse. The 5ms figure is a safe
+  prototype guard, **not an empirically validated acceptable error**.
+- Revoking a live anchor keeps a short fading output tail, retaining the MixBus
+  headroom until the tail is inaudible. The evidence of the switch-over frame
+  reports the *old* Content source that actually produced that frame.
+- The local follower seeks before playback when it has a large paused/cued
+  position mismatch, instead of playing the wrong verse until the next poll.
+- `installAnchor(..., {takeFrozen:true})` explicitly refuses a new alignment
+  while Take owns an immutable timeline. A future coordinator must provide the
+  trusted Take state; a caller can omit this gate in the isolated prototype.
+- A separate `test/choir-single-track-reference.test.ts` cross-checks a
+  single impulse's **event coordinate** against the existing AudioSession
+  output. This is *not* PCM bit-exact equivalence: the experimental voice
+  path still lacks the real limiter, concealment, clock trim, clipping evidence,
+  source-edge policy and full capture replacement machinery.
+
+Tests include dangerous future PCM timestamps, same-anchor retry, 360-ms
+fallback disagreement, 2-ms faded change, revoked-singer tail, paused follower
+resumption, Take freeze, and the AudioSession single-source event reference.
+
+### Remains mandatory before a production Choir switch
+
+1. Extract an actual `MicTrack` from the present AudioSession and compare
+   bit-exact Golden PCM/evidence for N=1 across the comprehensive existing
+   test suite. The event-coordinate test above is only a starting checkpoint.
+2. Integrate a **trusted** output/song epoch and native capture-to-room clock
+   map; include bounded, independently measured drift correction.
+3. Decide safety policy for *large* backup disagreements and output-device
+   changes. Do not arbitrarily select a 5ms or 200ms switch for real phones.
+4. Connect authenticated dual media upload, real fallback confirmation and
+   Take freeze to the canonical server. Until then the small '+ Secondary Mic'
+   button must remain absent from the deployed page.

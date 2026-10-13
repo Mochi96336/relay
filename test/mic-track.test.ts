@@ -423,6 +423,45 @@ describe('extracted MicTrack owns per-singer components independently', () => {
     assert.equal(a.clockTrim.samples, 1);
   });
 
+  test('only A conceals a real voiced gap and the missing evidence remains truthful', () => {
+    const a = new MicTrack(config);
+    const b = new MicTrack(config);
+    const tone = (first: number, count: number) => Int16Array.from(
+      { length: count },
+      (_, i) => Math.round(
+        8_000 * Math.sin(2 * Math.PI * 220 * (first + i) / 48_000)
+        + 3_000 * Math.sin(2 * Math.PI * 440 * (first + i) / 48_000),
+      ),
+    );
+    const previous = { start: 0, samples: tone(0, 2_048), positioned: true };
+    const next = { start: 3_008, samples: tone(3_008, 960), positioned: true };
+    const rawNext = next.samples.slice();
+    a.timeline.chunks.push(previous, next);
+    a.timeline.totalSamples = 3_968;
+    assert.equal(a.concealCaptureGap(previous, next, 2_048), true);
+    assert.equal(a.timeline.chunks.length, 3);
+    assert.equal(a.timeline.chunks[1].concealed, true);
+    assert.equal(a.timeline.chunks[1].start, 2_048);
+    assert.equal(a.micConcealedSamples, 960);
+    assert.equal(a.timeline.chunks[1].samples.length, 960);
+    assert.equal(a.timeline.chunks[2].start, 3_008);
+    assert.notStrictEqual(next.samples, rawNext, 'only the retained output PCM is rewritten');
+    assert.equal(b.timeline.chunks.length, 0);
+    assert.equal(b.micConcealedSamples, 0);
+  });
+
+  test('an already emitted capture tail forbids retrospective concealment', () => {
+    const a = new MicTrack(config);
+    const previous = { start: 0, samples: new Int16Array(2_048), positioned: true };
+    const next = { start: 3_008, samples: new Int16Array(960), positioned: true };
+    a.timeline.chunks.push(previous, next);
+    a.timeline.totalSamples = 3_968;
+    a.lastEmittedMicSourceSample = 2_047;
+    assert.equal(a.concealCaptureGap(previous, next, 2_048), false);
+    assert.equal(a.timeline.chunks.length, 2);
+    assert.equal(a.micConcealedSamples, 0);
+  });
+
   test('current AudioSession still uses its actual existing Mic clock and limits', () => {
     const session = new AudioSession({
       sampleRate: 48_000, frameMs: 20, prebufferMs: 400,

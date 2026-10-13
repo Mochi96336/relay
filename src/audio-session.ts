@@ -1,7 +1,6 @@
 import { performance } from 'node:perf_hooks';
 
 import { CaptureRestartBoundaries } from './capture-restart-boundaries.js';
-import { concealGap } from './packet-loss-concealment.js';
 import type { PcmFrame } from './pcm-frame.js';
 import {
   emptyPcmTimeline,
@@ -27,6 +26,7 @@ import type { MicSlewRead } from './mic-frame-reader.js';
 import { MixBus } from './mix-bus.js';
 import { MicTrack, type AlignmentState, type MicReadPlan } from './mic-track.js';
 import { SourceOutputEdge } from './source-output-edge.js';
+import { declickSourceGap } from './pcm-source-edge-taper.js';
 
 /**
  * Owns the live mix: both PCM timelines, the session clock, the alignment the
@@ -139,19 +139,6 @@ const MIC_READ_HEAD_CROSSFADE_MS = 5;
  * samples immediately adjacent to it.
  */
 const SOURCE_GAP_DECLICK_MS = 2;
-
-/**
- * Real Mic history handed to concealment. Fifty milliseconds holds three
- * periods even at the 60 Hz lower pitch bound; a little extra room keeps the
- * pitch correlation window independent from that variation history.
- */
-const MIC_CONCEALMENT_HISTORY_MS = 60;
-
-/**
- * Unemitted real audio concealment needs in front of a hole: its 4 ms join,
- * plus the limiter's 3 ms look-ahead that may already have inspected it.
- */
-const MIC_CONCEALMENT_JOIN_GUARD_MS = 8;
 
 /** Where a batch of ingested samples landed on the shared session timeline. */
 export type IngestResult = {
@@ -674,88 +661,14 @@ export class AudioSession {
       && currentChunk.start > previousTotalSamples
     );
     if (startsAfterGap && previousChunk && currentChunk) {
-      if (!this.concealMicGap(previousChunk, currentChunk, previousTotalSamples)) {
-        this.declickSourceGap(previousChunk, currentChunk.samples, this.micTrack.firstUnheardSample());
+      if (!this.micTrack.concealCaptureGap(previousChunk, currentChunk, previousTotalSamples)) {
+        declickSourceGap(
+          previousChunk, currentChunk.samples,
+          this.micTrack.firstUnheardSample(), this.sourceEdgeFadeSamples,
+        );
       }
     }
     return result;
-  }
-
-  /**
-   * Fills a proven same-capture hole with pitch-synchronous repetition instead
-   * of silence. The hole's evidence is unchanged: `gapSamples` still counts it
-   * and every evidence reader treats the concealed chunk as missing, so Take
-   * quality, playability and calibration see exactly the loss that happened.
-   * Only the audible output differs.
-   */
-  private concealMicGap(previousChunk: PcmChunk, currentChunk: PcmChunk, gapStart: number) {
-    if (!previousChunk.positioned || !currentChunk.positioned) return false;
-    // Concealment rewrites the last few milliseconds before the hole so the
-    // repetition joins without a step. Once the read head has emitted those
-    // samples the join cannot happen, and the output-side frontier edge already
-    // owns continuity from what was actually heard - keep that path.
-    const emitted = this.micTrack.lastEmittedMicSourceSample;
-    const guardSamples = Math.round((MIC_CONCEALMENT_JOIN_GUARD_MS * this.sampleRate) / 1000);
-    if (emitted !== null && emitted >= gapStart - guardSamples) return false;
-    const gapSamples = currentChunk.start - gapStart;
-    const historyLength = gapStart - this.micConcealmentHistoryStart(gapStart);
-    if (gapSamples <= 0 || historyLength <= 0) return false;
-    const history = readPcmRange(this.mic, gapStart - historyLength, historyLength);
-    // Copy on write. The joins only change what the mix will read: the PCM the
-    // ingest result already handed to calibration, validation and meters stays
-    // exactly what arrived.
-    const previous = previousChunk.samples.slice();
-    const next = currentChunk.samples.slice();
-    const concealment = concealGap(
-      history,
-      previous,
-      next,
-      gapSamples,
-      { sampleRate: this.sampleRate },
-    );
-    if (!concealment) return false;
-    previousChunk.samples = previous;
-    currentChunk.samples = next;
-
-    const chunks = this.mic.chunks;
-    chunks.splice(chunks.length - 1, 0, {
-      start: gapStart,
-      samples: concealment.fill,
-      positioned: true,
-      concealed: true,
-    });
-    this.micTrack.micConcealedSamples += concealment.fill.length;
-    // Without a blend the repetition has faded to silence by the end of the
-    // hole (a long hole, or one exactly as long as the fade). Returning from
-    // that silence is an ordinary source edge.
-    if (concealment.blendedNextSamples === 0) this.fadeInSourceEdge(currentChunk.samples);
-    return true;
-  }
-
-  /**
-   * Oldest sample concealment may learn a period from: contiguous audio of the
-   * current acoustic capture only. A pitch cycle spliced across a capture
-   * restart or an earlier hole is not a period of anything the singer sang.
-   */
-  private micConcealmentHistoryStart(gapStart: number) {
-    const floor = Math.max(
-      0,
-      gapStart - Math.round((MIC_CONCEALMENT_HISTORY_MS * this.sampleRate) / 1000),
-      this.micTrack.micCaptureOriginSample ?? 0,
-    );
-    const chunks = this.mic.chunks;
-    let start = gapStart;
-    // The last chunk is the one that just proved the hole.
-    for (let index = chunks.length - 2; index >= 0 && start > floor; index -= 1) {
-      const chunk = chunks[index];
-      if (
-        !chunk.positioned
-        || chunk.concealed
-        || chunk.start + chunk.samples.length !== start
-      ) break;
-      start = chunk.start;
-    }
-    return Math.max(start, floor);
   }
 
   ingestBacking(
@@ -795,7 +708,10 @@ export class AudioSession {
     );
     if (startsAfterGap && previousChunk && currentChunk) {
       // The Backing is read at the mix position itself.
-      this.declickSourceGap(previousChunk, currentChunk.samples, this.frameIndex * this.frameSamples);
+      declickSourceGap(
+        previousChunk, currentChunk.samples,
+        this.frameIndex * this.frameSamples, this.sourceEdgeFadeSamples,
+      );
     }
     return result;
   }
@@ -1193,42 +1109,6 @@ export class AudioSession {
    * deliberately not packet-loss concealment: no old sample is stretched or
    * copied across the missing capture.
    */
-  private fadeOutSourceEdge(previous: Int16Array) {
-    const fadeOutSamples = Math.min(this.sourceEdgeFadeSamples, previous.length);
-    for (let offset = 0; offset < fadeOutSamples; offset += 1) {
-      const index = previous.length - fadeOutSamples + offset;
-      const weight = fadeOutSamples <= 1
-        ? 0
-        : (fadeOutSamples - 1 - offset) / (fadeOutSamples - 1);
-      previous[index] = Math.round(previous[index] * weight);
-    }
-  }
-
-  private fadeInSourceEdge(next: Int16Array) {
-    const fadeInSamples = Math.min(this.sourceEdgeFadeSamples, next.length);
-    for (let index = 0; index < fadeInSamples; index += 1) {
-      const weight = fadeInSamples <= 1 ? 0 : index / (fadeInSamples - 1);
-      next[index] = Math.round(next[index] * weight);
-    }
-  }
-
-  /**
-   * Tapers the real PCM on both sides of a proven same-capture hole, in the
-   * retained timeline. Only audio nobody has heard yet may be rewritten. When
-   * part of the taper before the hole was already emitted, rewriting the rest
-   * made it start part-way down the ramp - a step against what was heard - so
-   * that tail is left alone and the mix output's missing-source edge fades out
-   * from what was actually heard instead.
-   */
-  private declickSourceGap(previous: PcmChunk, next: Int16Array, firstUnheardSample: number) {
-    const taper = Math.min(this.sourceEdgeFadeSamples, previous.samples.length);
-    const previousEnd = previous.start + previous.samples.length;
-    if (previousEnd - Math.max(previous.start, firstUnheardSample) >= taper) {
-      this.fadeOutSourceEdge(previous.samples);
-    }
-    this.fadeInSourceEdge(next);
-  }
-
   /**
    * The first Mic timeline sample the mix has not read. A slewed read
    * interpolates, so the sample after a fractional position was read too.

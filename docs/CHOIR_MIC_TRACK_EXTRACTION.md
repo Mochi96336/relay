@@ -241,3 +241,20 @@ Tests exercise simultaneous opposing +500/-500 ppm adjustments, retained
 resampler prefixes, and a discontinuous packet that cannot pay trim debt.
 The generic PCM ingest/resampler still belongs to AudioSession and remains
 shared with the Backing capture. A genuine second Publisher is not yet wired.
+
+
+## Stage 11: same-capture Mic hole concealment belongs to MicTrack
+
+The live `AudioSession.ingestMic()` now calls
+`MicTrack.concealCaptureGap()`. This is the unmodified pitch-synchronous
+concealment algorithm with the existing 60ms recent-history floor and 8ms
+already-emitted join guard. It only consults that singer's own captured PCM,
+current capture origin and last emitted source position. It preserves
+`concealed: true` evidence, so Listen/Take quality and calibrations still
+see the missing source even if an audible preview uses synthesized fill.
+
+The 2ms PCM hole tapers are now shared pure functions in
+`src/pcm-source-edge-taper.ts`, used by both MicTrack and canonical Backing
+without duplicating algorithms. New isolated tests cover A filling a 20ms
+voiced hole while B remains untouched, and refusing to overwrite already
+heard samples. Existing N=1 Golden PCM digests remain immutable.

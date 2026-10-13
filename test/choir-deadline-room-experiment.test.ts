@@ -591,6 +591,17 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     assert.ok(Math.abs(output.frames[0].singers[0].calibrationTargetMs! - 120) <= 20);
     assert.equal(output.frames[0].singers[1].mediaEpoch, b.mediaEpoch);
     assert.equal(output.frames[0].singers[1].expected, true);
+
+    // An analysis performed for A2's native Capture generation 7 is NOT proof
+    // for a restarted device generation 8, even on the same authenticated socket.
+    const pendingOldCapture = coordinator.analyzeTrustedCanonicalContent(
+      'socket-A2', a2.mediaEpoch, 0, 6_021);
+    assert.equal(pendingOldCapture.status, 'candidate');
+    assert.equal(coordinator.receiveFromTransport('socket-A2',
+      captured(FRAME, 4_000, 0, 8), RATE, 6_022), true);
+    assert.equal(coordinator.commitTrustedCanonicalContent(
+      'socket-A2', a2.mediaEpoch, 6_023, false), 'rejected',
+      'an old correlation cannot be relabeled as a new capture-generation proof');
   });
 
   test('expired reconnect grace cannot silently restore a revoked primary seat', () => {

@@ -722,9 +722,7 @@ test('production DOM: Song stays a fixed 100% reference whatever the Relay echoe
   }));
   await expect(page.locator('#mic-gain')).toHaveValue('18');
   await expect(page.locator('#mic-gain-value')).toHaveText('+18 dB');
-  await expect(page.locator('#song-level')).toHaveValue('100');
-  await expect(page.locator('#song-level-value')).toHaveText('100%');
-  await expect(page.locator('#song-level')).toBeDisabled();
+  await expect(page.locator('#song-level')).toHaveCount(0);
   await expect(page.locator('#mic-gain')).toBeEnabled();
 
   await page.locator('#mic-gain').focus();

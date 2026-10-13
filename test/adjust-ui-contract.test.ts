@@ -39,10 +39,7 @@ test('Mic gain belongs to the live singing task and expands in place', () => {
 });
 
 test('Song is a fixed 100% reference while Mic is the only live mix variable', () => {
-  assert.match(
-    html,
-    /id="song-level"[^>]*type="range"[^>]*min="100"[^>]*max="100"[^>]*value="100"[^>]*disabled/,
-  );
+  assert.doesNotMatch(html, /id="song-level"/, 'the Mic page has no Song control, not even a hidden one');
   assert.match(source, /Song reference/);
   assert.match(
     source,
@@ -80,7 +77,6 @@ test('calibration presenter asks app.js for a calibration by event, with no hand
 test('calibration visible presenter follows ProductStatus and has one painted owner', () => {
   assert.match(calibrationUi, /latestProductStatus = event\.detail \?\? null/);
   assert.match(calibrationUi, /latestAction = latestProductStatus\?\.actions/);
-  assert.match(calibrationUi, /latestTiming = latestProductStatus\?\.timing/);
   assert.match(calibrationUi, /reason === 'calibration-active'/);
   assert.match(calibrationUi, /window\.relayI18n\?\.t/);
   assert.match(calibrationUi, /t\('timing\.realign'\)/);

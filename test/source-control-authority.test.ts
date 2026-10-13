@@ -14,7 +14,7 @@ test('Desktop Source no longer exposes authority-bearing singer commands', () =>
   assert.match(sourceHtml, /id="source-volume"[^>]*disabled/);
   assert.match(sourceHtml, /id="source-mic-gain"[^>]*disabled/);
   assert.match(sourceHtml, /id="vocal-fine-tune"[^>]*disabled/);
-  assert.match(sourceHtml, /id="start-timing-calibration"[^>]*hidden[^>]*disabled/);
+  assert.doesNotMatch(sourceHtml, /id="start-timing-calibration"/);
 });
 
 test('The Mic page has no vocal fine tune control and sends no fine-tune command', () => {

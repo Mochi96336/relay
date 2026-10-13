@@ -4,8 +4,6 @@
 
 const micGain = document.querySelector('#mic-gain');
 const micGainValue = document.querySelector('#mic-gain-value');
-const songLevel = document.querySelector('#song-level');
-const songLevelValue = document.querySelector('#song-level-value');
 
 const SLIDER_HOLD_MS = 2000;
 export const FIXED_SONG_LEVEL = 100;
@@ -42,7 +40,6 @@ function sliderIsBusy(element) {
 
 export function updateMixLabels() {
   micGainValue.value = signed(micGain.value, ' dB');
-  songLevelValue.value = `${Math.round(Number(songLevel.value) || 0)}%`;
 }
 
 export function micGainDb() {
@@ -67,7 +64,6 @@ export function acceptMixSettings(message) {
     };
     if (!sliderIsBusy(micGain)) micGain.value = String(nextGain);
   }
-  songLevel.value = String(FIXED_SONG_LEVEL);
   updateMixLabels();
   return accepted;
 }
@@ -85,19 +81,13 @@ export function acceptVocalFineTune(message) {
 
 export function setSingerControlsEnabled(actionable) {
   micGain.disabled = !actionable;
-  // Compatibility only: Song is a fixed server-owned reference, never an
-  // interactive singer control even while this participant owns the Mic.
-  songLevel.disabled = true;
 }
 
-/** Calls `onMix` each time the singer moves a slider. */
+/** Calls `onMix` each time the singer moves the Mic gain slider. */
 export function listenForSingerInput({ onMix }) {
-  for (const slider of [micGain, songLevel]) {
-    slider.addEventListener('input', () => {
-      markSliderTouched(slider);
-      onMix();
-    });
-    slider.addEventListener('change', () => markSliderTouched(slider));
-  }
-
+  micGain.addEventListener('input', () => {
+    markSliderTouched(micGain);
+    onMix();
+  });
+  micGain.addEventListener('change', () => markSliderTouched(micGain));
 }

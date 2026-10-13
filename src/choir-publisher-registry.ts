@@ -86,6 +86,12 @@ export class ChoirPublisherRegistry {
       };
     }
 
+    // Fail before ANY seat mutation; an exhausted global epoch sequence must
+    // not grant the primary Mic and then reject its publisher allocation.
+    if (!Number.isSafeInteger(this.nextMediaEpoch)
+      || this.nextMediaEpoch >= Number.MAX_SAFE_INTEGER) {
+      return { ok: false, reason: 'invalid' };
+    }
     const before = this.seats.primaryMicId;
     const action = seat === 'primary'
       ? this.seats.claimPrimary(id, request.expectedPrimaryId ?? null)
@@ -104,10 +110,6 @@ export class ChoirPublisherRegistry {
       }
     }
 
-    if (!Number.isSafeInteger(this.nextMediaEpoch)
-      || this.nextMediaEpoch >= Number.MAX_SAFE_INTEGER) {
-      return { ok: false, reason: 'invalid' };
-    }
     if (existing) this.byTransport.delete(existing.transportId);
     const admission: Admission = {
       participantId: id, transportId,

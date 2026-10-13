@@ -330,6 +330,88 @@ describe('canonical MicTrack N=2 through the production MixBus (no live server)'
       `final position should approach the 2ms Content target: ${JSON.stringify(offsets)}`);
   });
 
+  test('large Content mismatch preserves fallback PCM until a new verified capture reacquires', () => {
+    const mix = room();
+    const A2 = { ...A, mediaEpoch: A.mediaEpoch + 1 };
+    const A3 = { ...A, mediaEpoch: A.mediaEpoch + 2 };
+    mix.addSinger(A);
+    mix.addSinger(B);
+    mix.setGainDb(A, 0);
+    mix.setGainDb(B, 0);
+    mix.ingestMic(A, pcm(FRAME, 7_000), RATE, FRAME);
+    mix.ingestMic(B, pcm(FRAME * 75, 6_000), RATE, FRAME * 75);
+    mix.disconnect(A);
+    for (let i = 0; i < 3; i++) mix.render(i * FRAME);
+    assert.equal(mix.replaceDisconnectedSinger(A2), true);
+    mix.setGainDb(A2, 0);
+    mix.ingestMic(A2, pcm(FRAME * 22, 9_000), RATE, FRAME * 22);
+    const fallback = {
+      source: 'sample-song-estimate' as const, advanceMs: 0,
+      sampleResidualMs: null, bootResidualMs: null,
+      sampleCandidateMs: 0, bootCandidateMs: null,
+    };
+    const content = { ...fallback, source: 'content' as const, advanceMs: 60 };
+    assert.equal(mix.acceptReboundAlignment(A2, fallback), true);
+    for (let i = 3; i < 9; i++) mix.render(i * FRAME);
+    assert.equal(mix.stageLargeContentReacquisition(A2, 1, content, true), false,
+      'Take freeze blocks staging a disruptive re-acquisition');
+    assert.equal(mix.stageLargeContentReacquisition(A2, 1,
+      { ...content, source: 'content-held' }, false), false);
+    assert.equal(mix.stageLargeContentReacquisition(A2, 1,
+      { ...content, advanceMs: 2 }, false), false,
+      'a small difference belongs to the bounded live slew, not a new capture');
+    assert.equal(mix.stageLargeContentReacquisition(A2, 1, content, false), true);
+    assert.equal(mix.stageLargeContentReacquisition(A2, 1, content, false), false);
+    assert.equal(mix.recoverContentWithoutJump(A2, 2,
+      { ...content, advanceMs: 2 }, false), false,
+      'staged large disagreement cannot be silently overridden by a small one');
+    for (let i = 9; i <= 10; i++) {
+      const frame = mix.render(i * FRAME);
+      assert.equal(frame.singers[0].reacquisitionPending, true);
+      assert.equal(frame.singers[0].calibrationSource, 'sample-song-estimate');
+      assert.equal(frame.singers[0].calibrationTargetMs, 0);
+      assert.ok(frame.singers[0].voicePeakAbs > 0.1);
+      assert.ok(frame.singers[1].voicePeakAbs > 0.1);
+      assert.equal(frame.outputClippedSamples, 0);
+    }
+    assert.equal(mix.disconnect(A2), true);
+    assert.equal(mix.replaceDisconnectedSinger(A3), false,
+      'the old audible fallback still owns its captured PCM tail');
+    let next = 11;
+    while (!mix.canRebindDisconnected('singer-a') && next < 48) {
+      mix.render(next * FRAME);
+      next++;
+    }
+    assert.equal(mix.canRebindDisconnected('singer-a'), true);
+    assert.equal(mix.replaceDisconnectedSinger(A3), true);
+    assert.equal(mix.acceptReboundAlignment(A3, fallback), false,
+      'large-mismatch reacquisition must not silently use Sample again');
+    assert.equal(mix.acceptReboundAlignment(A3, content), false,
+      'normal calibration route cannot bypass fresh-capture Content proof');
+    const proof = { mediaEpoch: A3.mediaEpoch, captureGeneration: 7, revision: 1 };
+    assert.equal(mix.acceptReacquiredContent(A2, proof, content), false,
+      'old media epoch cannot authorize fresh capture');
+    assert.equal(mix.acceptReacquiredContent(A3, proof, content), false,
+      'no new-generation PCM means no fresh acoustic capture evidence');
+    assert.equal(mix.ingestMic(A3, pcm(FRAME * 75, 12_000, 0, 7), RATE, FRAME * 75), true);
+    assert.equal(mix.acceptReacquiredContent(A3,
+      { ...proof, mediaEpoch: A2.mediaEpoch }, content), false);
+    assert.equal(mix.acceptReacquiredContent(A3,
+      { ...proof, captureGeneration: 1 }, content), false);
+    assert.equal(mix.acceptReacquiredContent(A3, proof,
+      { ...content, source: 'content-held' },), false);
+    assert.equal(mix.acceptReacquiredContent(A3, proof, content), true);
+    assert.equal(mix.acceptReacquiredContent(A3, proof, content), false);
+    const audible = mix.render(next * FRAME);
+    assert.equal(audible.singers[0].mediaEpoch, A3.mediaEpoch);
+    assert.equal(audible.singers[0].requiresFreshContent, false);
+    assert.equal(audible.singers[0].calibrationSource, 'content');
+    assert.equal(audible.singers[0].calibrationTargetMs, 60);
+    assert.ok(audible.singers[0].voicePeakAbs > 0.1,
+      'new native PCM actually returns through the canonical limiter and mixer');
+    assert.ok(audible.singers[1].voicePeakAbs > 0.1, 'B remains audible and independent');
+  });
+
   test('future-dated, duplicate and stale capture packets never move one singer timeline', () => {
     const mix = room();
     assert.equal(mix.addSinger(A), true);

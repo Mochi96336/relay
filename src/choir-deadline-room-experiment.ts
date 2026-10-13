@@ -226,6 +226,28 @@ export class ChoirDeadlineRoomExperiment {
     }, decision);
   }
 
+  /**
+   * Server-only handoff for a NEW verified Content proof replacing a rebound
+   * Sample/Boot estimate. Callers must have checked source identity, revision,
+   * and raw acoustic evidence; the room only enforces playback safety.
+   * No automatic fallback-to-Content promotion from client observations.
+   */
+  acceptTrustedLiveContentRecovery(
+    transportId: string, mediaEpoch: number, proofRevision: number,
+    decision: ChoirAlignmentDecision, nowMs: number,
+    takeFrozen: boolean,
+  ): boolean {
+    if (!this.sealDueNow(nowMs)) return false;
+    const active = this.registry.activePublisherForTransport(transportId);
+    if (!active || active.mediaEpoch !== mediaEpoch) return false;
+    return this.room.recoverContentWithoutJump({
+      participantId: active.participantId,
+      mediaEpoch: active.mediaEpoch,
+      songEpoch: this.songEpoch,
+      backingGeneration: this.backingGeneration,
+    }, proofRevision, decision, takeFrozen);
+  }
+
   disconnectTransport(transportId: string, nowMs: number): boolean {
     if (!this.sealDueNow(nowMs)) return false;
     const active = this.registry.activePublisherForTransport(transportId);

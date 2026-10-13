@@ -222,6 +222,24 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     if (resumed.state !== 'ready') throw Error('post calibration must advance');
     assert.equal(resumed.frames[0].singers[0].awaitingCalibration, false);
     assert.equal(resumed.frames[0].singers[1].expected, true);
+    // A2 was freshly captured at 263ms, hence it belongs near room sample
+    // 12,624 and can only become audible when frame 12's 200ms-delayed
+    // output is sealed. Prove the reconnected Mic is actually heard there.
+    assert.equal(coordinator.receiveFromTransport('socket-B',
+      captured(FRAME * 10, 7_000, FRAME * 12), RATE, 301), true);
+    let reboundAudible = false;
+    let otherAudible = false;
+    for (let clock = 320; clock <= 480; clock += 20) {
+      const out = coordinator.renderDue(clock);
+      if (out.state !== 'ready') throw Error('monotonic room stalled');
+      const aMic = out.frames[0].singers[0];
+      const bMic = out.frames[0].singers[1];
+      if (aMic.voicePeakAbs > 0.1) reboundAudible = true;
+      if (bMic.voicePeakAbs > 0.1) otherAudible = true;
+    }
+    assert.equal(reboundAudible, true,
+      'A2 actual captured PCM passes through canonical gain and limiter on due output');
+    assert.equal(otherAudible, true, 'B canonical PCM continues across A2 rebind');
   });
 
   test('explicit B Take Mic requires authenticated transport and fresh CAS, no song takeover', () => {

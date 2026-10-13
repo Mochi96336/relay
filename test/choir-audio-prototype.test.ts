@@ -193,22 +193,26 @@ describe('Choir Audio prototype: actual PCM and one room output clock', () => {
     assert.equal(room.holdAnchor(B.participantId), false);
   });
 
-  test('old song/backing epochs cannot poison a reinitialized Mic with the same capture generation', () => {
-    const room = subject();
-    install(room, A);
-    assert.equal(room.addSinger({ ...A, songEpoch: SONG + 1 }), true);
-    assert.equal(packet(room, A, 0, new Int16Array(FRAME).fill(18_000)), 'invalid');
-    assert.equal(room.receiveMic({
+  test('a song/backing restart requires a new room epoch; old packets cannot contaminate it', () => {
+    const oldRoom = subject();
+    install(oldRoom, A);
+    assert.equal(oldRoom.addSinger({ ...A, songEpoch: SONG + 1 }), false,
+      'the existing room cannot silently replace the authoritative song');
+    assert.equal(oldRoom.addSinger({ ...B, backingGeneration: BACKING + 1 }), false);
+
+    // The experimental prototype requires an explicit new room instance.
+    // There is intentionally no implicit attempt to splice incompatible
+    // song and backing epochs while its output head is still running.
+    const newRoom = subject();
+    const newIdentity = { ...A, songEpoch: SONG + 1, backingGeneration: BACKING + 1 };
+    assert.equal(newRoom.addSinger(newIdentity), true);
+    assert.equal(packet(newRoom, A, 0, new Int16Array(FRAME)), 'invalid');
+    assert.equal(newRoom.receiveMic({
       participantId: A.participantId, songEpoch: SONG + 1,
-      backingGeneration: BACKING, captureGeneration: A.captureGeneration,
-      firstSampleIndex: 0, pcm: new Int16Array(FRAME).fill(10_000),
+      backingGeneration: BACKING + 1, captureGeneration: A.captureGeneration,
+      firstSampleIndex: 0, pcm: new Int16Array(FRAME),
     }), 'accepted');
-    assert.equal(room.addSinger({ ...A, songEpoch: SONG + 1, backingGeneration: BACKING + 1 }), true);
-    assert.equal(room.receiveMic({
-      participantId: A.participantId, songEpoch: SONG + 1,
-      backingGeneration: BACKING, captureGeneration: A.captureGeneration,
-      firstSampleIndex: 0, pcm: new Int16Array(FRAME).fill(12_000),
-    }), 'invalid');
+    assert.equal(newRoom.installAnchor(anchor(A, 0), 'content'), false);
   });
 
   test('giant packets and implausible rates cannot exhaust the native PCM ring', () => {

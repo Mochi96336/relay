@@ -370,6 +370,9 @@ export class ChoirAudioPrototype {
         frameSamples: this.frameSamples,
       };
       const plan = track.anchor ? planChoirRead(track.anchor, request) : null;
+      // Frame diagnostics must describe the samples actually rendered from
+      // the OLD anchor, not the pending new one adopted at the frame boundary.
+      const frameCalibration = plan ? track.calibration : 'none';
       let availableSamples = 0;
       for (let i = 0; i < this.frameSamples; i++) {
         const sourcePosition = plan ? plan.micFirstSample + i * plan.micStep : -1;
@@ -403,7 +406,7 @@ export class ChoirAudioPrototype {
       }
       evidence.push({
         participantId: track.identity.participantId,
-        calibration: plan ? track.calibration : 'none',
+        calibration: frameCalibration,
         availableSamples, missingSamples: this.frameSamples - availableSamples,
         latePackets: track.latePackets,
       });

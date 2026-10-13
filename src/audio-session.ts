@@ -27,6 +27,7 @@ import { MicRawMeter } from './mic-raw-meter.js';
 import { readMicSlewedRange, crossfadeMicReadHeadJump, type MicSlewRead } from './mic-frame-reader.js';
 import { classifyMicReadMotion } from './mic-read-plan.js';
 import { MixBus } from './mix-bus.js';
+import { MicTrack } from './mic-track.js';
 import { SourceOutputEdge } from './source-output-edge.js';
 
 /**
@@ -220,7 +221,9 @@ export class AudioSession {
   private readonly retentionSamples: number;
   private readonly backingRetentionSamples: number;
 
-  private readonly mic = emptyPcmTimeline();
+  /** Current canonical MicTrack — N=1's existing runtime now uses this state. */
+  private readonly micTrack: MicTrack;
+  private readonly mic: PcmTimeline;
   private readonly backing = emptyPcmTimeline();
 
   private running = false;
@@ -263,10 +266,10 @@ export class AudioSession {
    * Keep every unread old-capture frontier in order: more than one restart can
    * arrive before the mix read head reaches the first boundary.
    */
-  private readonly micCaptureRestartBoundaries = new CaptureRestartBoundaries();
+  private readonly micCaptureRestartBoundaries: CaptureRestartBoundaries;
   private readonly backingCaptureRestartBoundaries = new CaptureRestartBoundaries();
   /** Proven raw-input flat tops of the Mic, on its retained session timeline. */
-  private readonly micInputClipping = new MicInputClipping();
+  private readonly micInputClipping: MicInputClipping;
   /**
    * Audible edges of each source at the mix output: replacement transitions,
    * and missing-source fades that a timeline which is contiguous again (late
@@ -308,33 +311,40 @@ export class AudioSession {
     this.frameMs = options.frameMs;
     this.frameSamples = Math.round((options.sampleRate * options.frameMs) / 1000);
     this.prebufferMs = options.prebufferMs;
-    this.micGain = new MicGainRamp(options.sampleRate);
-    this.micLimiter = new MicLimiter(options.sampleRate);
-    this.micRawMeter = new MicRawMeter(options.sampleRate);
+    this.sourceEdgeFadeSamples = Math.max(
+      1,
+      Math.round((SOURCE_GAP_DECLICK_MS * options.sampleRate) / 1000),
+    );
+    this.micTrack = new MicTrack({
+      sampleRate: options.sampleRate,
+      frameMs: options.frameMs,
+      frameSamples: this.frameSamples,
+      sourceEdgeFadeSamples: this.sourceEdgeFadeSamples,
+      safetyMs: ADVANCE_SAFETY_MS,
+      slewFraction: RUNTIME_CALIBRATION_SLEW_FRACTION,
+    });
+    // Keep the existing single-Mic methods literally unchanged: their fields
+    // point to exactly the same component instances owned by micTrack.
+    this.mic = this.micTrack.timeline;
+    this.micGain = this.micTrack.gain;
+    this.micLimiter = this.micTrack.limiter;
+    this.micRawMeter = this.micTrack.meter;
+    this.micCaptureRestartBoundaries = this.micTrack.captureRestarts;
+    this.micInputClipping = this.micTrack.clipping;
+    this.micEdge = this.micTrack.edge;
+    this.micFrontier = this.micTrack.frontier;
+    this.micClockTrim = this.micTrack.clockTrim;
+
     this.bus = new MixBus({
       sampleRate: options.sampleRate,
       backingGain: options.backingGain,
       voiceCeiling: this.micLimiter.ceiling,
     });
-    this.sourceEdgeFadeSamples = Math.max(
-      1,
-      Math.round((SOURCE_GAP_DECLICK_MS * options.sampleRate) / 1000),
-    );
-    this.micEdge = new SourceOutputEdge(this.sourceEdgeFadeSamples);
     this.backingEdge = new SourceOutputEdge(this.sourceEdgeFadeSamples);
     this.retentionMs = options.retentionMs;
     this.retentionSamples = Math.round((options.retentionMs * options.sampleRate) / 1000);
     this.backingRetentionMs = options.backingRetentionMs ?? 1_000;
     this.backingRetentionSamples = Math.round((this.backingRetentionMs * options.sampleRate) / 1000);
-    this.micFrontier = new MicFrontierCorrection({
-      sampleRate: options.sampleRate,
-      frameMs: options.frameMs,
-      frameSamples: this.frameSamples,
-      lookaheadSamples: this.micLimiter.lookaheadSamples,
-      safetyMs: ADVANCE_SAFETY_MS,
-      slewFraction: RUNTIME_CALIBRATION_SLEW_FRACTION,
-    });
-    this.micClockTrim = new MicClockTrim(options.sampleRate);
   }
 
   get active() {

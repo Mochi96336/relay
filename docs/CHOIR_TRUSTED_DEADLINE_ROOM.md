@@ -467,3 +467,62 @@ authorized participant handshakes. Merely passing fields to a
 source of authenticity. Do not wire these methods straight to client
 WebSocket or WebTransport messages. This change also does not build an
 automatic primary-Mic succession or physical two-phone runtime.
+
+## Server-authoritative SongSession bridge (offline-only)
+
+A dedicated `ChoirSongSessionBridgeExperiment` now reads the actual
+`SongSession.statusPayload(nowMs)` object, **after SongSession has accepted a
+playback publisher**. It does not read raw WebSocket song telemetry, accept a
+client-submitted revision, or mint playback leadership. On first valid playing
+status it initializes the fixed Choir mapping using SongSession's server-owned
+revision and leader identity. Subsequent stable clock projections do nothing:
+the adapter does **not** invalidate a room every 20 ms or on every telemetry
+heartbeat.
+
+For a bridge status to initialize, the SongSession must report a fresh,
+connected PLAYING leader, no active handoff, valid 11-character expected
+video, a finite plausible playback rate, a non-negative server revision,
+a consistent playback participant/transport/generation, and a finite
+projected media position. The leader's accepted transport ID and page
+generation are independently tracked. Ordinary rejected or hostile
+telemetry never becomes Choir clock authority because it cannot update the
+server-owned SongSession.
+
+Once initialized, ANY accepted SongSession semantic revision, pause,
+seek, rate/video change, leader transport/page generation change, active
+handoff, loss of leader freshness, or projected-time jump of over 400 ms
+causes an irreversible experimental `playback-mapping-changed` latch.
+The cancelled room drops queued output without rendering stale catch-up
+frames and discards pending Content. SongSession remains unmodified.
+A fresh room epoch is required for any restart; this does not automatically
+promote the secondary singer or silently relabel the old Mic.
+
+**Important distinct generations:** the playback tab's
+`SongSession.playbackGeneration` identifies its authenticated YouTube
+page incarnation; Robot's canonical `backingGeneration` identifies the
+backing PCM capture origin. They are *not* interchangeable integers.
+The bridge tracks the former and passes the room's server-fixed latter to
+the Robot PCM provenance guard. The test deliberately uses playback page
+generation 1 and backing capture generation 9.
+
+### Future integration points (not wired to production)
+
+The current production server already owns `youtubeTimeline: SongSession`
+in `src/server.ts`. Its authenticated telemetry gate precedes
+`youtubeTimeline.update(...)`, and only an accepted result enters
+`youtubeTelemetryAccepted`. A production Choir adapter should observe
+the SongSession **after that accepted update**, after playback
+`detach(...)`, and at a bounded periodic freshness check independent of
+incoming packets. The authenticated Robot transport path is separate:
+`robotSourceActivated`, `robotSourceClosed`, and the backing capture
+restart path must supply backing-generation continuity and invalidate
+the new Choir epoch before old Content may be re-applied.
+
+The offline bridge proves these control-plane contracts with real
+SongSession instances and accepted telemetry. It **does not** connect a
+live Choir endpoint, trust browser-reported acoustics as independent proof,
+take over the existing production Mic, or change the N=1 AudioSession.
+Actual server wiring needs the trusted Robot source clock and the backing
+PCM ingest boundary plus a room restart handshake. In particular, a
+fresh SongSession timeline proves admission/clock control, not by itself
+that a physical singer heard the correct YouTube position.

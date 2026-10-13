@@ -1,5 +1,6 @@
 import { MixBus } from './mix-bus.js';
 import { MicTrack } from './mic-track.js';
+import { ChoirContentPcmBuffer } from './choir-content-pcm-buffer.js';
 import type { ChoirAlignmentDecision } from './choir-calibration-experiment.js';
 import { ingestPcmTimeline } from './pcm-ingest.js';
 import type { PcmFrame } from './pcm-frame.js';
@@ -66,6 +67,7 @@ export type CanonicalChoirFrame = {
 type Slot = {
   identity: CanonicalChoirSingerId;
   mic: MicTrack;
+  contentHistory: ChoirContentPcmBuffer | null;
   expected: boolean;
   /** Separate entrance fade; room MixBus cannot detect an additional Mic. */
   joinGain: number;
@@ -91,11 +93,15 @@ type RoomConfig = {
   songEpoch: number;
   backingGeneration: number;
   backingGain?: number;
+  /** Separate six-second Content evidence cache; does not alter mixer retention. */
+  contentHistoryMs?: number;
 };
 
 export class CanonicalChoirMixExperiment {
   private readonly slots = new Map<string, Slot>();
   private readonly backing = emptyPcmTimeline();
+  private readonly backingContentHistory: ChoirContentPcmBuffer | null;
+  private readonly contentHistoryMs: number | null;
   private backingCaptureOriginSample: number | null = null;
   private readonly bus: MixBus;
   private readonly frameSamples: number;
@@ -124,6 +130,9 @@ export class CanonicalChoirMixExperiment {
     this.joinStep = 1 / Math.max(1, Math.round(config.sampleRate * .010));
     this.songEpoch = config.songEpoch;
     this.backingGeneration = config.backingGeneration;
+    this.contentHistoryMs = config.contentHistoryMs ?? null;
+    this.backingContentHistory = this.contentHistoryMs === null
+      ? null : new ChoirContentPcmBuffer(config.sampleRate, this.contentHistoryMs);
     this.micOptions = {
       sampleRate: config.sampleRate, frameMs: config.frameMs,
       frameSamples: this.frameSamples,
@@ -154,7 +163,10 @@ export class CanonicalChoirMixExperiment {
       || this.slots.has(id.participantId) || this.slots.size >= 2) return false;
     const mic = new MicTrack(this.micOptions);
     this.slots.set(id.participantId, {
-      identity: { ...id }, mic, expected: true, joinGain: 0,
+      identity: { ...id }, mic,
+      contentHistory: this.contentHistoryMs === null ? null
+        : new ChoirContentPcmBuffer(this.sampleRate, this.contentHistoryMs),
+      expected: true, joinGain: 0,
       latePacketDrops: 0, awaitingCalibration: false, authority: null,
       pendingReacquisition: null, requiresFreshContent: false,
     });
@@ -202,6 +214,8 @@ export class CanonicalChoirMixExperiment {
     this.slots.set(id.participantId, {
       identity: { ...id },
       mic: new MicTrack(this.micOptions),
+      contentHistory: this.contentHistoryMs === null ? null
+        : new ChoirContentPcmBuffer(this.sampleRate, this.contentHistoryMs),
       expected: true,
       joinGain: 0,
       latePacketDrops: 0,
@@ -387,13 +401,10 @@ export class CanonicalChoirMixExperiment {
   }
 
   /**
-   * Six seconds of actual positioned, canonical room-coordinate PCM for the
-   * existing production Content analyzer. No caller-supplied PCM, zero padded
-   * frontier, synthetic gap concealment or unheadered source is ever proof.
-   *
-   * Backing generation is the fixed trusted Robot generation for this room.
-   * Callers needing this must configure retention >= 6s; unlike playback,
-   * Content analysis intentionally fails when earlier PCM was evicted.
+   * Read ONLY separately buffered, source-authentic PCM for Content matching.
+   * Playback retention can remain three seconds while this bounded cache
+   * holds the six-second acoustic evidence. No silent padding, concealment,
+   * stale capture or Robot generation can qualify.
    */
   readTrustedContentWindow(
     id: CanonicalChoirSingerId, captureGeneration: number,
@@ -403,26 +414,36 @@ export class CanonicalChoirMixExperiment {
     const count = 6 * this.sampleRate;
     if (!slot || !slot.expected || !this.matchesEpoch(id)
       || id.mediaEpoch !== slot.identity.mediaEpoch
+      || !slot.contentHistory || !this.backingContentHistory
       || !Number.isSafeInteger(captureGeneration) || captureGeneration < 0
       || slot.mic.timeline.generation !== captureGeneration
       || slot.mic.timeline.sourceRate === null
-      || slot.mic.micCaptureOriginSample === null
-      || startSample < slot.mic.micCaptureOriginSample
-      || this.backingCaptureOriginSample === null
-      || startSample < this.backingCaptureOriginSample
       || this.backing.generation !== this.backingGeneration
-      || !Number.isSafeInteger(startSample) || startSample < 0
-      || !Number.isSafeInteger(startSample + count)) return null;
-    for (const timeline of [slot.mic.timeline, this.backing]) {
-      if (startSample + count > timeline.totalSamples) return null;
-      const evidence = readPcmEvidence(timeline, startSample, count);
-      if (evidence.gapSamples !== 0
-        || evidence.frontierMissingSamples !== 0
-        || evidence.unheaderedSamples !== 0) return null;
-    }
+      || this.backing.sourceRate === null
+      || !slot.contentHistory.hasFullPositionedWindow(
+        captureGeneration, slot.mic.timeline.sourceRate, startSample, count)
+      || !this.backingContentHistory.hasFullPositionedWindow(
+        this.backingGeneration, this.backing.sourceRate, startSample, count))
+      return null;
     return {
-      mic: readPcmRange(slot.mic.timeline, startSample, count),
-      backing: readPcmRange(this.backing, startSample, count),
+      mic: slot.contentHistory.read(startSample, count),
+      backing: this.backingContentHistory.read(startSample, count),
+    };
+  }
+
+  /**
+   * Discards Content evidence when trusted Robot playback becomes invalid.
+   * This does NOT touch Mic PCM, MixBus or the immutable output room clock.
+   */
+  invalidateContentEvidenceHistory() {
+    this.backingContentHistory?.reset();
+    for (const slot of this.slots.values()) slot.contentHistory?.reset();
+  }
+
+  contentHistorySamples(participantId: string) {
+    return {
+      mic: this.slots.get(participantId)?.contentHistory?.sampleCount ?? 0,
+      backing: this.backingContentHistory?.sampleCount ?? 0,
     };
   }
 
@@ -503,10 +524,12 @@ export class CanonicalChoirMixExperiment {
           return false;
       }
     }
+    const priorChunks = slot.mic.timeline.chunks.length;
     slot.mic.ingestCapture({
       frame, sourceRate, running: true,
       roomSampleNow: () => roomNowSample,
     });
+    slot.contentHistory?.captureAccepted(slot.mic.timeline, priorChunks);
     return true;
   }
 
@@ -516,6 +539,7 @@ export class CanonicalChoirMixExperiment {
       || !Number.isInteger(sourceRate) || sourceRate < 8_000 || sourceRate > 192_000)
       return false;
     const previousGeneration = this.backing.generation;
+    const priorChunks = this.backing.chunks.length;
     const result = ingestPcmTimeline({
       timeline: this.backing, frame, sourceRate, mixRate: this.sampleRate,
       roomSampleNow: () => roomNowSample, trackSourceClock: true,
@@ -525,6 +549,7 @@ export class CanonicalChoirMixExperiment {
     if (previousGeneration !== this.backing.generation
       && result.samples.length > 0)
       this.backingCaptureOriginSample = result.start;
+    this.backingContentHistory?.captureAccepted(this.backing, priorChunks);
     return true;
   }
 

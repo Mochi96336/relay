@@ -423,4 +423,102 @@ describe('product lifecycle and health', () => {
     assert.equal(model.attention, null);
   });
 
+  test('a held boot measurement is still the alignment being served, not a fallback', () => {
+    // calibration-applicability holds an established boot result while the
+    // Robot's player delta is quiet, and the mixer keeps applying it.
+    const model = buildProductViewModel(input({
+      readiness: readiness({ playerOffsetMs: null, playerOffsetFresh: false }),
+      timing: {
+        timingMode: 'acoustic-calibration',
+        calibrationState: 'complete',
+        calibrationStale: false,
+        alignmentClamped: false,
+        requiresRobotPlayerDelta: true,
+        robotDeltaFresh: false,
+      },
+    }));
+
+    assert.equal(model.timing.state, 'aligned');
+    assert.equal(model.timing.syncHeld, true);
+    assert.equal(model.issues.find((issue) => issue.scope === 'timing'), undefined);
+  });
+
+  test('a revoked measurement that left the mixer on the estimate is still a fallback', () => {
+    const model = buildProductViewModel(input({
+      readiness: readiness({ playerOffsetMs: null, playerOffsetFresh: false }),
+      timing: {
+        timingMode: 'network-estimate',
+        calibrationState: 'complete',
+        calibrationStale: false,
+        alignmentClamped: false,
+        requiresRobotPlayerDelta: true,
+        robotDeltaFresh: false,
+      },
+    }));
+
+    assert.equal(model.timing.state, 'fallback');
+    assert.equal(model.timing.syncHeld, false);
+  });
+
+  test('timing advice during a Take waits for the recording instead of offering a refused Realign', () => {
+    const model = buildProductViewModel(input({
+      readiness: readiness({ calibrationValid: false, calibrationKind: 'none' }),
+      take: { lifecycle: 'recording', takeId: 'take-1', qualityVerdict: null },
+      timing: {
+        timingMode: 'network-estimate',
+        calibrationState: 'failed',
+        calibrationStale: false,
+        alignmentClamped: false,
+        requiresRobotPlayerDelta: true,
+        robotDeltaFresh: true,
+      },
+    }));
+
+    assert.equal(model.actions.canStartCalibration, false);
+    assert.equal(model.actions.startCalibrationBlockedReason, 'take-active');
+    assert.equal(model.issues.find((issue) => issue.scope === 'timing')?.recovery, 'recalibrate-after-take');
+
+    const afterTake = buildProductViewModel(input({
+      readiness: readiness({ calibrationValid: false, calibrationKind: 'none' }),
+      timing: {
+        timingMode: 'network-estimate',
+        calibrationState: 'failed',
+        calibrationStale: false,
+        alignmentClamped: false,
+        requiresRobotPlayerDelta: true,
+        robotDeltaFresh: true,
+      },
+    }));
+    assert.equal(afterTake.issues.find((issue) => issue.scope === 'timing')?.recovery, 'recalibrate');
+  });
+
+  test('a Mic that never heard the boot chime is an estimate, and Realign is advice for speakers', () => {
+    const base = {
+      readiness: readiness({ calibrationValid: false, calibrationKind: 'none' }),
+      timing: {
+        timingMode: 'network-estimate' as const,
+        calibrationState: 'failed',
+        calibrationStale: false,
+        alignmentClamped: false,
+        requiresRobotPlayerDelta: false,
+        robotDeltaFresh: true,
+        micProbeUnheard: true,
+      },
+    };
+    const model = buildProductViewModel(input(base));
+    const issue = model.issues.find((candidate) => candidate.scope === 'timing');
+    assert.equal(model.timing.state, 'fallback');
+    assert.equal(issue?.cause, 'timing-probe-unheard');
+    assert.equal(issue?.recovery, 'recalibrate-speaker');
+
+    const recording = buildProductViewModel(input({
+      ...base,
+      take: { lifecycle: 'recording', takeId: 'take-1', qualityVerdict: null },
+    }));
+    assert.equal(recording.issues.find((candidate) => candidate.scope === 'timing')?.recovery, 'recalibrate-after-take');
+
+    const heard = buildProductViewModel(input({ ...base, timing: { ...base.timing, micProbeUnheard: false } }));
+    assert.equal(heard.issues.find((candidate) => candidate.scope === 'timing')?.cause, 'timing-fallback');
+  });
+
 });

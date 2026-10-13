@@ -25,7 +25,6 @@ import { MicGainRamp } from './mic-gain-ramp.js';
 import { MicLimiter } from './mic-limiter.js';
 import { MicRawMeter } from './mic-raw-meter.js';
 import type { MicSlewRead } from './mic-frame-reader.js';
-import { classifyMicReadMotion } from './mic-read-plan.js';
 import { MixBus } from './mix-bus.js';
 import { MicTrack, type AlignmentState, type MicReadPlan } from './mic-track.js';
 import { SourceOutputEdge } from './source-output-edge.js';
@@ -266,6 +265,8 @@ export class AudioSession {
     );
     this.micTrack = new MicTrack({
       sampleRate: options.sampleRate,
+      prebufferMs: options.prebufferMs,
+      retentionMs: options.retentionMs,
       frameMs: options.frameMs,
       frameSamples: this.frameSamples,
       sourceEdgeFadeSamples: this.sourceEdgeFadeSamples,
@@ -502,59 +503,17 @@ export class AudioSession {
     return true;
   }
 
-  /** What the alignment asks for, before the buffer's limits are applied. */
+  /** Every advance budget delegates to the canonical singer-owned MicTrack. */
   get requestedMicAdvanceMs() {
-    const calibrated = this.micTrack.alignmentState.calibratedMicLagMs;
-    const base = calibrated === null
-      ? this.micTrack.alignmentState.networkCompensationMs
-      : calibrated - (this.micTrack.calibrationUnfoldedSamples / this.sampleRate) * 1000;
-    return base - this.micTrack.alignmentState.fineTuneMs;
+    return this.micTrack.requestedMicAdvanceMs;
   }
 
-  /** What the configured buffers can afford, before the live frontier is known. */
   private budgetedMicAdvanceMs(requestedMicAdvanceMs = this.requestedMicAdvanceMs) {
-    // Never past zero in either direction: a buffer too small to afford any
-    // read-ahead means no read-ahead, not a shove the other way.
-    const ahead = Math.max(0, this.prebufferMs - ADVANCE_SAFETY_MS);
-    const behind = Math.max(0, this.retentionMs - ADVANCE_SAFETY_MS);
-    return Math.max(-behind, Math.min(ahead, requestedMicAdvanceMs));
-  }
-
-  /** How far back the retained microphone history allows the read head to sit. */
-  private maximumMicReadBehindMs() {
-    return Math.max(0, this.retentionMs - ADVANCE_SAFETY_MS);
-  }
-
-  /**
-   * Milliseconds the mixer actually reads ahead in the microphone timeline.
-   *
-   * A measurement larger than the buffers can absorb is clamped rather than
-   * obeyed: obeying it reads past the end of the microphone history and the
-   * vocal disappears entirely, where clamping leaves it audible but late. Both
-   * are wrong, and only one of them can be heard and diagnosed. The difference
-   * from `requestedMicAdvanceMs` is what says the buffer is too small.
-   *
-   * The buffer budget alone is not enough to keep that promise. It assumes the
-   * microphone timeline runs ahead of the mix clock by roughly the prebuffer,
-   * and a capture that joined late or never caught up breaks that assumption:
-   * the read head then lands past everything that has arrived, `readPcmRange` pads
-   * the frame with zeros, and because both timelines advance at the mix rate
-   * afterwards the deficit is constant. Nothing closes it, so a single
-   * alignment change silences the microphone for as long as the room stays up.
-   * The frontier correction (MicFrontierCorrection) keeps the read head behind the
-   * frontier that actually exists.
-   */
-  private appliedMicAdvanceForRequestedMs(
-    requestedMicAdvanceMs: number,
-    frontierCorrectionSamples = this.micFrontier.correctionSamples,
-  ) {
-    const corrected = this.budgetedMicAdvanceMs(requestedMicAdvanceMs)
-      - (frontierCorrectionSamples / this.sampleRate) * 1000;
-    return Math.max(-this.maximumMicReadBehindMs(), corrected);
+    return this.micTrack.budgetedMicAdvanceMs(requestedMicAdvanceMs);
   }
 
   get appliedMicAdvanceMs() {
-    return this.appliedMicAdvanceForRequestedMs(this.requestedMicAdvanceMs);
+    return this.micTrack.appliedMicAdvanceMs;
   }
 
   /**
@@ -621,11 +580,9 @@ export class AudioSession {
     this.micFrontier.noteCalibrationMeasured();
   }
 
-  /** The most frontier correction the retained history lets the read head use. */
+  /** The track's retained history bounds its own frontier correction. */
   private micFrontierCorrectionCapSamples() {
-    const budgeted = Math.round((this.budgetedMicAdvanceMs() * this.sampleRate) / 1000);
-    const behind = Math.round((this.maximumMicReadBehindMs() * this.sampleRate) / 1000);
-    return budgeted + behind;
+    return this.micTrack.frontierCorrectionCapSamples();
   }
 
   /**
@@ -686,18 +643,6 @@ export class AudioSession {
     // moves with the audio it was reading.
     if (this.micTrack.lastEmittedMicAdvanceSamples !== null) this.micTrack.lastEmittedMicAdvanceSamples += shift;
     this.micFrontier.rebase(shift);
-  }
-
-  /** Holds the microphone read head behind the samples that have actually arrived. */
-  private updateMicFrontierCorrection(startSample: number) {
-    this.micFrontier.update({
-      expected: this.bus.micExpected,
-      frontier: this.mic.totalSamples,
-      earliestRetained: this.mic.chunks[0]?.start ?? null,
-      startSample,
-      appliedAdvanceSamples: Math.round((this.appliedMicAdvanceMs * this.sampleRate) / 1000),
-      capSamples: this.micFrontierCorrectionCapSamples(),
-    });
   }
 
   ingestMic(frame: PcmFrame, sourceRate: number | null, nowMs = performance.now()) {
@@ -1377,91 +1322,12 @@ export class AudioSession {
     return limited;
   }
 
-  /**
-   * Where this frame reads the Mic, and how the read head moves there from
-   * where the previous frame was heard.
-   */
+  /** One room-owned clock tick; all source-specific planning runs on the track. */
   private planMicRead(frameIndex: number): MicReadPlan {
+    // Timeline fold/rebase remains part of the canonical room ingest/clock
+    // mapping. It MUST occur before reading any prior emitted Mic trajectory.
     this.foldConfirmedMicCaptureLoss();
-    const previouslyEmittedAdvanceSamples = this.micTrack.lastEmittedMicAdvanceSamples;
-    const previousCalibratedMicLagMs = this.micTrack.alignmentState.calibratedMicLagMs;
-    const previousFrontierCorrectionSamples = this.micFrontier.correctionSamples;
-    const previousRequestedMicAdvanceMs = previousCalibratedMicLagMs === null
-      ? this.micTrack.alignmentState.networkCompensationMs - this.micTrack.alignmentState.fineTuneMs
-      : previousCalibratedMicLagMs - this.micTrack.alignmentState.fineTuneMs;
-    const modeledPreviousAdvanceSamplesExact = (
-      this.appliedMicAdvanceForRequestedMs(
-        previousRequestedMicAdvanceMs,
-        previousFrontierCorrectionSamples,
-      ) * this.sampleRate
-    ) / 1000;
-    // Alignment fields can be replaced between emitted frames. In particular,
-    // fineTuneMs is immediate authority and therefore cannot be used to
-    // reconstruct where the preceding frame was actually heard. Once audible
-    // history exists, classify runtime motion from that emitted trajectory.
-    const previousAdvanceSamplesExact =
-      previouslyEmittedAdvanceSamples ?? modeledPreviousAdvanceSamplesExact;
-
-    this.micTrack.advanceCalibrationSlew();
-    const startSample = frameIndex * this.frameSamples;
-    this.updateMicFrontierCorrection(startSample);
-
-    const appliedAdvanceMs = this.appliedMicAdvanceMs;
-    const {
-      advanceSamplesExact,
-      advanceSamples,
-      micReadStart,
-      boundedRuntimeAdvanceMoved,
-      immediateReadHeadJump,
-      crossfadeSamples,
-      previousTransitionStart,
-      readHeadJumped,
-    } = classifyMicReadMotion({
-      frameSamples: this.frameSamples,
-      sampleRate: this.sampleRate,
-      startSample,
-      previouslyEmittedAdvanceSamples,
-      previousAdvanceSamplesExact,
-      lastEmittedMicFrameComplete: this.micTrack.lastEmittedMicFrameComplete,
-      appliedAdvanceMs,
-      runtimeCalibrationSlewFraction: RUNTIME_CALIBRATION_SLEW_FRACTION,
-      readHeadCrossfadeMs: MIC_READ_HEAD_CROSSFADE_MS,
-    });
-    const previousTransitionEvidence = immediateReadHeadJump
-      ? readPcmEvidence(this.mic, previousTransitionStart, crossfadeSamples + 2)
-      : null;
-    const nextTransitionEvidence = immediateReadHeadJump
-      ? readPcmEvidence(this.mic, micReadStart, crossfadeSamples)
-      : null;
-    const canCrossfadeReadHeadJump = Boolean(
-      immediateReadHeadJump
-      && previousTransitionEvidence
-      && nextTransitionEvidence
-      && previousTransitionEvidence.gapSamples === 0
-      && previousTransitionEvidence.frontierMissingSamples === 0
-      && nextTransitionEvidence.gapSamples === 0
-      && nextTransitionEvidence.frontierMissingSamples === 0
-    );
-    if (readHeadJumped && !canCrossfadeReadHeadJump) {
-      // A crossfade needs real PCM on both legs: the previous frame may have
-      // ended in a hole or its concealment, or the old leg may run into one.
-      // The jump still must not splice. Converge from what was last heard
-      // over the same 2 ms edge a capture replacement uses, which replays
-      // nothing.
-      this.micEdge.beginConvergence();
-    }
-
-    return {
-      startSample,
-      previouslyEmittedAdvanceSamples,
-      previousAdvanceSamplesExact,
-      advanceSamplesExact,
-      advanceSamples,
-      micReadStart,
-      boundedRuntimeAdvanceMoved,
-      canCrossfadeReadHeadJump,
-      crossfadeSamples,
-    };
+    return this.micTrack.planMicRead(frameIndex * this.frameSamples, this.bus.micExpected);
   }
 
   /** How much arrived audio is left past this frame's reads; none left is starvation. */

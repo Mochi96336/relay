@@ -9,7 +9,8 @@ import { AudioSession } from '../src/audio-session.js';
  * This test does not claim MicTrack is a full independent processor yet.
  */
 const config = {
-  sampleRate: 48_000, frameMs: 20, frameSamples: 960,
+  sampleRate: 48_000, prebufferMs: 400, retentionMs: 3_000,
+  frameMs: 20, frameSamples: 960,
   sourceEdgeFadeSamples: 96, safetyMs: 200, slewFraction: .01,
   readHeadCrossfadeMs: 5,
 };
@@ -210,6 +211,52 @@ describe('extracted MicTrack owns per-singer components independently', () => {
     assert.equal(b.beginCaptureRestartEdgeIfDue(100), false);
     assert.equal(b.captureRestarts.size, 0);
     assert.equal(b.edge.replacementActive, false);
+  });
+
+  test('independent planners honor per-singer Content and fallback lag on same room tick', () => {
+    const a = new MicTrack(config);
+    const b = new MicTrack(config);
+    const pcmA = new Int16Array(30_000).fill(7_000);
+    const pcmB = new Int16Array(30_000).fill(-9_000);
+    for (const [track, samples] of [[a, pcmA], [b, pcmB]] as const) {
+      track.timeline.chunks.push({ start: 0, samples, positioned: true });
+      track.timeline.totalSamples = samples.length;
+    }
+    a.alignmentState.calibratedMicLagMs = 120;
+    b.alignmentState.calibratedMicLagMs = -340;
+    const roomSample = 12_000;
+    // +120ms ahead is within the 200ms budget. -340ms behind is within
+    // retention. No arbitrary YouTube or network clock is involved.
+    const planA = a.planMicRead(roomSample, false);
+    const planB = b.planMicRead(roomSample, false);
+    assert.equal(planA.micReadStart, roomSample + 5_760);
+    assert.equal(planB.micReadStart, roomSample - 16_320);
+    assert.equal(planA.canCrossfadeReadHeadJump, false);
+    assert.equal(planB.canCrossfadeReadHeadJump, false);
+    assert.equal(a.readMicFrame(planA).samples[100], 7_000);
+    // B's negative read position is structural preroll and must remain zero;
+    // it cannot pull A's samples or overwrite A's calibration.
+    assert.equal(b.readMicFrame(planB).samples[100], 0);
+    assert.equal(a.alignmentState.calibratedMicLagMs, 120);
+    assert.equal(b.alignmentState.calibratedMicLagMs, -340);
+  });
+
+  test('one singer frontier starvation does not modify another singer planner', () => {
+    const a = new MicTrack(config);
+    const b = new MicTrack(config);
+    for (const track of [a, b]) {
+      track.alignmentState.calibratedMicLagMs = 80;
+      track.timeline.chunks.push({ start: 0, samples: new Int16Array(24_000), positioned: true });
+      track.timeline.totalSamples = 24_000;
+    }
+    a.timeline.totalSamples = 1_200; // poor arrival frontier, but B is healthy
+    a.timeline.chunks[0]!.samples = new Int16Array(1_200);
+    const ap = a.planMicRead(12_000, true);
+    const bp = b.planMicRead(12_000, true);
+    assert.ok(a.frontier.correctionSamples >= 0);
+    assert.equal(b.frontier.correctionSamples, 0);
+    assert.equal(bp.micReadStart, 12_000 + 3_840);
+    assert.ok(ap.micReadStart <= bp.micReadStart);
   });
 
   test('current AudioSession still uses its actual existing Mic clock and limits', () => {

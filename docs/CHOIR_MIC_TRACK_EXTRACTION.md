@@ -108,6 +108,22 @@ No other singer's `SourceOutputEdge` is touched.
 Readhead slew remains bounded by the unchanged per-frame percentage.
 Added independent A/B calibration-slew and restart-seam tests.
 
+## Stage 6: per-singer read planning and frontier budget
+
+`MicTrack.planMicRead(startSample, expected)` now owns the canonical
+`classifyMicReadMotion`, previously-emitted source trajectory, per-singer
+alignment budget, frontier update and read-head crossfade evidence decisions.
+The single room clock supplies only the frame start and whether that singer
+is expected. The original `AudioSession` still calls
+`foldConfirmedMicCaptureLoss()` first, preserving its timeline rebase and
+capture-loss bookkeeping order. The room-facing advance getters delegate
+to the same canonical MicTrack arithmetic (no duplicate formulas).
+
+A/B regression tests compare two independent signed calibration values at
+one room sample, plus one starved frontier with one healthy stream. They
+cannot turn into two authenticated live Publishers until the current
+AudioSession ingest/rebase and final mixer are separated and gated.
+
 ## Still *inside* AudioSession and must be extracted next
 
 The existing canonical methods continue to own:
@@ -116,7 +132,7 @@ The existing canonical methods continue to own:
   input clipping and MixBus summing loop;
 - the remaining Mic PCM transport placement in `ingestMic`,
   source sample-to-session mapping, trim/restart handling,
-  `planMicRead` and `mixFrame`; `readMicFrame` is now on MicTrack.
+  `mixFrame`; `planMicRead` and `readMicFrame` now run on MicTrack.
 
 **These must not be duplicated into the experimental ChoirAudioPrototype**
 and silently bypass the actual single-singer correction code. The next

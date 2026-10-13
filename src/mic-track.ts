@@ -8,6 +8,7 @@ import { MicRawMeter } from './mic-raw-meter.js';
 import {
   readMicSlewedRange, crossfadeMicReadHeadJump, type MicSlewRead,
 } from './mic-frame-reader.js';
+import { classifyMicReadMotion } from './mic-read-plan.js';
 import type { PcmFrame } from './pcm-frame.js';
 import {
   emptyPcmTimeline, readPcmEvidence, readPcmGapMask, readPcmRange, type PcmChunk,
@@ -58,6 +59,9 @@ export class MicTrack {
   readonly edge: SourceOutputEdge;
   readonly frontier: MicFrontierCorrection;
   readonly clockTrim: MicClockTrim;
+  private readonly prebufferMs: number;
+  private readonly retentionMs: number;
+  private readonly safetyMs: number;
   private readonly sampleRate: number;
   private readonly frameMs: number;
   private readonly slewFraction: number;
@@ -89,6 +93,8 @@ export class MicTrack {
 
   constructor(options: {
     sampleRate: number;
+    prebufferMs: number;
+    retentionMs: number;
     frameMs: number;
     frameSamples: number;
     sourceEdgeFadeSamples: number;
@@ -97,6 +103,9 @@ export class MicTrack {
     readHeadCrossfadeMs: number;
   }) {
     const { sampleRate, frameMs, frameSamples, sourceEdgeFadeSamples, safetyMs, slewFraction } = options;
+    this.prebufferMs = options.prebufferMs;
+    this.retentionMs = options.retentionMs;
+    this.safetyMs = safetyMs;
     this.sampleRate = sampleRate;
     this.frameMs = frameMs;
     this.slewFraction = slewFraction;
@@ -353,6 +362,166 @@ export class MicTrack {
     this.alignmentState.calibratedMicLagMs = Math.abs(deltaMs) <= maximumStepMs
       ? target
       : current + Math.sign(deltaMs) * maximumStepMs;
+  }
+
+
+
+  /** What the alignment asks for, before the buffer's limits are applied. */
+  get requestedMicAdvanceMs() {
+    const calibrated = this.alignmentState.calibratedMicLagMs;
+    const base = calibrated === null
+      ? this.alignmentState.networkCompensationMs
+      : calibrated - (this.calibrationUnfoldedSamples / this.sampleRate) * 1000;
+    return base - this.alignmentState.fineTuneMs;
+  }
+
+  /** What the configured buffers can afford, before the live frontier is known. */
+  budgetedMicAdvanceMs(requestedMicAdvanceMs = this.requestedMicAdvanceMs) {
+    // Never past zero in either direction: a buffer too small to afford any
+    // read-ahead means no read-ahead, not a shove the other way.
+    const ahead = Math.max(0, this.prebufferMs - this.safetyMs);
+    const behind = Math.max(0, this.retentionMs - this.safetyMs);
+    return Math.max(-behind, Math.min(ahead, requestedMicAdvanceMs));
+  }
+
+  /** How far back the retained microphone history allows the read head to sit. */
+  private maximumMicReadBehindMs() {
+    return Math.max(0, this.retentionMs - this.safetyMs);
+  }
+
+  /**
+   * Milliseconds the mixer actually reads ahead in the microphone timeline.
+   *
+   * A measurement larger than the buffers can absorb is clamped rather than
+   * obeyed: obeying it reads past the end of the microphone history and the
+   * vocal disappears entirely, where clamping leaves it audible but late. Both
+   * are wrong, and only one of them can be heard and diagnosed. The difference
+   * from `requestedMicAdvanceMs` is what says the buffer is too small.
+   *
+   * The buffer budget alone is not enough to keep that promise. It assumes the
+   * microphone timeline runs ahead of the mix clock by roughly the prebuffer,
+   * and a capture that joined late or never caught up breaks that assumption:
+   * the read head then lands past everything that has arrived, `readPcmRange` pads
+   * the frame with zeros, and because both timelines advance at the mix rate
+   * afterwards the deficit is constant. Nothing closes it, so a single
+   * alignment change silences the microphone for as long as the room stays up.
+   * The frontier correction (MicFrontierCorrection) keeps the read head behind the
+   * frontier that actually exists.
+   */
+  private appliedMicAdvanceForRequestedMs(
+    requestedMicAdvanceMs: number,
+    frontierCorrectionSamples = this.frontier.correctionSamples,
+  ) {
+    const corrected = this.budgetedMicAdvanceMs(requestedMicAdvanceMs)
+      - (frontierCorrectionSamples / this.sampleRate) * 1000;
+    return Math.max(-this.maximumMicReadBehindMs(), corrected);
+  }
+
+  get appliedMicAdvanceMs() {
+    return this.appliedMicAdvanceForRequestedMs(this.requestedMicAdvanceMs);
+  }
+
+  frontierCorrectionCapSamples() {
+    const budgeted = Math.round((this.budgetedMicAdvanceMs() * this.sampleRate) / 1000);
+    const behind = Math.round((this.maximumMicReadBehindMs() * this.sampleRate) / 1000);
+    return budgeted + behind;
+  }
+
+  /** Updates one Mic frontier using the shared room's sample position. */
+  updateFrontierCorrection(startSample: number, expected: boolean) {
+    this.frontier.update({
+      expected,
+      frontier: this.timeline.totalSamples,
+      earliestRetained: this.timeline.chunks[0]?.start ?? null,
+      startSample,
+      appliedAdvanceSamples: Math.round((this.appliedMicAdvanceMs * this.sampleRate) / 1000),
+      capSamples: this.frontierCorrectionCapSamples(),
+    });
+  }
+
+  /**
+   * Where this frame reads the Mic, and how the read head moves there from
+   * where the previous frame was heard.
+   */
+  planMicRead(startSample: number, expected: boolean): MicReadPlan {
+    const previouslyEmittedAdvanceSamples = this.lastEmittedMicAdvanceSamples;
+    const previousCalibratedMicLagMs = this.alignmentState.calibratedMicLagMs;
+    const previousFrontierCorrectionSamples = this.frontier.correctionSamples;
+    const previousRequestedMicAdvanceMs = previousCalibratedMicLagMs === null
+      ? this.alignmentState.networkCompensationMs - this.alignmentState.fineTuneMs
+      : previousCalibratedMicLagMs - this.alignmentState.fineTuneMs;
+    const modeledPreviousAdvanceSamplesExact = (
+      this.appliedMicAdvanceForRequestedMs(
+        previousRequestedMicAdvanceMs,
+        previousFrontierCorrectionSamples,
+      ) * this.sampleRate
+    ) / 1000;
+    // Alignment fields can be replaced between emitted frames. In particular,
+    // fineTuneMs is immediate authority and therefore cannot be used to
+    // reconstruct where the preceding frame was actually heard. Once audible
+    // history exists, classify runtime motion from that emitted trajectory.
+    const previousAdvanceSamplesExact =
+      previouslyEmittedAdvanceSamples ?? modeledPreviousAdvanceSamplesExact;
+
+    this.advanceCalibrationSlew();
+    this.updateFrontierCorrection(startSample, expected);
+
+    const appliedAdvanceMs = this.appliedMicAdvanceMs;
+    const {
+      advanceSamplesExact,
+      advanceSamples,
+      micReadStart,
+      boundedRuntimeAdvanceMoved,
+      immediateReadHeadJump,
+      crossfadeSamples,
+      previousTransitionStart,
+      readHeadJumped,
+    } = classifyMicReadMotion({
+      frameSamples: this.frameSamples,
+      sampleRate: this.sampleRate,
+      startSample,
+      previouslyEmittedAdvanceSamples,
+      previousAdvanceSamplesExact,
+      lastEmittedMicFrameComplete: this.lastEmittedMicFrameComplete,
+      appliedAdvanceMs,
+      runtimeCalibrationSlewFraction: this.slewFraction,
+      readHeadCrossfadeMs: this.readHeadCrossfadeMs,
+    });
+    const previousTransitionEvidence = immediateReadHeadJump
+      ? readPcmEvidence(this.timeline, previousTransitionStart, crossfadeSamples + 2)
+      : null;
+    const nextTransitionEvidence = immediateReadHeadJump
+      ? readPcmEvidence(this.timeline, micReadStart, crossfadeSamples)
+      : null;
+    const canCrossfadeReadHeadJump = Boolean(
+      immediateReadHeadJump
+      && previousTransitionEvidence
+      && nextTransitionEvidence
+      && previousTransitionEvidence.gapSamples === 0
+      && previousTransitionEvidence.frontierMissingSamples === 0
+      && nextTransitionEvidence.gapSamples === 0
+      && nextTransitionEvidence.frontierMissingSamples === 0
+    );
+    if (readHeadJumped && !canCrossfadeReadHeadJump) {
+      // A crossfade needs real PCM on both legs: the previous frame may have
+      // ended in a hole or its concealment, or the old leg may run into one.
+      // The jump still must not splice. Converge from what was last heard
+      // over the same 2 ms edge a capture replacement uses, which replays
+      // nothing.
+      this.edge.beginConvergence();
+    }
+
+    return {
+      startSample,
+      previouslyEmittedAdvanceSamples,
+      previousAdvanceSamplesExact,
+      advanceSamplesExact,
+      advanceSamples,
+      micReadStart,
+      boundedRuntimeAdvanceMoved,
+      canCrossfadeReadHeadJump,
+      crossfadeSamples,
+    };
   }
 
 

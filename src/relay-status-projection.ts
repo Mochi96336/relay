@@ -264,6 +264,8 @@ export type ProductStatusFacts = {
     bootProbeActive: boolean;
     contentEvidenceReady: boolean;
     robotDeltaFresh: boolean;
+    /** The last boot run ended because the Mic never heard its chime. */
+    micProbeUnheard?: boolean;
   };
 };
 
@@ -314,6 +316,7 @@ export function projectProductStatus(facts: ProductStatusFacts) {
       bootProbeActive: timing.bootProbeActive,
       contentEvidenceReady: timing.contentEvidenceReady,
       robotDeltaFresh: timing.robotDeltaFresh,
+      micProbeUnheard: timing.micProbeUnheard === true,
     },
   });
 }

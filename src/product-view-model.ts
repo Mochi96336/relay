@@ -92,6 +92,11 @@ export type ProductViewModelInput = {
     /** Whether a content-mode calibration can accept Robot backing evidence now. */
     contentEvidenceReady?: boolean;
     robotDeltaFresh: boolean;
+    /**
+     * The last boot measurement ended because the Mic never heard its chime,
+     * as with headphones. Another Realign the same way will not change that.
+     */
+    micProbeUnheard?: boolean;
   };
 };
 
@@ -303,6 +308,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
     performanceActive,
     timingState: timing,
     timingFrontierCorrectionActive: input.timing.frontierCorrectionActive === true,
+    timingProbeUnheard: input.timing.micProbeUnheard === true,
   });
   const attention = primaryAttention(issues);
   const health: ProductHealth = issues.some((issue) => issue.severity === 'critical')

@@ -38,6 +38,8 @@ export type ProductIssueCause =
   | 'mic-too-quiet'
   | 'timing-calibrating'
   | 'timing-fallback'
+  /** Falling back because the Mic never heard the boot chime (headphones, low speaker volume). */
+  | 'timing-probe-unheard'
   | 'timing-stale'
   | 'timing-clamped'
   | 'mic-frontier-lagging'
@@ -55,6 +57,8 @@ export type ProductRecovery =
   | 'recalibrate'
   /** Realign is refused while a Take records; the recording keeps the timing it started with. */
   | 'recalibrate-after-take'
+  /** Realign helps only through speakers; with headphones the estimate stays. */
+  | 'recalibrate-speaker'
   | 'host-service'
   | 'change-song';
 
@@ -113,6 +117,8 @@ export type ProductIssueFacts = {
   timingState: 'idle' | 'calibrating' | 'aligned' | 'fallback' | 'stale' | 'clamped';
   /** The serving alignment is being held back by the live Mic frontier, not only by buffer affordability. */
   timingFrontierCorrectionActive?: boolean;
+  /** The last boot measurement ended because the Mic never heard its chime. */
+  timingProbeUnheard?: boolean;
 };
 
 /**
@@ -338,18 +344,25 @@ export function buildProductIssues(facts: ProductIssueFacts): ProductIssue[] {
       recovery: facts.timingFrontierCorrectionActive === true ? 'retry-mic' : recalibrateRecovery(facts),
     });
   } else if (facts.performanceActive && ['calibrating', 'fallback', 'stale'].includes(facts.timingState)) {
+    const probeUnheard = facts.timingState === 'fallback' && facts.timingProbeUnheard === true;
     const cause = facts.timingState === 'calibrating'
       ? 'timing-calibrating'
       : facts.timingState === 'stale'
         ? 'timing-stale'
-        : 'timing-fallback';
+        : probeUnheard
+          ? 'timing-probe-unheard'
+          : 'timing-fallback';
     issues.push({
       code: 'timing-recovering',
       scope: 'timing',
       severity: 'warning',
       cause,
       affects: ['timing', 'recording'],
-      recovery: facts.timingState === 'calibrating' ? 'automatic' : recalibrateRecovery(facts),
+      recovery: facts.timingState === 'calibrating'
+        ? 'automatic'
+        : probeUnheard && recalibrateRecovery(facts) === 'recalibrate'
+          ? 'recalibrate-speaker'
+          : recalibrateRecovery(facts),
     });
   }
 

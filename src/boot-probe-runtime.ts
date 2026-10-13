@@ -133,6 +133,11 @@ export class BootProbeRuntime {
     return this.lifecycle.failAttempt(target, reason, nowMs);
   }
 
+  /** The attempt about to fail ran, but its chime was not found in the capture. */
+  markAttemptUnheard(target: ProbeTarget) {
+    this.lifecycle.markAttemptUnheard(target);
+  }
+
   setMicLeg(leg: BootProbeMicLeg) {
     this.measuredMicLeg = { ...leg };
     this.lifecycle.setMicMeasured(true);

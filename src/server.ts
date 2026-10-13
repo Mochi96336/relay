@@ -1926,6 +1926,7 @@ function productStatusFacts(nowMs: number): ProductStatusFacts {
       bootProbeActive: bootProbeInProgress(nowMs),
       contentEvidenceReady: robotContentEvidenceMappingReady(nowMs),
       robotDeltaFresh: robotDeltaIsFresh(nowMs),
+      micProbeUnheard: probeStatus(nowMs).micProbeUnheard,
     },
   };
 }
@@ -2937,6 +2938,9 @@ function maybeFinishProbeAnalysis(nowMs: number) {
   }
 
   if (correlation < PROBE_MIN_CORRELATION) {
+    // The attempt ran and the chime was not in the capture: with headphones it
+    // never reaches the Mic, so trying again the same way will not find it.
+    bootProbeRuntime.markAttemptUnheard(analysis.target);
     failProbeAttempt(
       analysis.target,
       `correlation ${correlation.toFixed(3)} was below ${PROBE_MIN_CORRELATION.toFixed(3)}`,

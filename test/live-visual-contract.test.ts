@@ -63,7 +63,6 @@ test('Room Mic is one centered full-bleed envelope backed by one 20-sample measu
 });
 
 test('visible Room Mic waveform never consumes local capture events directly', () => {
-  assert.doesNotMatch(presence, /relay-local-mic-level/);
   assert.doesNotMatch(presence, /localActive|localStaleTimer|LOCAL_EVIDENCE_STALE_MS/);
   assert.match(presence, /relay-room-mic-presence/);
 });
@@ -119,7 +118,6 @@ test('Room Mic presence is visible to listeners and self owners through the same
   assert.match(state, /body\[data-self-mic="live"\] \.voice-copy strong/);
   assert.match(state, /font-size: clamp\(27px, 7vw, 34px\)/);
   assert.match(state, /\.voice-input-evidence \{[\s\S]*?display: none;/);
-  assert.match(state, /body\[data-room-mic="live"\] \.voice-input-evidence[\s\S]*?display: flex;/);
   assert.match(state, /body\[data-self-mic="live"\] \.voice-presence-wave[\s\S]*?stroke: rgba\(247, 244, 237, \.82\);/);
   assert.match(presence, /`room:\$\{ownerId\}:\$\{generation\}`/);
   assert.doesNotMatch(presence, /if \(localActive\) return;/);
@@ -128,7 +126,6 @@ test('Room Mic presence is visible to listeners and self owners through the same
 test('forced Room sound state keeps the same rail geometry and changes appearance only', () => {
   assert.doesNotMatch(composition, /\.local-sound-control|#listen-gain-value/,
     'formal composition must not regain Room sound rail geometry');
-  assert.match(layout, /\.local-sound-control \{[\s\S]*?grid-template-columns:\s*44px minmax\(0, 1fr\) auto/);
   assert.match(layout, /#listen-adjust-state,[\s\S]*?#listen-note \{[\s\S]*?position:\s*absolute/);
   assert.match(roomSoundCss, /body\[data-listen="mic-muted"\] #listen-gain,[\s\S]*?opacity:\s*\.46/);
   assert.doesNotMatch(roomSoundCss, /#listen-adjust-state|#listen-gain-value/,

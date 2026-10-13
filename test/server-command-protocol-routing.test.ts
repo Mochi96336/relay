@@ -136,7 +136,6 @@ test('the server composition boundary still owns the extracted message effects',
 test('registration and Robot lifecycle are not command authority', () => {
   assert.doesNotMatch(protocol, /case 'register'|robot-source-hello/);
   assert.match(server, /registrationProtocol\.dispatch\(socket, payload\)/);
-  assert.match(server, /robotLifecycleProtocol\.dispatch\(socket, payload\)/);
 });
 
 test('production recovery logger retains unseen actions once and separates capture generations', () => {

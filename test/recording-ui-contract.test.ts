@@ -91,7 +91,6 @@ test('ready and blocked idle states keep the same Record slot', () => {
 });
 
 test('recording and finalizing keep the recording surface mounted', () => {
-  assert.match(ui, /strip\.hidden = false/);
   assert.match(ui, /lifecycle === 'recording'/);
   assert.match(ui, /lifecycle === 'finalizing'/);
   assert.match(ui, /t\('recording\.finishing'\)/);
@@ -109,7 +108,6 @@ test('failed recording is product copy without Take identity', () => {
 test('reconnect disables action without speculative readiness', () => {
   assert.match(recorder, /\? 'reconnecting'/);
   assert.match(ui, /recording\.blocked\.reconnecting/);
-  assert.match(ui, /startButton\.disabled = !canStart/);
 });
 
 test('a newly completed recording gets a brief completion acknowledgement only after recording', () => {

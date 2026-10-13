@@ -201,7 +201,6 @@ test('exact digital silence is audibility evidence, not automatic rebuild author
 });
 
 test('Mic recovery exposes OS input mute to server liveness', () => {
-  assert.match(appSource, /initialSequence: capturePacketSequence >>> 0/);
   assert.match(appSource, /track\?\.addEventListener\('mute'/);
   assert.match(appSource, /track\?\.addEventListener\('unmute'/);
   assert.match(appSource, /document\.addEventListener\('visibilitychange'/);

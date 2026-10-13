@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { MicTrack } from '../src/mic-track.js';
 import { AudioSession } from '../src/audio-session.js';
+import { readPcmEvidence } from '../src/pcm-timeline.js';
 
 /**
  * Component ownership contract for the FIRST step of the N=1 extraction.
@@ -435,7 +436,8 @@ describe('extracted MicTrack owns per-singer components independently', () => {
     );
     const previous = { start: 0, samples: tone(0, 2_048), positioned: true };
     const next = { start: 3_008, samples: tone(3_008, 960), positioned: true };
-    const rawNext = next.samples.slice();
+    const originalNext = next.samples;
+    const rawNext = originalNext.slice();
     a.timeline.chunks.push(previous, next);
     a.timeline.totalSamples = 3_968;
     assert.equal(a.concealCaptureGap(previous, next, 2_048), true);
@@ -445,7 +447,11 @@ describe('extracted MicTrack owns per-singer components independently', () => {
     assert.equal(a.micConcealedSamples, 960);
     assert.equal(a.timeline.chunks[1].samples.length, 960);
     assert.equal(a.timeline.chunks[2].start, 3_008);
-    assert.notStrictEqual(next.samples, rawNext, 'only the retained output PCM is rewritten');
+    assert.notStrictEqual(next.samples, originalNext, 'output-side next PCM is copy-on-write');
+    assert.deepEqual(originalNext, rawNext, 'the originally received PCM remains immutable');
+    const loss = readPcmEvidence(a.timeline, 2_048, 960);
+    assert.equal(loss.gapSamples, 960, 'concealed PCM is still reported as real loss');
+    assert.equal(loss.frontierMissingSamples, 0);
     assert.equal(b.timeline.chunks.length, 0);
     assert.equal(b.micConcealedSamples, 0);
   });

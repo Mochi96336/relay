@@ -224,6 +224,11 @@ export class CanonicalChoirMixExperiment {
     if (!slot || !slot.expected || !slot.awaitingCalibration
       || slot.requiresFreshContent
       || !this.matchesEpoch(id) || slot.identity.mediaEpoch !== id.mediaEpoch
+      // A decision arriving before the first PCM cannot be bound to a native
+      // capture generation. Do not record a null authority that can never be
+      // revalidated by later Content proof.
+      || slot.mic.timeline.generation === null
+      || slot.mic.timeline.sourceRate === null
       || !['content', 'sample-song-estimate', 'boot-probe-estimate'].includes(decision.source)
       || decision.advanceMs === null || !Number.isFinite(decision.advanceMs)
       || Math.abs(decision.advanceMs) > 2_800) return false;

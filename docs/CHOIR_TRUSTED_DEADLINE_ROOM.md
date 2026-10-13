@@ -171,11 +171,12 @@ monotonic clock and output sink.
 
 ## Gated capture rebind and replay isolation
 
-A disconnected A's retained PCM is finished first under the **original**
-MixBus and MicTrack read deadline. A subsequent verified new transport can
-claim the same singer slot only once `edge.silenced` is true and its
-`lastEmittedMicSourceSample` has passed the old captured frontier. The
-old MicTrack object is discarded; B's seat, PCM and media epoch do not move.
+For a **previously authorized/audible** A, retained PCM finishes under the
+original MixBus and MicTrack read deadline. A subsequent verified new transport
+can reclaim that singer slot only when `edge.silenced` is true and
+`lastEmittedMicSourceSample` has passed the captured frontier. An uncalibrated,
+never-authorized rebound is a separate case described below. The old MicTrack
+object is discarded; B's seat, PCM and media epoch do not move.
 
 The replacement starts with `awaitingCalibration = true`, and the
 canonical mixer does not emit its voice or commit an audible read-head
@@ -193,13 +194,14 @@ only after a fresh accepted decision and real PCM has arrived.
 ## Repeated rebind and calibration-source transition gates (2026-10-14)
 
 The A → A2 → A3 regression revealed a special case: A2 may be admitted,
-remain uncalibrated and ingest **zero PCM**, then disconnect. There is no
-captured source tail or permitted audible voice to retire. The coordinator now
-allows that never-calibrated, empty MicTrack to be replaced without waiting
-for a fictitious source-output fade. This exception is intentionally narrow:
-a track with captured PCM must still satisfy the original tail/frontier and
-SourceOutputEdge conditions. A3 receives a new media epoch and cannot accept
-A2's calibration, transport or captured PCM.
+buffer real PCM, but disconnect **without ever obtaining calibration authority**.
+The mixer bypasses its per-sample voice processor while `awaitingCalibration`
+and keeps its output edge silent; thus no PCM from A2 was ever eligible for
+playback. Such a disconnected, never-authorized MicTrack may be discarded even
+if it held buffered PCM, provided it still has no authority, join gain or
+emitted source-read history. This does **not** relax the tail/frontier and
+SourceOutputEdge requirements for a previously authorized MicTrack. A3
+receives a new media epoch and cannot inherit A2's PCM or calibration.
 
 Calibration authority must be distinguished from PCM availability:
 

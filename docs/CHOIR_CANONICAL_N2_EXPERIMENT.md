@@ -93,3 +93,19 @@ Content/fallback authority, Listen and Take provenance are enforced can this
 fan-in replace or extend a deployed N=1 AudioSession.
 
 All three stacked PRs (#571, #573, #576) stay Draft until N=1 is stable.
+
+
+## Ingest provenance fencing (still offline only)
+
+The N=2 test room now refuses unpositioned PCM packets, non-finite or
+negative source indices/generations, more than two source seconds in one
+packet, fully duplicated intervals, backwards capture generations and an
+established capture source timestamp mapping over two seconds ahead of
+server room time. It compares a proven native source origin after conversion,
+not to zero: a capture whose absolute sample count starts after an hour is
+still valid when correctly anchored to the room. Both Media Epoch and song
+Epoch are checked before any packet enters the canonical MicTrack.
+
+These are preliminary *harness* admission guards. A deployed server must
+use authenticated transport/media epochs and stronger source rate, packet
+size and real-time scheduling policy. This code is not loaded by server.ts.

@@ -153,6 +153,33 @@ export class CanonicalChoirMixExperiment {
       || !Number.isSafeInteger(roomNowSample) || roomNowSample < 0
       || !Number.isInteger(sourceRate) || sourceRate < 8_000 || sourceRate > 192_000)
       return false;
+    // This test room only supports authenticated, positioned capture frames.
+    // The production N=1 legacy/unheadered compatibility path is untouched.
+    const packetSamples = frame.pcm.byteLength / 2;
+    if (!Buffer.isBuffer(frame.pcm) || frame.pcm.byteLength % 2 !== 0
+      || !Number.isSafeInteger(packetSamples) || packetSamples < 1
+      || packetSamples > 2 * sourceRate
+      || !Number.isSafeInteger(frame.generation) || frame.generation! < 0
+      || !Number.isSafeInteger(frame.firstSampleIndex)
+      || frame.firstSampleIndex! < 0
+      || !Number.isSafeInteger(frame.firstSampleIndex! + packetSamples)) return false;
+    const source = slot.mic.timeline;
+    if (source.generation !== null) {
+      if (frame.generation! < source.generation) return false;
+      if (frame.generation === source.generation && source.sourceRate === sourceRate) {
+        // A distant future timestamp can move the ring's retention beyond
+        // audio not yet emitted. Compare in trusted room coordinates, NOT to
+        // a capture-clock index that may start at millions after reconnect.
+        const mappedStart = slot.mic.sourceSampleToSessionSample(
+          frame.firstSampleIndex!, sourceRate,
+        );
+        const maximumFutureStart = roomNowSample + 2 * this.sampleRate;
+        if (mappedStart > maximumFutureStart) return false;
+        if (source.sourceFrontier !== null
+          && frame.firstSampleIndex! + packetSamples <= source.sourceFrontier)
+          return false;
+      }
+    }
     slot.mic.ingestCapture({
       frame, sourceRate, running: true,
       roomSampleNow: () => roomNowSample,

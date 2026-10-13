@@ -204,6 +204,39 @@ describe('canonical MicTrack N=2 through the production MixBus (no live server)'
     assert.equal(solo.render(4 * FRAME).singers[0].expected, true);
   });
 
+  test('future-dated, duplicate and stale capture packets never move one singer timeline', () => {
+    const mix = room();
+    assert.equal(mix.addSinger(A), true);
+    assert.equal(mix.addSinger(B), true);
+    assert.equal(mix.ingestMic(A, pcm(FRAME, 3_000), RATE, FRAME), true);
+    assert.equal(mix.ingestMic(B, pcm(FRAME, 8_000), RATE, FRAME), true);
+    assert.equal(mix.ingestMic(A, pcm(FRAME, 3_000), RATE, FRAME), false,
+      'duplicate capture interval is not an additional source sample');
+    assert.equal(mix.ingestMic(A, pcm(FRAME, 3_000, RATE * 8), RATE, 2 * FRAME), false,
+      'wildly future-dated PCM must not poison read-head retention');
+    assert.equal(mix.ingestMic(A, pcm(FRAME * 105, 3_000, FRAME), RATE, FRAME), false,
+      'a single pathological PCM packet must not consume seconds of CPU');
+    assert.equal(mix.ingestMic(A, pcm(FRAME, 3_000, 0, 2), RATE, FRAME * 3), true,
+      'the newer capture generation may still legitimately restart');
+    assert.equal(mix.ingestMic(A, pcm(FRAME, 3_000, FRAME, 1), RATE, FRAME * 4), false,
+      'an old generation cannot be reinterpreted as a fresh restart');
+    assert.equal(mix.ingestMic(B, pcm(FRAME, 8_000, FRAME), RATE, FRAME * 2), true,
+      'B source continues independently of A packet fencing');
+    const frame = mix.render(0);
+    assert.equal(frame.singers[0].gapSamples, 0);
+    assert.equal(frame.singers[1].gapSamples, 0);
+  });
+
+  test('a large absolute native capture origin is not confused with a future attack', () => {
+    const mix = room();
+    assert.equal(mix.addSinger(A), true);
+    const start = RATE * 3600;
+    assert.equal(mix.ingestMic(A, pcm(FRAME, 7_000, start), RATE, FRAME), true);
+    assert.equal(mix.ingestMic(A, pcm(FRAME, 7_000, start + FRAME), RATE, FRAME * 2), true,
+      'the native source index can be large even while the room clock is young');
+    assert.equal(mix.render(0).singers[0].gapSamples, 0);
+  });
+
   test('room sample clock and source epochs cannot be silently replaced', () => {
     const mix = room();
     assert.equal(mix.addSinger({ ...A, songEpoch: 8 }), false);

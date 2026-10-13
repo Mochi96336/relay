@@ -3,6 +3,7 @@ import { ChoirPublisherRegistry } from './choir-publisher-registry.js';
 import { ChoirSession, type ChoirSeat } from './choir-session.js';
 import type { PcmFrame } from './pcm-frame.js';
 import type { ChoirAlignmentDecision } from './choir-calibration-experiment.js';
+import { analyzeTimingCalibration } from './timing-calibration.js';
 
 /**
  * OFFLINE server boundary for real canonical MicTracks. NOT connected to
@@ -25,6 +26,8 @@ export type ChoirDeadlineRoomOptions = {
   retentionMs: number;
   songEpoch: number;
   backingGeneration: number;
+  /** Trusted playback/video identity; mandatory for the real Content proof route. */
+  videoId?: string;
   /** Shared room time origin established by the trusted server clock. */
   roomEpochMs: number;
   /** Additional time allowed for both singers' packets before a frame seals. */
@@ -66,6 +69,14 @@ export class ChoirDeadlineRoomExperiment {
   private readonly maxCatchupFrames: number;
   private readonly songEpoch: number;
   private readonly backingGeneration: number;
+  private readonly videoId: string | null;
+  private readonly contentRevisions = new Map<string, number>();
+  private readonly pendingCanonicalContent = new Map<string, {
+    participantId: string; transportId: string; mediaEpoch: number;
+    songEpoch: number; backingGeneration: number; videoId: string;
+    captureGeneration: number; sourceRate: number;
+    revision: number; measuredAtMs: number; advanceMs: number;
+  }>();
   private nextFrameIndex = 0;
   private readonly sealedFrames: CanonicalChoirFrame[] = [];
   private lastNowMs = Number.NEGATIVE_INFINITY;
@@ -88,6 +99,9 @@ export class ChoirDeadlineRoomExperiment {
     this.maxCatchupFrames = config.maxCatchupFrames ?? 8;
     this.songEpoch = config.songEpoch;
     this.backingGeneration = config.backingGeneration;
+    if (config.videoId !== undefined && !/^[A-Za-z0-9_-]{11}$/.test(config.videoId))
+      throw new RangeError('Invalid Choir Content video ID');
+    this.videoId = config.videoId ?? null;
     this.seats = new ChoirSession(2);
     this.registry = new ChoirPublisherRegistry(this.seats, config.reconnectGraceMs ?? 2_000);
     this.room = new CanonicalChoirMixExperiment(config);
@@ -171,6 +185,8 @@ export class ChoirDeadlineRoomExperiment {
       this.registry.release(req.verifiedParticipantId);
       return { ok: false, reason: 'room-rejected' };
     }
+    // An admitted NEW Media Epoch invalidates every pending proof from A/A2.
+    this.pendingCanonicalContent.delete(req.verifiedParticipantId);
     return { ok: true, mediaEpoch: result.mediaEpoch, idempotent: false };
   }
 
@@ -290,10 +306,119 @@ export class ChoirDeadlineRoomExperiment {
     }, proof, decision);
   }
 
+  /**
+   * Actually analyze six seconds of Mic + Robot backing already ingested in
+   * their CANONICAL room PCM timelines. This never accepts supplied samples,
+   * client-claimed lag, confidence, proof token or generation. A caller may
+   * select a window only; gaps/frontier/unheadered/stale backing are rejected.
+   * This is an offline server-side experiment, not a production socket API.
+   */
+  analyzeTrustedCanonicalContent(
+    transportId: string, mediaEpoch: number,
+    startSample: number, nowMs: number,
+  ): { status: 'candidate'; revision: number; lagMs: number; confidence: number }
+    | { status: 'rejected'; reason: string } {
+    if (!this.sealDueNow(nowMs)) return { status: 'rejected', reason: 'invalid-clock' };
+    const active = this.registry.activePublisherForTransport(transportId);
+    if (!active || active.mediaEpoch !== mediaEpoch || this.videoId === null)
+      return { status: 'rejected', reason: 'untrusted-transport-or-song' };
+    const participantId = active.participantId;
+    this.pendingCanonicalContent.delete(participantId);
+    const id = {
+      participantId, mediaEpoch,
+      songEpoch: this.songEpoch, backingGeneration: this.backingGeneration,
+    };
+    const state = this.room.contentProofState(id);
+    if (!state || state.captureGeneration === null || state.sourceRate === null)
+      return { status: 'rejected', reason: 'no-current-capture' };
+    const clip = this.room.readTrustedContentWindow(id, state.captureGeneration, startSample);
+    if (!clip) return { status: 'rejected', reason: 'incomplete-or-stale-pcm-window' };
+    // Analyzer runs on room-rate PCM only. The decision is retained privately:
+    // no mutation to the returned diagnostics can change subsequent authority.
+    try {
+      const result = analyzeTimingCalibration(clip.mic, clip.backing, this.sampleRate);
+      if (!Number.isFinite(result.micLagMs)
+        || !Number.isFinite(result.confidence)
+        || result.confidence <= 0 || result.confidence > 1
+        || Math.abs(result.micLagMs) > 2_800) {
+        return { status: 'rejected', reason: 'invalid-content-result' };
+      }
+      const revision = (this.contentRevisions.get(participantId) ?? 0) + 1;
+      this.contentRevisions.set(participantId, revision);
+      this.pendingCanonicalContent.set(participantId, {
+        participantId, transportId, mediaEpoch,
+        songEpoch: this.songEpoch, backingGeneration: this.backingGeneration,
+        videoId: this.videoId, captureGeneration: state.captureGeneration,
+        sourceRate: state.sourceRate, revision, measuredAtMs: nowMs,
+        advanceMs: result.micLagMs,
+      });
+      return { status: 'candidate', revision, lagMs: result.micLagMs,
+        confidence: result.confidence };
+    } catch (error) {
+      return { status: 'rejected',
+        reason: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /**
+   * Consume the *stored* analyzer result exactly once; no lag, revision or
+   * proof material can be submitted as a method argument. Source identity,
+   * same Media Epoch, native generation and strict evidence age are rechecked.
+   *
+   * The trusted host is responsible for Take state; a frozen Take is denied.
+   */
+  commitTrustedCanonicalContent(
+    transportId: string, mediaEpoch: number, nowMs: number, takeFrozen: boolean,
+  ): 'applied' | 'staged' | 'rejected' {
+    if (!this.sealDueNow(nowMs)) return 'rejected';
+    const active = this.registry.activePublisherForTransport(transportId);
+    if (!active || active.mediaEpoch !== mediaEpoch || takeFrozen) return 'rejected';
+    const pending = this.pendingCanonicalContent.get(active.participantId);
+    if (!pending) return 'rejected';
+    this.pendingCanonicalContent.delete(active.participantId);
+    if (pending.transportId !== transportId || pending.mediaEpoch !== mediaEpoch
+      || pending.participantId !== active.participantId
+      || pending.songEpoch !== this.songEpoch
+      || pending.backingGeneration !== this.backingGeneration
+      || pending.videoId !== this.videoId
+      || !Number.isFinite(nowMs) || nowMs < pending.measuredAtMs
+      || nowMs - pending.measuredAtMs > 20_000) return 'rejected';
+    const id = {
+      participantId: active.participantId, mediaEpoch,
+      songEpoch: this.songEpoch, backingGeneration: this.backingGeneration,
+    };
+    const state = this.room.contentProofState(id);
+    if (!state || state.captureGeneration !== pending.captureGeneration
+      || state.sourceRate !== pending.sourceRate) return 'rejected';
+    const decision: ChoirAlignmentDecision = {
+      source: 'content', advanceMs: pending.advanceMs,
+      sampleResidualMs: null, bootResidualMs: null,
+      sampleCandidateMs: null, bootCandidateMs: null,
+    };
+    if (state.requiresFreshContent) {
+      return this.room.acceptReacquiredContent(id, {
+        mediaEpoch, captureGeneration: pending.captureGeneration,
+        revision: pending.revision,
+      }, decision) ? 'applied' : 'rejected';
+    }
+    if (state.awaitingCalibration) {
+      return this.room.acceptReboundAlignment(id, decision) ? 'applied' : 'rejected';
+    }
+    if (state.authoritySource === 'sample-song-estimate'
+      || state.authoritySource === 'boot-probe-estimate') {
+      if (this.room.recoverContentWithoutJump(id, pending.revision, decision, false))
+        return 'applied';
+      if (this.room.stageLargeContentReacquisition(id, pending.revision, decision, false))
+        return 'staged';
+    }
+    return 'rejected';
+  }
+
   disconnectTransport(transportId: string, nowMs: number): boolean {
     if (!this.sealDueNow(nowMs)) return false;
     const active = this.registry.activePublisherForTransport(transportId);
     if (!active || !this.registry.disconnect(transportId, nowMs)) return false;
+    this.pendingCanonicalContent.delete(active.participantId);
     return this.room.disconnect({
       participantId: active.participantId,
       mediaEpoch: active.mediaEpoch,

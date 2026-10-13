@@ -73,6 +73,7 @@ export class ChoirDeadlineRoomExperiment {
   private readonly songEpoch: number;
   private readonly backingGeneration: number;
   private readonly videoId: string | null;
+  private backingNativeSourceRate: number | null = null;
   private playbackMapping: {
     mappingEpoch: number; videoId: string; robotCaptureGeneration: number;
     playbackRate: number; playing: boolean;
@@ -540,11 +541,30 @@ export class ChoirDeadlineRoomExperiment {
   /** Robot/Backing may only be called by the server's trusted media route. */
   receiveTrustedBacking(frame: PcmFrame, sourceRate: number, nowMs: number) {
     if (!this.sealDueNow(nowMs)) return false;
+    if ((this.videoId !== null && !this.playbackMapping?.playing)
+      || !Number.isInteger(sourceRate) || sourceRate < 8_000 || sourceRate > 192_000)
+      return false;
+    // Robot replacement or a source-rate clock rebuild invalidates more than
+    // Content evidence: an already audible song may no longer share the same
+    // media-time mapping. Fail closed on the entire offline room rather than
+    // continuing under an old alignment with newly labelled PCM.
+    if (frame.generation !== this.backingGeneration
+      || (this.backingNativeSourceRate !== null
+        && sourceRate !== this.backingNativeSourceRate)) {
+      this.pendingCanonicalContent.clear();
+      this.room.invalidateContentEvidenceHistory();
+      this.invalidated = 'playback-mapping-changed';
+      this.sealedFrames.length = 0;
+      return false;
+    }
     const roomNowSample = Math.floor(
       (nowMs - this.roomEpochMs) * this.sampleRate / 1000,
     );
-    return Number.isSafeInteger(roomNowSample)
+    const accepted = Number.isSafeInteger(roomNowSample)
       && this.room.ingestBacking(frame, sourceRate, roomNowSample);
+    if (accepted && this.backingNativeSourceRate === null)
+      this.backingNativeSourceRate = sourceRate;
+    return accepted;
   }
 
   /** Return previously sealed frames, plus any newly due at this clock tick. */

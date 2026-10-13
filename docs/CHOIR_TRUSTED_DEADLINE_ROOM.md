@@ -223,3 +223,52 @@ including per-media-epoch identity and independently verified Content/Boot
 evidence, is not wired. The offline coordinator accepts already-authorized
 decisions, not raw client evidence. These policies and tests must not be
 misreported as end-to-end authenticated live calibration.
+
+## Live fallback-to-Content recovery: gated, not an instant reposition
+
+The *offline experimental* trusted deadline coordinator now offers
+`acceptTrustedLiveContentRecovery(transportId, mediaEpoch, proofRevision,
+decision, nowMs, takeFrozen)`. This is **not** a WebSocket RPC, and does
+not collect or authenticate Content evidence. The eventual server adapter
+must derive the transport, media epoch, monotonically ordered proof revision,
+and Take-freeze state from its OWN trusted sources, not untrusted client fields.
+
+This narrow proof handles a singer who rejoined, obtained fresh Sample or Boot
+authority, and is already audible when **new verified Content** arrives.
+The initial rebound alignment remains valid throughout a rejected recovery.
+
+The request is rejected unless all of these hold:
+
+- Current authenticated/connected transport and identical media/song/backing
+  epochs; the singer is not disconnected, awaiting initial calibration or in Take
+  freeze; the prior admitted source is an actual Sample/Boot fallback.
+- A new positive, monotonic revision and accepted `content` decision with a
+  finite bounded signed advance. Held, missing, replayed or wrong-source
+  decisions cannot promote themselves.
+- Same native capture generation and source rate that established the rebound
+  authority; MicTrack's earlier correction finished, and its previous audible
+  frame was PCM-complete.
+- Both the *old* and the proposed source read windows, including limiter
+  look-ahead, contain **real retained PCM**, not a gap or missing frontier.
+- The target differs by at most 5 ms from both the current target and the
+  rebound's **original** trusted lag. This last check blocks a staircase of
+  small proofs from accumulating into a large jump. The target must fit the
+  existing prebuffer/retention budget. The 5 ms guard is experimental and
+  is **not** a measured device tolerance or a production latency claim.
+
+After acceptance, only `MicTrack.calibratedMicLagTargetMs` changes; the
+canonical MicTrack algorithm advances the applied lag by at most 1% of a frame
+duration per output frame (0.2 ms for a 20 ms frame), with its existing
+fractional PCM read, frontier protection and limiter. No new read-head DSP
+path was added. The per-singer output evidence now distinguishes
+`calibrationSource` (**newly authorized target source**) from
+`calibrationAppliedMs` (**lag used by this frame**) and
+`calibrationTargetMs` (**eventual requested lag**). During slew these values
+are intentionally different.
+
+A disagreement larger than the bounded window **remains on the last known
+fallback**. Explicit, separately proven reacquisition or a new safe epoch
+is still needed. This experiment intentionally does not implement automatic
+primary-Mic succession, live fallback demotion, large-lag crossfade, or a
+verified physical two-phone calibration adapter. Existing N=1 audio processing
+and deployed server routing are untouched.

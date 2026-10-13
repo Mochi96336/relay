@@ -472,8 +472,13 @@ automatic primary-Mic succession or physical two-phone runtime.
 
 A dedicated `ChoirSongSessionBridgeExperiment` now reads the actual
 `SongSession.statusPayload(nowMs)` object, **after SongSession has accepted a
-playback publisher**. It does not read raw WebSocket song telemetry, accept a
-client-submitted revision, or mint playback leadership. On first valid playing
+playback publisher**, AND the real `SourceRuntime` backing-control
+`connected()` and `generation`. It does not read raw WebSocket song
+telemetry, accept a client-submitted revision, or mint playback leadership.
+The bridge refuses initial authorization if the Robot source has not yet
+connected. After admission, `SourceRuntime.invalidateMapping()`, source
+replacement, source disconnection or transport liveness loss immediately
+revokes the offline room even when SongSession is still visibly PLAYING. On first valid playing
 status it initializes the fixed Choir mapping using SongSession's server-owned
 revision and leader identity. Subsequent stable clock projections do nothing:
 the adapter does **not** invalidate a room every 20 ms or on every telemetry

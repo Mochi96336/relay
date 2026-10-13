@@ -205,8 +205,11 @@ receives a new media epoch and cannot inherit A2's PCM or calibration.
 
 Calibration authority must be distinguished from PCM availability:
 
-1. A fresh Content/Sample/Boot decision may clear `awaitingCalibration`,
-   but does not bypass source placement, prebuffer or Mic frontier protection.
+1. A fresh Content/Sample/Boot decision may clear `awaitingCalibration`
+   **only after at least one native positioned PCM packet established the new
+   Capture Generation and source rate**; otherwise authority would be bound to
+   null and become impossible to revalidate. Authorization does not bypass
+   source placement, prebuffer or Mic frontier protection.
 2. `content-held` is *not* a backup signal or audible authority, even if it
    carries the last known Content advance for diagnosis.
 3. A Content `revoke` invalidates its previous confirmed authority. The

@@ -109,3 +109,16 @@ Epoch are checked before any packet enters the canonical MicTrack.
 These are preliminary *harness* admission guards. A deployed server must
 use authenticated transport/media epochs and stronger source rate, packet
 size and real-time scheduling policy. This code is not loaded by server.ts.
+
+
+## Media epoch restart does not reuse an acoustic calibration
+
+The offline canonical room can now safely replace an already disconnected
+singer after the old audio tail and source output fade have **finished**.
+A fresh `MicTrack` starts muted while the new media epoch awaits an
+externally verified Content or Sample/Boot fallback decision.
+`awaitingCalibration` is available per-singer in frame evidence.
+The ordinary room's N=1 path, older canonical N=2 tests and B's capture
+remain separate. The reconnect test deliberately prebuffers real source
+PCM before demanding a visible signal, rather than disabling the existing
+Mic frontier safety correction to make an undersupplied sample audible.

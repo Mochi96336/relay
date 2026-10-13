@@ -93,11 +93,27 @@ host handoff still needs validation before the live integration.
 
 ## Deliberate fail-closed limitations
 
-- Reattaching an existing singer through a new transport is currently
-  rejected with `rebind-deferred`: retaining previous PCM through a new
-  media epoch without clicks, mis-replay or calibration contamination is
-  **not solved**. Reconnect is therefore not a shipped feature of this
-  coordinator. Existing N=1 reconnect behavior is unchanged.
+- A new socket for the **same disconnected singer** is rejected with
+  `rebind-deferred` **while old captured PCM or its output fade is still
+  audible**. After the old source read head has passed the captured tail and
+  reached silence, an explicit registry admission grants a NEW server
+  `mediaEpoch`, atomically replaces only that singer's `MicTrack`, resets
+  gain/limiter/clock/PCM and preserves B's independent capture.
+- The new Mic remains **muted** after admission. Even if it has PCM, only a
+  `ChoirAlignmentDecision` supplied through
+  `acceptTrustedReboundAlignment` with a currently admitted transport/media
+  epoch and an accepted `content`, `sample-song-estimate` or
+  `boot-probe-estimate` may unlock it. `content-held`, `unavailable`,
+  mismatched epochs and replayed decisions cannot unmute it. An upstream
+  trusted calibration runtime must establish fresh evidence identity and
+  validity before invoking this server-only method; this coordinator
+  **does not itself authenticate or validate raw Content/Boot candidates**.
+- This gated rebind is a deterministic **prototype**, not a shipped
+  reconnection guarantee. It can defer past the configured reconnect grace,
+  in which case the publisher registry requires a fresh explicit seat claim.
+  Seamless phase-continuous live crossfade or auto-reconnect while both old
+  and new publishers overlap is intentionally not implemented. Existing N=1
+  reconnect behavior is unchanged.
 - `CanonicalChoirMixExperiment` remains a deterministic test room, not
   a replacement for production `AudioSession`. Its N=2 headroom and fade
   can differ from N=1; the existing Golden PCM suite protects the latter.
@@ -151,3 +167,25 @@ count against the maximum pending limit. Going over that limit latches a
 fresh-epoch requirement and drops stale pending PCM. This remains a pure
 deterministic test scheduler: production still must provide a reliable
 monotonic clock and output sink.
+
+
+## Gated capture rebind and replay isolation
+
+A disconnected A's retained PCM is finished first under the **original**
+MixBus and MicTrack read deadline. A subsequent verified new transport can
+claim the same singer slot only once `edge.silenced` is true and its
+`lastEmittedMicSourceSample` has passed the old captured frontier. The
+old MicTrack object is discarded; B's seat, PCM and media epoch do not move.
+
+The replacement starts with `awaitingCalibration = true`, and the
+canonical mixer does not emit its voice or commit an audible read-head
+history until **new-capture** Content/Sample/Boot authority is provided.
+An acoustic decision may be accepted only once per rebind. All earlier A
+credentials and decisions are fenced. A source with insufficient received
+PCM still obeys the existing 200ms Mic frontier cushion; neither
+authorization nor timestamp math can conjure missing packet samples.
+
+The offline tests cover rejection before old-tail retirement, new Media
+Epoch and Capture reset, old transport rejection, B continuity, held/
+unavailable/stale decision rejection, and the new source becoming audible
+only after a fresh accepted decision and real PCM has arrived.

@@ -356,3 +356,80 @@ describe('end-to-end experimental Content > accepted calibration > native read >
     assert.deepEqual(next.singers.map(s => s.participantId), [B.participantId]);
   });
 });
+
+describe('adversarial end-to-end check: microphone event timestamps are independent of estimator', () => {
+  test('real Content lags put A/B independently timestamped PCM transients into the same room window', () => {
+    const trueLags = [
+      { id: A, lag: 120 },
+      { id: B, lag: -340 },
+    ] as const;
+    const roomEventSample = 3 * FRAME + 400;
+    const zeroAdvanceNativeMicSample = RATE;
+    const outputs: number[] = [];
+    const view = (buffer: Buffer) => new Int16Array(
+      buffer.buffer, buffer.byteOffset, buffer.byteLength / 2,
+    );
+
+    for (const singer of trueLags) {
+      // Ground truth comes from fixture construction, NOT from the estimate.
+      const synthetic = laggedMultibandMusicPair(6, RATE, singer.lag, { singerGain: 0.1 });
+      const calibration = new ChoirCalibrationExperiment();
+      const identity: ChoirCalibrationIdentity = {
+        participantId: singer.id.participantId, videoId: 'abcdefghijk',
+        songEpoch: SONG, micGeneration: singer.id.captureGeneration,
+        backingGeneration: BACKING, roomGeneration: 3,
+        robotSourceGeneration: 5, micSourceRate: RATE, backingSourceRate: RATE,
+      };
+      assert.equal(calibration.activate(identity), true);
+      const candidate = calibration.analyzeContent(
+        identity, view(synthetic.mic), view(synthetic.backing), RATE,
+      );
+      assert.equal(candidate.status, 'candidate');
+      if (candidate.status !== 'candidate') return;
+      assert.equal(calibration.confirmContent(candidate.candidate, true), true);
+      const decision = calibration.resolve({
+        identity, nowMs: 10_000, contentApplicability: 'apply',
+        sampleMap: (_, anchor) => anchor.sampleIndex,
+        sessionSampleRate: RATE, playbackRate: 1,
+      });
+      assert.equal(decision?.source, 'content');
+      const converted = choirAnchorFromDecision({
+        participantId: singer.id.participantId, songEpoch: SONG,
+        captureGeneration: singer.id.captureGeneration, backingGeneration: BACKING,
+        roomSampleRate: RATE, micSampleRate: RATE, roomSampleAtAnchor: 0,
+        zeroAdvanceNativeMicSample, decision: decision!,
+      });
+      assert.ok(converted);
+
+      const room = subject();
+      assert.equal(room.addSinger(singer.id), true);
+      assert.equal(room.installAnchor(converted!.anchor, 'content'), true);
+
+      const nativeFirstSample = 20_000;
+      const source = new Int16Array(65_000);
+      const trueNativeEvent = zeroAdvanceNativeMicSample
+        + Math.round(singer.lag * RATE / 1000) + roomEventSample;
+      source[trueNativeEvent - nativeFirstSample] = 24_000;
+      assert.equal(packet(room, singer.id, nativeFirstSample, source), 'accepted');
+
+      const mixed = new Int16Array(8 * FRAME);
+      for (let frame = 0; frame < 8; frame++) {
+        const rendered = ready(render(room, frame * FRAME));
+        mixed.set(rendered.pcm, frame * FRAME);
+      }
+      let peakSample = 0;
+      for (let i = 1; i < mixed.length; i++) {
+        if (Math.abs(mixed[i]) > Math.abs(mixed[peakSample])) peakSample = i;
+      }
+      assert.ok(Math.abs(mixed[peakSample]) > 500, 'real PCM transient was rendered');
+      assert.ok(
+        Math.abs(peakSample - roomEventSample) <= RATE * 0.025,
+        `independent truth ${singer.lag}ms: expected room event ${roomEventSample}, got ${peakSample}`,
+      );
+      outputs.push(peakSample);
+    }
+    assert.equal(outputs.length, 2);
+    assert.ok(Math.abs(outputs[0] - outputs[1]) <= RATE * 0.03,
+      `the voices must coincide within 30ms: ${outputs.join(', ')}`);
+  });
+});

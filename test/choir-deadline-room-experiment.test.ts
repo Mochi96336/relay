@@ -342,6 +342,62 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
       'socket-A3', a3.mediaEpoch, valid, 342), false);
   });
 
+  test('live Content recovery remains server-transport-fenced and requires playable PCM', () => {
+    const coordinator = room();
+    const { a, b } = admitBoth(coordinator);
+    assert.equal(coordinator.receiveFromTransport('socket-A',
+      captured(FRAME, 8_000), RATE, 20), true);
+    assert.equal(coordinator.receiveFromTransport('socket-B',
+      captured(FRAME * 18, 6_000), RATE, 40), true);
+    assert.equal(coordinator.disconnectTransport('socket-A', 80), true);
+    for (const at of [220, 240, 260]) {
+      assert.equal(coordinator.renderDue(at).state, 'ready');
+    }
+    const a2 = coordinator.admitTrusted({
+      verifiedParticipantId: 'A', transportId: 'socket-A2',
+      seat: 'primary', expectedPrimaryId: 'A', nowMs: 261,
+    });
+    assert.equal(a2.ok, true);
+    if (!a2.ok) return;
+    const fallback = {
+      source: 'boot-probe-estimate' as const, advanceMs: 0,
+      sampleResidualMs: null, bootResidualMs: null,
+      sampleCandidateMs: null, bootCandidateMs: 0,
+    };
+    const content = { ...fallback, source: 'content' as const, advanceMs: 2 };
+    assert.equal(coordinator.receiveFromTransport('socket-A2',
+      captured(FRAME, 9_000), RATE, 263), true);
+    assert.equal(coordinator.acceptTrustedReboundAlignment(
+      'socket-A2', a2.mediaEpoch, fallback, 264), true);
+    const first = coordinator.renderDue(280);
+    assert.equal(first.state, 'ready');
+    if (first.state === 'ready') {
+      assert.equal(first.frames[0].singers[0].calibrationSource, 'boot-probe-estimate');
+    }
+    assert.equal(coordinator.acceptTrustedLiveContentRecovery(
+      'socket-A', a.mediaEpoch, 1, content, 281, false), false,
+      'retired transport cannot submit proof');
+    assert.equal(coordinator.acceptTrustedLiveContentRecovery(
+      'socket-A2', a.mediaEpoch, 1, content, 282, false), false,
+      'old media epoch cannot authorize live mutation');
+    assert.equal(coordinator.acceptTrustedLiveContentRecovery(
+      'socket-A2', a2.mediaEpoch, 1, content, 283, false), false,
+      'single frame of source PCM is not a complete playable read window');
+    assert.equal(coordinator.acceptTrustedLiveContentRecovery(
+      'socket-A2', a2.mediaEpoch, 1, content, 284, true), false,
+      'Take freeze denies calibration changes regardless of buffering');
+    assert.equal(coordinator.disconnectTransport('socket-A2', 285), true);
+    assert.equal(coordinator.acceptTrustedLiveContentRecovery(
+      'socket-A2', a2.mediaEpoch, 1, content, 286, false), false,
+      'another disconnect invalidates delayed Content recovery');
+    const next = coordinator.renderDue(300);
+    assert.equal(next.state, 'ready');
+    if (next.state === 'ready') {
+      assert.equal(next.frames[0].singers[1].mediaEpoch, b.mediaEpoch);
+      assert.equal(next.frames[0].singers[1].expected, true);
+    }
+  });
+
   test('expired reconnect grace cannot silently restore a revoked primary seat', () => {
     const coordinator = room();
     const { a, b } = admitBoth(coordinator);

@@ -84,6 +84,26 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     assert.equal(coordinator.registry.mayAcceptMedia('B', 'socket-B', b.mediaEpoch), true);
   });
 
+  test('a late packet cannot fill an already sealed Mic frame after deadline', () => {
+    const coordinator = room();
+    admitBoth(coordinator);
+    assert.equal(coordinator.receiveFromTransport('socket-A',
+      captured(FRAME / 2, 5_000), RATE, 10), true);
+    assert.equal(coordinator.receiveFromTransport('socket-B',
+      captured(FRAME * 5, 6_000), RATE, 100), true);
+    const first = coordinator.renderDue(220);
+    if (first.state !== 'ready') throw new Error('due');
+    assert.equal(first.frames[0].singers[0].frontierMissingSamples, FRAME / 2);
+    assert.equal(coordinator.receiveFromTransport('socket-A',
+      captured(FRAME / 2, 8_000, FRAME / 2), RATE, 221), false,
+      'late A samples cannot retroactively change the emitted room frame');
+    const second = coordinator.renderDue(240);
+    if (second.state !== 'ready') throw Error('next');
+    assert.equal(second.frames[0].singers[0].latePacketDrops, 1);
+    assert.equal(second.frames[0].singers[1].latePacketDrops, 0);
+    assert.ok(second.frames[0].singers[1].expected);
+  });
+
   test('explicit transport rebind fails closed until safe capture-tail replacement exists', () => {
     const coordinator = room();
     const { a, b } = admitBoth(coordinator);

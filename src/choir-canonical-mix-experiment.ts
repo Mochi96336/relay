@@ -39,6 +39,8 @@ export type CanonicalChoirSingerEvidence = {
   heavyLimitedSamples: number;
   /** Limiter attack overshoots its ceiling: explicit N=2 bus guard engaged. */
   limiterOvershootSamples: number;
+  /** Newly arrived Mic PCM dropped after its source position was already emitted. */
+  latePacketDrops: number;
   expected: boolean;
 };
 
@@ -56,6 +58,7 @@ type Slot = {
   expected: boolean;
   /** Separate entrance fade; room MixBus cannot detect an additional Mic. */
   joinGain: number;
+  latePacketDrops: number;
 };
 
 type RoomConfig = {
@@ -129,6 +132,7 @@ export class CanonicalChoirMixExperiment {
     const mic = new MicTrack(this.micOptions);
     this.slots.set(id.participantId, {
       identity: { ...id }, mic, expected: true, joinGain: 0,
+      latePacketDrops: 0,
     });
     this.bus.setMicExpected(true, true);
     return true;
@@ -160,8 +164,9 @@ export class CanonicalChoirMixExperiment {
       return false;
     // This test room only supports authenticated, positioned capture frames.
     // The production N=1 legacy/unheadered compatibility path is untouched.
+    if (!Buffer.isBuffer(frame.pcm)) return false;
     const packetSamples = frame.pcm.byteLength / 2;
-    if (!Buffer.isBuffer(frame.pcm) || frame.pcm.byteLength % 2 !== 0
+    if (frame.pcm.byteLength % 2 !== 0
       || !Number.isSafeInteger(packetSamples) || packetSamples < 1
       || packetSamples > 2 * sourceRate
       || !Number.isSafeInteger(frame.generation) || frame.generation! < 0
@@ -169,6 +174,20 @@ export class CanonicalChoirMixExperiment {
       || frame.firstSampleIndex! < 0
       || !Number.isSafeInteger(frame.firstSampleIndex! + packetSamples)) return false;
     const source = slot.mic.timeline;
+    if (source.generation !== null
+      && frame.generation === source.generation
+      && source.sourceRate === sourceRate
+      && slot.mic.lastEmittedMicSourceSample !== null) {
+      // Even a packet not yet in the ingest frontier must not fill already
+      // emitted room samples. The playback deadline is an immutable read edge.
+      const endExclusive = slot.mic.sourceSampleToSessionSample(
+        frame.firstSampleIndex! + packetSamples, sourceRate,
+      );
+      if (endExclusive <= Math.floor(slot.mic.lastEmittedMicSourceSample) + 1) {
+        slot.latePacketDrops++;
+        return false;
+      }
+    }
     if (source.generation !== null) {
       if (frame.generation! < source.generation) return false;
       if (frame.generation === source.generation && source.sourceRate === sourceRate) {
@@ -251,6 +270,7 @@ export class CanonicalChoirMixExperiment {
         limitedSamples: 0,
         heavyLimitedSamples: 0,
         limiterOvershootSamples: 0,
+        latePacketDrops: slot.latePacketDrops,
         expected: slot.expected,
       };
       slot.mic.lastEmittedMicFrameComplete =

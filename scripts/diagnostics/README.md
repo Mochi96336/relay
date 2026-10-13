@@ -12,7 +12,7 @@ node scripts/diagnostics/live-query.mjs
 輸出可能含影片與校準資訊。一次性觀測只寫暫存；調查報告與量測摘要不放進 Git：
 結論寫進對應 PR 的說明與測試，報告本身保存在 repo 外（Pi 上的 ~/relay-branch-archive/investigations/）。
 
-PipeWire 研究程式見 [pipewire/](pipewire/README.md)。Pi 家目錄不再保留外掛式證據倉庫或歷史壓縮包。
+Pi 家目錄不再保留外掛式證據倉庫或歷史壓縮包。
 
 Playwright 依賴與瀏覽器可從 GitHub workflow 的安裝步驟重建，
 不要依賴 /tmp/relay-opus-browser 在重開機後仍存在。

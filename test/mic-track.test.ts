@@ -33,7 +33,8 @@ describe('extracted MicTrack owns per-singer components independently', () => {
     a.gain.setTargetDb(6, false);
     assert.equal(b.timeline.totalSamples, 0);
     assert.equal(b.timeline.generation, null);
-    assert.equal(b.gain.targetDb, 0);
+    assert.equal(a.gain.targetDb, 6);
+    assert.equal(b.gain.targetDb, 24, 'independent B keeps the Relay default +24 dB');
   });
 
   test('current AudioSession still uses its actual existing Mic clock and limits', () => {

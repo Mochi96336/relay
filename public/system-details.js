@@ -5,7 +5,6 @@ import {
   describeAudio,
   describeOverview,
   describeRobot,
-  describeSession,
   describeTiming,
 } from './diagnostics-model.js';
 import { describeListeners } from './listener-diagnostics-model.js';
@@ -243,6 +242,9 @@ if (
     const container = document.querySelector('#diag-listeners');
     if (!container) return;
     const groups = describeListeners({ statusz: latestStatusz, session, selfId: window.relayParticipantId }, t);
+    // The totals note explains rows in the receiver cards; with no card it explains nothing.
+    const cumulative = document.querySelector('#diag-listeners-cumulative');
+    if (cumulative) cumulative.hidden = !groups?.length;
     if (!groups?.length) {
       const note = document.createElement('p');
       note.className = 'diagnostics-intro';
@@ -426,7 +428,6 @@ if (
     const facts = { product, readiness, source, timing, timeline, statusz: latestStatusz };
 
     renderLedger('diag-overview-ledger', describeOverview(facts, t));
-    renderLedger('diag-session-ledger', describeSession(facts, t));
     renderLedger('diag-mic-ledger', describeMicTransport(latestStatusz, t));
     renderLedger('diag-audio-ledger', describeAudio(facts, t));
     renderListeners(session);

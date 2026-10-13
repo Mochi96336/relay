@@ -10,7 +10,7 @@
 .system-healthy {
   display: grid;
   gap: 4px;
-  padding: 18px 0 20px;
+  padding: 6px 0 14px;
   border-bottom: 1px solid var(--line);
 }
 .system-healthy[hidden] { display: none; }
@@ -71,14 +71,21 @@
   cursor: pointer;
 }
 
-.diagnostics-panel { margin-top: 18px; }
+.diagnostics-panel { margin-top: 4px; }
+/*
+ * Type scale, so each row reads value first: the value is the largest and
+ * brightest, its label one step down, the explanation smallest and dimmest.
+ * Group headings sit between label and note but are set apart by weight,
+ * spacing and air above them.
+ */
 .diagnostics-panel > summary {
   min-height: 44px;
   display: flex;
   align-items: center;
   padding: 0;
-  color: #85878d;
-  font-size: 12px;
+  color: #b4b6ba;
+  font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
 }
 .diagnostics-body {
@@ -98,15 +105,15 @@
 }
 #diagnostics-state {
   color: var(--dim);
-  font-size: 10px;
+  font-size: 11px;
 }
 #copy-diagnostics {
   padding-right: 0;
-  font-size: 10px;
+  font-size: 11px;
 }
 .diagnostics-tabs {
   display: flex;
-  gap: 16px;
+  gap: 18px;
   overflow-x: auto;
   padding: 12px 0 3px;
   scrollbar-width: none;
@@ -119,14 +126,15 @@
   border-bottom: 1px solid transparent;
   padding: 5px 0 7px;
   background: transparent;
-  color: #64676e;
+  color: #6d7077;
   font: inherit;
-  font-size: 10px;
+  font-size: 13px;
   cursor: pointer;
 }
 .diagnostics-tab[aria-selected="true"] {
-  border-bottom-color: #777a81;
-  color: #c4c5c8;
+  border-bottom-color: #9a9ca2;
+  color: #e4e5e8;
+  font-weight: 600;
 }
 .diagnostics-view {
   padding-top: 12px;
@@ -139,8 +147,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  color: #85878d;
-  font-size: 11px;
+  color: #b4b6ba;
+  font-size: 12.5px;
+  font-weight: 560;
   cursor: pointer;
 }
 .diagnostics-advanced > summary::-webkit-details-marker { display: none; }
@@ -153,10 +162,11 @@
 .diagnostics-advanced[open] > summary::after { transform: rotate(90deg); }
 /* Names when a calibration runs, so its rows are not read as another one's. */
 .diagnostic-group {
-  margin: 14px 0 2px;
+  margin: 22px 0 4px;
   color: #9a9ca2;
-  font-size: 10px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .06em;
 }
 .diagnostic-ledger {
   margin: 0;
@@ -164,27 +174,31 @@
   grid-template-columns: minmax(0, 1fr);
 }
 .diagnostic-pair {
-  min-height: 34px;
+  min-height: 40px;
   display: grid;
-  /* A fixed label column: values line up and do not move with the panel width. */
-  grid-template-columns: 128px minmax(0, 1fr);
+  /* The label takes the width it needs on one line, up to 60%, so a short
+     value never forces it to break mid-word. Values are right-aligned, so
+     they still line up whatever each label's width. */
+  grid-template-columns: fit-content(60%) minmax(0, 1fr);
   gap: 16px;
   align-items: center;
   border-bottom: 1px solid #1a1c20;
-  font-size: 10px;
+  font-size: 12px;
 }
-.diagnostic-pair dt { color: #666970; }
+.diagnostic-pair dt { color: #85888e; }
 .diagnostic-pair dd {
   margin: 0;
-  color: #b8b9bd;
+  color: #e1e2e5;
+  font-size: 13px;
+  font-weight: 500;
   text-align: right;
   overflow-wrap: anywhere;
   font-variant-numeric: tabular-nums;
 }
 .diagnostics-intro {
-  margin: 0 0 6px;
-  color: var(--dim);
-  font-size: 10px;
+  margin: 0 0 8px;
+  color: #75787f;
+  font-size: 11.5px;
   line-height: 1.5;
 }
 /*
@@ -204,16 +218,17 @@
 .diagnostic-pair dd[data-tone] .diagnostic-note {
   grid-column: 1 / -1;
   grid-row: 2;
-  margin-top: 1px;
-  color: #74777e;
-  font-size: 9.5px;
-  line-height: 1.4;
+  margin-top: 3px;
+  color: #63666d;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.5;
   text-align: left;
 }
 .diagnostic-pair dt { grid-row: 1; }
 .diagnostic-pair:has(.diagnostic-note) {
   row-gap: 0;
-  padding: 7px 0;
+  padding: 10px 0;
 }
 .diagnostic-pair dd[data-tone="ok"] .diagnostic-value { color: #9fcfa6; }
 .diagnostic-pair dd[data-tone="warn"] .diagnostic-value { color: #e2b866; }
@@ -237,6 +252,6 @@
     display: grid;
     justify-content: stretch;
   }
-  .diagnostic-pair { grid-template-columns: 88px minmax(0, 1fr); gap: 10px; }
+  .diagnostic-pair { gap: 10px; }
   .diagnostics-tabs { gap: 14px; }
 }

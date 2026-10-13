@@ -239,7 +239,10 @@ body:has(.system-panel[open]) {
   max-width: none;
   max-height: min(86dvh, 760px);
   margin: 0;
-  padding: 18px 22px max(26px, env(safe-area-inset-bottom));
+  /* No top padding: a sticky heading sticks below its scroller's padding, and
+     content scrolled under it showed through that strip. The heading pads
+     itself instead. */
+  padding: 0 22px max(26px, env(safe-area-inset-bottom));
   overflow-y: auto;
   overscroll-behavior: contain;
   border: 1px solid #292b30;
@@ -254,6 +257,7 @@ body:has(.system-panel[open]) {
   z-index: 2;
   top: -1px;
   min-height: 44px;
+  padding-top: 18px;
   margin-bottom: 10px;
   display: flex;
   align-items: center;

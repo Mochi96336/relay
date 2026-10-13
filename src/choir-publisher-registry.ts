@@ -44,10 +44,20 @@ export class ChoirPublisherRegistry {
   constructor(
     readonly seats: ChoirSession,
     private readonly graceMs: number,
+    firstMediaEpoch = 1,
   ) {
     if (!Number.isFinite(graceMs) || graceMs < 0) {
       throw new RangeError('Invalid Choir reconnect grace.');
     }
+    if (!Number.isSafeInteger(firstMediaEpoch) || firstMediaEpoch < 1) {
+      throw new RangeError('Invalid Choir first media epoch.');
+    }
+    this.nextMediaEpoch = firstMediaEpoch;
+  }
+
+  /** Server-only sequence frontier used to keep epochs unique across rooms. */
+  get nextUnissuedMediaEpoch() {
+    return this.nextMediaEpoch;
   }
 
   admit(request: ChoirAdmitRequest): ChoirAdmitResult {
@@ -94,6 +104,10 @@ export class ChoirPublisherRegistry {
       }
     }
 
+    if (!Number.isSafeInteger(this.nextMediaEpoch)
+      || this.nextMediaEpoch >= Number.MAX_SAFE_INTEGER) {
+      return { ok: false, reason: 'invalid' };
+    }
     if (existing) this.byTransport.delete(existing.transportId);
     const admission: Admission = {
       participantId: id, transportId,

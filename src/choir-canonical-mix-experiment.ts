@@ -44,7 +44,11 @@ export type CanonicalChoirSingerEvidence = {
   latePacketDrops: number;
   expected: boolean;
   awaitingCalibration: boolean;
+  /** Newly accepted authority; live read-head may still be converging toward it. */
   calibrationSource: 'content' | 'sample-song-estimate' | 'boot-probe-estimate' | null;
+  /** Value applied to this frame by the canonical 1%-per-frame MicTrack slew. */
+  calibrationAppliedMs: number | null;
+  calibrationTargetMs: number | null;
 };
 
 export type CanonicalChoirFrame = {
@@ -418,6 +422,8 @@ export class CanonicalChoirMixExperiment {
         expected: slot.expected,
         awaitingCalibration: slot.awaitingCalibration,
         calibrationSource: slot.authority?.source ?? null,
+        calibrationAppliedMs: slot.mic.alignmentState.calibratedMicLagMs,
+        calibrationTargetMs: slot.mic.calibratedMicLagTargetMs,
       };
       if (!slot.awaitingCalibration) {
         slot.mic.lastEmittedMicFrameComplete =

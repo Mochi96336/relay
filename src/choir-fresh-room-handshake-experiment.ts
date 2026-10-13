@@ -149,6 +149,13 @@ export class ChoirFreshRoomHandshakeExperiment {
       && c.room.receiveTrustedBacking(frame, sampleRate, nowMs));
   }
 
+  /** Offline test scheduler; discards output, never routes it to production. */
+  advanceDue(roomEpoch: number, nowMs: number): boolean {
+    const c = this.current;
+    if (!c || c.spec.roomEpoch !== roomEpoch) return false;
+    return c.room.renderDue(nowMs).state !== 'resync-required';
+  }
+
   /**
    * Only the server's internally collected 6s Mic/Robot PCM Content result
    * may unblock a fresh capture. Neither an old lag nor a client decision

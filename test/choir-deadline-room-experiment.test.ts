@@ -84,6 +84,48 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     assert.equal(coordinator.inspectTransport('socket-B')?.mediaEpoch === b.mediaEpoch, true);
   });
 
+  test('late Mic arrival cannot enter an expired frame even when output tick is delayed', () => {
+    const coordinator = room();
+    admitBoth(coordinator);
+    assert.equal(coordinator.receiveFromTransport('socket-A',
+      captured(FRAME / 2, 5_000), RATE, 10), true);
+    assert.equal(coordinator.receiveFromTransport('socket-B',
+      captured(FRAME * 5, 6_000), RATE, 100), true);
+    // Deliberately DO NOT call renderDue(220). The first event after that
+    // deadline is a late A media packet, and the coordinator must seal the
+    // immutable output frame before considering its PCM.
+    assert.equal(coordinator.receiveFromTransport('socket-A',
+      captured(FRAME / 2, 8_000, FRAME / 2), RATE, 221), false);
+    assert.equal(coordinator.outputSampleCursor, FRAME,
+      'the elapsed frame was sealed before processing the late packet');
+    const ready = coordinator.renderDue(221);
+    if (ready.state !== 'ready') throw Error('must drain sealed frame');
+    assert.equal(ready.frames.length, 1);
+    assert.equal(ready.frames[0].roomStartSample, 0);
+    assert.equal(ready.frames[0].singers[0].frontierMissingSamples, FRAME / 2);
+    assert.equal(ready.frames[0].singers[0].latePacketDrops, 0,
+      'the count is captured when the frame seals; the next frame sees the rejection');
+    const next = coordinator.renderDue(240);
+    if (next.state !== 'ready') throw Error('next frame');
+    assert.equal(next.frames[0].singers[0].latePacketDrops, 1);
+    assert.equal(next.frames[0].singers[1].latePacketDrops, 0);
+  });
+
+  test('undelivered deadline FIFO is bounded even if media continues arriving', () => {
+    const coordinator = room(2);
+    admitBoth(coordinator);
+    assert.equal(coordinator.renderDue(220).state, 'ready');
+    assert.equal(coordinator.receiveFromTransport('socket-B',
+      captured(FRAME, 7_000), RATE, 240), true);
+    // At 240, one newly sealed frame remains queued because renderDue was
+    // never called; at 280, 2 more due => 3 undelivered > maxCatchupFrames.
+    assert.equal(coordinator.receiveFromTransport('socket-B',
+      captured(FRAME, 7_000, FRAME), RATE, 280), false);
+    assert.deepEqual(coordinator.renderDue(280), {
+      state: 'resync-required', frames: [], reason: 'late-clock',
+    });
+  });
+
   test('a late packet cannot fill an already sealed Mic frame after deadline', () => {
     const coordinator = room();
     admitBoth(coordinator);

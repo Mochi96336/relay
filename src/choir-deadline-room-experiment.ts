@@ -66,6 +66,7 @@ export class ChoirDeadlineRoomExperiment {
   private readonly songEpoch: number;
   private readonly backingGeneration: number;
   private nextFrameIndex = 0;
+  private readonly sealedFrames: CanonicalChoirFrame[] = [];
   private lastNowMs = Number.NEGATIVE_INFINITY;
   private invalidated: 'late-clock' | 'time-regression' | null = null;
 
@@ -95,9 +96,42 @@ export class ChoirDeadlineRoomExperiment {
     return Number.isFinite(nowMs) && nowMs >= this.roomEpochMs;
   }
 
+  /**
+   * Commit every elapsed output deadline BEFORE any source, seat or control
+   * mutation at that wall-clock instant. Frames remain in a bounded FIFO
+   * until renderDue() takes them. A late arriving Mic cannot sneak into a
+   * logically expired frame simply because the output callback was delayed.
+   */
+  private sealDueNow(nowMs: number): boolean {
+    if (this.invalidated !== null) return false;
+    if (!this.validNow(nowMs) || nowMs < this.lastNowMs) {
+      this.invalidated = 'time-regression';
+      this.sealedFrames.length = 0;
+      return false;
+    }
+    this.lastNowMs = nowMs;
+    const dueCount = Math.floor(
+      (nowMs - this.roomEpochMs - this.holdbackMs) / this.frameMs + 1e-9,
+    );
+    const backlog = dueCount - this.nextFrameIndex;
+    if (backlog <= 0) return true;
+    // If the output sink is not draining, queued sealed frames are a replay
+    // hazard too; bound total undelivered PCM, not only new timer lateness.
+    if (backlog + this.sealedFrames.length > this.maxCatchupFrames) {
+      this.invalidated = 'late-clock';
+      this.sealedFrames.length = 0;
+      return false;
+    }
+    for (let i = 0; i < backlog; i++) {
+      this.sealedFrames.push(this.room.render(this.nextFrameIndex * this.frameSamples));
+      this.nextFrameIndex++;
+    }
+    return true;
+  }
+
   /** Admission is permitted only after a verified server transport handshake. */
   admitTrusted(req: TrustedChoirAdmission): ChoirTrustedAdmissionResult {
-    if (!this.validNow(req.nowMs) || this.invalidated !== null) {
+    if (!this.sealDueNow(req.nowMs)) {
       return { ok: false, reason: 'invalid-clock' };
     }
     // Until seamless capture-tail retirement is implemented, never replace an
@@ -140,7 +174,7 @@ export class ChoirDeadlineRoomExperiment {
   takePrimaryTrusted(
     transportId: string, expectedPrimaryId: string | null, nowMs: number,
   ): boolean {
-    if (!this.validNow(nowMs) || this.invalidated !== null) return false;
+    if (!this.sealDueNow(nowMs)) return false;
     const active = this.registry.activePublisherForTransport(transportId);
     if (!active || active.seat !== 'secondary') return false;
     const before = this.seats.primaryMicId;
@@ -164,7 +198,7 @@ export class ChoirDeadlineRoomExperiment {
   }
 
   disconnectTransport(transportId: string, nowMs: number): boolean {
-    if (!this.validNow(nowMs)) return false;
+    if (!this.sealDueNow(nowMs)) return false;
     const active = this.registry.activePublisherForTransport(transportId);
     if (!active || !this.registry.disconnect(transportId, nowMs)) return false;
     return this.room.disconnect({
@@ -182,7 +216,7 @@ export class ChoirDeadlineRoomExperiment {
   receiveFromTransport(
     transportId: string, frame: PcmFrame, sourceRate: number, nowMs: number,
   ): boolean {
-    if (!this.validNow(nowMs) || this.invalidated !== null) return false;
+    if (!this.sealDueNow(nowMs)) return false;
     const publisher = this.registry.activePublisherForTransport(transportId);
     if (!publisher) return false;
     const roomNowSample = Math.floor(
@@ -199,7 +233,7 @@ export class ChoirDeadlineRoomExperiment {
 
   /** Robot/Backing may only be called by the server's trusted media route. */
   receiveTrustedBacking(frame: PcmFrame, sourceRate: number, nowMs: number) {
-    if (!this.validNow(nowMs) || this.invalidated !== null) return false;
+    if (!this.sealDueNow(nowMs)) return false;
     const roomNowSample = Math.floor(
       (nowMs - this.roomEpochMs) * this.sampleRate / 1000,
     );
@@ -207,34 +241,16 @@ export class ChoirDeadlineRoomExperiment {
       && this.room.ingestBacking(frame, sourceRate, roomNowSample);
   }
 
-  /**
-   * Seal only frames whose complete capture deadline has passed. No user
-   * packet can advance or rewind the clock; late tick outages fail closed.
-   */
+  /** Return previously sealed frames, plus any newly due at this clock tick. */
   renderDue(nowMs: number): ChoirDeadlineResult {
-    if (this.invalidated !== null) {
-      return { state: 'resync-required', frames: [], reason: this.invalidated };
+    if (!this.sealDueNow(nowMs)) {
+      return {
+        state: 'resync-required', frames: [],
+        reason: this.invalidated ?? 'time-regression',
+      };
     }
-    if (!this.validNow(nowMs) || nowMs < this.lastNowMs) {
-      this.invalidated = 'time-regression';
-      return { state: 'resync-required', frames: [], reason: this.invalidated };
-    }
-    this.lastNowMs = nowMs;
-    const dueCount = Math.floor(
-      (nowMs - this.roomEpochMs - this.holdbackMs) / this.frameMs + 1e-9,
-    );
-    const backlog = dueCount - this.nextFrameIndex;
-    if (backlog <= 0) return { state: 'not-due', frames: [] };
-    if (backlog > this.maxCatchupFrames) {
-      this.invalidated = 'late-clock';
-      return { state: 'resync-required', frames: [], reason: this.invalidated };
-    }
-    const frames: CanonicalChoirFrame[] = [];
-    for (let i = 0; i < backlog; i++) {
-      frames.push(this.room.render(this.nextFrameIndex * this.frameSamples));
-      this.nextFrameIndex++;
-    }
-    return { state: 'ready', frames };
+    if (this.sealedFrames.length === 0) return { state: 'not-due', frames: [] };
+    return { state: 'ready', frames: this.sealedFrames.splice(0) };
   }
 
   /** Read-only diagnostic copies; callers cannot mutate admission or PCM state. */

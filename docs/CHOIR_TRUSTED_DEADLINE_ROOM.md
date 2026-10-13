@@ -134,3 +134,20 @@ authentication and media transport, then choose a safe reconnection
 lifecycle and N=2 Take evidence contract before enabling even a small
 '+副 Mic' button in the UI. Two-device Content plus backup calibration
 and packet-loss/deadline rehearsal are mandatory before shipping.
+
+
+## Event-order deadline closure (subsequent hardening)
+
+The deadline coordinator now calls `sealDueNow(nowMs)` **before every**
+trusted admission, Take Mic, disconnect, Mic packet and Robot Backing packet,
+as well as at `renderDue`. Already due frames are frozen in a bounded
+private FIFO and delivered only once to the output sink. If a 220ms frame
+expired at wall time 220ms, a Mic packet arriving at 221ms cannot alter it
+even when the output callback itself was delayed until 221ms. A test
+intentionally omits the 220ms render call and verifies this exact race.
+
+Both new frames waiting to seal and already sealed-but-not-drained frames
+count against the maximum pending limit. Going over that limit latches a
+fresh-epoch requirement and drops stale pending PCM. This remains a pure
+deterministic test scheduler: production still must provide a reliable
+monotonic clock and output sink.

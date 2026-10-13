@@ -406,6 +406,115 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     }
   });
 
+  test('60ms mismatch preserves B and fallback until explicit new-epoch fresh Content', () => {
+    const coordinator = room();
+    const { a, b } = admitBoth(coordinator);
+    assert.equal(coordinator.receiveFromTransport('socket-A',
+      captured(FRAME, 8_000), RATE, 20), true);
+    assert.equal(coordinator.receiveFromTransport('socket-B',
+      captured(FRAME * 75, 6_000), RATE, 40), true);
+    assert.equal(coordinator.disconnectTransport('socket-A', 80), true);
+    for (const at of [220, 240, 260]) {
+      assert.equal(coordinator.renderDue(at).state, 'ready');
+    }
+    const a2 = coordinator.admitTrusted({
+      verifiedParticipantId: 'A', transportId: 'socket-A2',
+      seat: 'primary', expectedPrimaryId: 'A', nowMs: 261,
+    });
+    assert.equal(a2.ok, true);
+    if (!a2.ok) return;
+    assert.equal(coordinator.receiveFromTransport('socket-A2',
+      captured(FRAME * 22, 9_000), RATE, 262), true);
+    const fallback = {
+      source: 'boot-probe-estimate' as const, advanceMs: 0,
+      sampleResidualMs: null, bootResidualMs: null,
+      sampleCandidateMs: null, bootCandidateMs: 0,
+    };
+    const content = { ...fallback, source: 'content' as const, advanceMs: 60 };
+    assert.equal(coordinator.acceptTrustedReboundAlignment(
+      'socket-A2', a2.mediaEpoch, fallback, 263), true);
+    for (const at of [280, 300, 320]) {
+      assert.equal(coordinator.renderDue(at).state, 'ready');
+    }
+    assert.equal(coordinator.requestTrustedLargeContentReacquisition(
+      'socket-A', a.mediaEpoch, 1, content, 321, false), false);
+    assert.equal(coordinator.requestTrustedLargeContentReacquisition(
+      'socket-A2', a2.mediaEpoch, 1, content, 322, true), false);
+    assert.equal(coordinator.requestTrustedLargeContentReacquisition(
+      'socket-A2', a2.mediaEpoch, 1, content, 323, false), true);
+    assert.equal(coordinator.requestTrustedLargeContentReacquisition(
+      'socket-A2', a2.mediaEpoch, 1, content, 324, false), false);
+    assert.equal(coordinator.acceptTrustedLiveContentRecovery(
+      'socket-A2', a2.mediaEpoch, 2, { ...content, advanceMs: 2 }, 325, false),
+      false, 'pending re-acquisition cannot be downgraded to quiet live correction');
+    const onFallback = coordinator.renderDue(340);
+    assert.equal(onFallback.state, 'ready');
+    if (onFallback.state === 'ready') {
+      assert.equal(onFallback.frames[0].singers[0].reacquisitionPending, true);
+      assert.equal(onFallback.frames[0].singers[0].calibrationSource, 'boot-probe-estimate');
+      assert.equal(onFallback.frames[0].singers[0].calibrationTargetMs, 0);
+      assert.ok(onFallback.frames[0].singers[0].voicePeakAbs > 0.1);
+      assert.ok(onFallback.frames[0].singers[1].voicePeakAbs > 0.1);
+    }
+    assert.equal(coordinator.disconnectTransport('socket-A2', 341), true);
+    assert.equal(coordinator.admitTrusted({
+      verifiedParticipantId: 'A', transportId: 'socket-A3',
+      seat: 'primary', expectedPrimaryId: 'A', nowMs: 342,
+    }).ok, false, 'A2 tail must be fully retired first');
+    let a3: ReturnType<typeof coordinator.admitTrusted> | null = null;
+    let clock = 360;
+    for (; clock <= 900; clock += 20) {
+      const out = coordinator.renderDue(clock);
+      assert.equal(out.state, 'ready');
+      const attempt = coordinator.admitTrusted({
+        verifiedParticipantId: 'A', transportId: 'socket-A3',
+        seat: 'primary', expectedPrimaryId: 'A', nowMs: clock + 1,
+      });
+      if (attempt.ok) {
+        a3 = attempt;
+        break;
+      }
+      assert.equal(attempt.reason, 'rebind-deferred');
+    }
+    assert.ok(a3?.ok, 'tail should finish before reconnect grace expires');
+    if (!a3?.ok) return;
+    assert.ok(a3.mediaEpoch > a2.mediaEpoch);
+    assert.equal(coordinator.inspectTransport('socket-B')?.mediaEpoch, b.mediaEpoch);
+    assert.equal(coordinator.acceptTrustedReboundAlignment(
+      'socket-A3', a3.mediaEpoch, fallback, clock + 2), false,
+      'new Capture requires fresh Content, not silent Boot reuse');
+    assert.equal(coordinator.acceptTrustedReboundAlignment(
+      'socket-A3', a3.mediaEpoch, content, clock + 2), false,
+      'ordinary rebind admission cannot bypass new acoustic evidence');
+    const proof = { mediaEpoch: a3.mediaEpoch, captureGeneration: 7, revision: 1 };
+    assert.equal(coordinator.acceptTrustedReacquiredContent(
+      'socket-A3', a3.mediaEpoch, proof, content, clock + 2), false,
+      'a new capture must actually exist before accepting proof');
+    assert.equal(coordinator.receiveFromTransport('socket-A3',
+      captured(FRAME * 75, 12_000, 0, 7), RATE, clock + 2), true);
+    assert.equal(coordinator.acceptTrustedReacquiredContent(
+      'socket-A2', a2.mediaEpoch, proof, content, clock + 3), false);
+    assert.equal(coordinator.acceptTrustedReacquiredContent(
+      'socket-A3', a3.mediaEpoch, { ...proof, mediaEpoch: a2.mediaEpoch },
+      content, clock + 3), false);
+    assert.equal(coordinator.acceptTrustedReacquiredContent(
+      'socket-A3', a3.mediaEpoch, { ...proof, captureGeneration: 1 },
+      content, clock + 3), false);
+    assert.equal(coordinator.acceptTrustedReacquiredContent(
+      'socket-A3', a3.mediaEpoch, proof, content, clock + 3), true);
+    assert.equal(coordinator.acceptTrustedReacquiredContent(
+      'socket-A3', a3.mediaEpoch, proof, content, clock + 3), false);
+    const actual = coordinator.renderDue(clock + 20);
+    assert.equal(actual.state, 'ready');
+    if (actual.state === 'ready') {
+      assert.equal(actual.frames[0].singers[0].calibrationSource, 'content');
+      assert.equal(actual.frames[0].singers[0].requiresFreshContent, false);
+      assert.ok(actual.frames[0].singers[0].voicePeakAbs > 0.1);
+      assert.equal(actual.frames[0].singers[1].mediaEpoch, b.mediaEpoch);
+      assert.ok(actual.frames[0].singers[1].voicePeakAbs > 0.1);
+    }
+  });
+
   test('expired reconnect grace cannot silently restore a revoked primary seat', () => {
     const coordinator = room();
     const { a, b } = admitBoth(coordinator);

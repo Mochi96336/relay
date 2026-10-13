@@ -131,6 +131,12 @@ export class MicTrack {
    * The caller still owns authenticated packet admission, timeline placement,
    * resampling, clock trim, gap concealment and the output room clock.
    */
+  /** Capture-native frame index to this singer's trusted room PCM timeline. */
+  sourceSampleToSessionSample(sourceSample: number, sourceRate: number): number {
+    return Math.ceil((sourceSample * this.sampleRate) / sourceRate)
+      + this.timeline.originOffset;
+  }
+
   observeIngest(input: {
     frame: PcmFrame;
     sourceRate: number | null;
@@ -145,13 +151,12 @@ export class MicTrack {
       samples: Int16Array;
       start: number;
     };
-    mapSourceSample: (sourceSample: number, rate: number) => number;
   }) {
     const {
       frame, sourceRate, running,
       previousTotalSamples, previousChunk,
       previousGeneration, previousSourceRate, previousSourceFrontier,
-      result, mapSourceSample,
+      result,
     } = input;
     const currentChunk = this.timeline.chunks.at(-1) ?? null;
     const addedChunk = currentChunk !== null && currentChunk !== previousChunk;
@@ -178,7 +183,7 @@ export class MicTrack {
     if (positioned && sourceRate && result.samples.length > 0) {
       this.clipping.observe(
         frame,
-        (sourceSample) => mapSourceSample(sourceSample, sourceRate),
+        (sourceSample) => this.sourceSampleToSessionSample(sourceSample, sourceRate),
         sourceContinuous ? null : result.start,
       );
     }

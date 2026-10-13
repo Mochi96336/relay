@@ -193,3 +193,19 @@ No production compatibility scalar aliases are reintroduced.
 The Choir focused CI now also executes `test/mic-read-plan.test.ts`,
 so tests of previously emitted source continuity, old/new leg gap/frontier
 gating and convergence cannot be missed by the smaller validation suite.
+
+
+## Stage 8: source-native capture sample coordinates
+
+The existing `AudioSession.micSourceSampleToSessionSample()` conversion
+has moved to `MicTrack.sourceSampleToSessionSample()`. The same
+`Math.ceil(sourceSample * roomRate / sourceRate) + originOffset`
+arithmetic and rounding remain unchanged. `observeIngest` now asks
+its own MicTrack for the source-native to shared-room coordinate when
+collecting clipping evidence. It no longer takes an AudioSession callback
+that could accidentally read another singer's capture origin.
+
+Additional A/B tests use separate native 44.1-kHz origins against one
+48-kHz room rate. This does **not** yet move the canonical PCM ingest
+and resampler into MicTrack; the authoritative AudioSession.ingest()
+still performs capture-clock anchoring to the room time.

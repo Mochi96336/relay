@@ -64,6 +64,21 @@ describe('extracted MicTrack owns per-singer components independently', () => {
 
   });
 
+  test('native sample-to-room mapping uses each Mic capture origin and its source rate', () => {
+    const a = new MicTrack(config);
+    const b = new MicTrack(config);
+    a.timeline.originOffset = 960;
+    b.timeline.originOffset = 2880;
+    assert.equal(a.sourceSampleToSessionSample(441, 44_100), 1440);
+    assert.equal(b.sourceSampleToSessionSample(441, 44_100), 3360);
+    assert.equal(a.sourceSampleToSessionSample(480, 48_000), 1440);
+    assert.equal(b.sourceSampleToSessionSample(480, 48_000), 3360);
+    // Changing A's capture anchor cannot silently change B's clock.
+    a.timeline.originOffset = -240;
+    assert.equal(a.sourceSampleToSessionSample(441, 44_100), 240);
+    assert.equal(b.sourceSampleToSessionSample(441, 44_100), 3360);
+  });
+
   test('Mic post-ingest capture evidence stays isolated from another singer', () => {
     const a = new MicTrack(config);
     const b = new MicTrack(config);
@@ -89,7 +104,6 @@ describe('extracted MicTrack owns per-singer components independently', () => {
       previousSourceRate: null,
       previousSourceFrontier: null,
       result: { captureRestarted: true, samples: firstChunk.samples, start: 0 },
-      mapSourceSample: (sample) => sample,
     });
     assert.equal(a.micCaptureOriginSample, 0);
     assert.equal(a.captureRestarts.size, 1);

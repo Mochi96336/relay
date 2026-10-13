@@ -660,8 +660,6 @@ export class AudioSession {
       previousTotalSamples, previousChunk,
       previousGeneration, previousSourceRate, previousSourceFrontier,
       result,
-      mapSourceSample: (sourceSample, rate) =>
-        this.micSourceSampleToSessionSample(sourceSample, rate),
     });
     const currentChunk = this.mic.chunks.at(-1) ?? null;
 
@@ -960,10 +958,6 @@ export class AudioSession {
       this.backingCaptureRestartBoundaries.clear();
     }
     resetPcmTimeline(timeline);
-  }
-
-  private micSourceSampleToSessionSample(sourceSample: number, sourceRate: number) {
-    return Math.ceil((sourceSample * this.sampleRate) / sourceRate) + this.mic.originOffset;
   }
 
   /** Capture-scoped detector state; cumulative limiter evidence stays intact. */

@@ -75,7 +75,7 @@ export class ChoirDeadlineRoomExperiment {
     participantId: string; transportId: string; mediaEpoch: number;
     songEpoch: number; backingGeneration: number; videoId: string;
     captureGeneration: number; sourceRate: number;
-    revision: number; measuredAtMs: number; advanceMs: number;
+    revision: number; measuredAtMs: number; endSample: number; advanceMs: number;
   }>();
   private nextFrameIndex = 0;
   private readonly sealedFrames: CanonicalChoirFrame[] = [];
@@ -359,7 +359,7 @@ export class ChoirDeadlineRoomExperiment {
         songEpoch: this.songEpoch, backingGeneration: this.backingGeneration,
         videoId: this.videoId, captureGeneration: state.captureGeneration,
         sourceRate: state.sourceRate, revision, measuredAtMs: nowMs,
-        advanceMs: result.micLagMs,
+        endSample, advanceMs: result.micLagMs,
       });
       return { status: 'candidate', revision, lagMs: result.micLagMs,
         confidence: result.confidence };
@@ -391,7 +391,11 @@ export class ChoirDeadlineRoomExperiment {
       || pending.backingGeneration !== this.backingGeneration
       || pending.videoId !== this.videoId
       || !Number.isFinite(nowMs) || nowMs < pending.measuredAtMs
-      || nowMs - pending.measuredAtMs > 20_000) return 'rejected';
+      || nowMs - pending.measuredAtMs > 20_000
+      // An old candidate cannot gain playback authority after the source
+      // window itself has become stale, even if it was analyzed only recently.
+      || Math.abs(Math.floor((nowMs - this.roomEpochMs) * this.sampleRate / 1000)
+        - pending.endSample) > this.sampleRate) return 'rejected';
     const id = {
       participantId: active.participantId, mediaEpoch,
       songEpoch: this.songEpoch, backingGeneration: this.backingGeneration,

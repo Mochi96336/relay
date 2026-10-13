@@ -330,6 +330,37 @@ describe('canonical MicTrack N=2 through the production MixBus (no live server)'
       `final position should approach the 2ms Content target: ${JSON.stringify(offsets)}`);
   });
 
+  test('a rebound calibrated but never rendered can be discarded without inventing a tail', () => {
+    const mix = room();
+    const A2 = { ...A, mediaEpoch: A.mediaEpoch + 1 };
+    const A3 = { ...A, mediaEpoch: A.mediaEpoch + 2 };
+    mix.addSinger(A);
+    mix.addSinger(B);
+    mix.ingestMic(A, pcm(FRAME, 5_000), RATE, FRAME);
+    mix.ingestMic(B, pcm(FRAME * 16, 6_000), RATE, FRAME * 16);
+    mix.disconnect(A);
+    for (let i = 0; i < 3; i++) mix.render(i * FRAME);
+    assert.equal(mix.replaceDisconnectedSinger(A2), true);
+    assert.equal(mix.ingestMic(A2, pcm(FRAME * 3, 9_000), RATE, FRAME * 3), true);
+    const fallback = {
+      source: 'boot-probe-estimate' as const, advanceMs: 0,
+      sampleResidualMs: null, bootResidualMs: null,
+      sampleCandidateMs: null, bootCandidateMs: 0,
+    };
+    assert.equal(mix.acceptReboundAlignment(A2, fallback), true);
+    assert.equal(mix.disconnect(A2), true);
+    assert.equal(mix.canRebindDisconnected('singer-a'), true,
+      'before first output there is no audible Mic tail or source-read history');
+    assert.equal(mix.replaceDisconnectedSinger(A3), true);
+    assert.equal(mix.ingestMic(A2, pcm(FRAME, 12_000), RATE, FRAME * 4), false);
+    const f = mix.render(FRAME * 3);
+    assert.equal(f.singers[0].mediaEpoch, A3.mediaEpoch);
+    assert.equal(f.singers[0].awaitingCalibration, true);
+    assert.equal(f.singers[0].voicePeakAbs, 0);
+    assert.equal(f.singers[1].mediaEpoch, B.mediaEpoch);
+    assert.ok(f.singers[1].voicePeakAbs > 0.1);
+  });
+
   test('large Content mismatch preserves fallback PCM until a new verified capture reacquires', () => {
     const mix = room();
     const A2 = { ...A, mediaEpoch: A.mediaEpoch + 1 };

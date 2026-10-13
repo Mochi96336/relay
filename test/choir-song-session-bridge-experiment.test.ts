@@ -79,14 +79,9 @@ describe('Choir offline bridge consumes real authenticated SongSession authority
       const bridge = bridgeFor(songs, room);
       assert.equal(songs.update(telemetry(), A, null, 0).accepted, true);
       assert.equal(bridge.sync(0), 'initialized');
-      if (detach) {
-        assert.equal(songs.detach(A), true);
-      } else {
-        // Keep output deadlines drained while the SongSession authority ages
-        // out; test playback staleness, not the unrelated deadline-stall gate.
-        for (let at = 220; at <= 2_500; at += 20)
-          assert.equal(room.renderDue(at).state, 'ready');
-      }
+      if (detach) assert.equal(songs.detach(A), true);
+      // Emergency authority loss must purge queued PCM WITHOUT synthesizing
+      // minutes of expired frames or incorrectly reporting late-clock.
       assert.equal(bridge.sync(detach ? 100 : 2_500), 'invalidated');
       assert.deepEqual(room.renderDue(detach ? 220 : 2_540), {
         state: 'resync-required', frames: [], reason: 'playback-mapping-changed',

@@ -258,6 +258,21 @@ describe('Choir Audio prototype: actual PCM and one room output clock', () => {
       'same anchor must not restart the 10ms fade on next frame');
   });
 
+  test('Take freeze prevents install of a different or first-time alignment', () => {
+    const room = subject();
+    install(room, A);
+    room.addSinger(B);
+    packet(room, A, 0, new Int16Array(FRAME * 2).fill(12_000));
+    ready(render(room, 0));
+    assert.equal(room.installAnchor(anchor(A, 96), 'sample-song-estimate',
+      { takeFrozen: true }), false);
+    assert.equal(room.installAnchor(anchor(B, 0), 'content',
+      { takeFrozen: true }), false);
+    const frame = ready(render(room, FRAME));
+    assert.equal(frame.singers[0].calibration, 'content');
+    assert.equal(frame.singers[1].calibration, 'none');
+  });
+
   test('unsafe backup jump cannot replace confirmed Content mid-song', () => {
     const room = subject();
     install(room, A);

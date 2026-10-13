@@ -94,6 +94,18 @@ export class ChoirFollowerPolicy {
     }
 
     if (local.state !== 'playing') {
+      // A resumed/seeked while this follower was cued or paused. Seeking
+      // first is safer than starting an old verse before the next poll.
+      const pausedDriftMs = (local.positionSeconds - room.positionSeconds) * 1000;
+      if (Math.abs(pausedDriftMs) >= this.seekThresholdMs
+        && nowMs - this.lastSeekMs >= this.minSeekIntervalMs) {
+        this.lastSeekMs = nowMs;
+        return { action: 'seek', positionSeconds: room.positionSeconds,
+          signedDriftMs: pausedDriftMs };
+      }
+      if (Math.abs(pausedDriftMs) >= this.seekThresholdMs) {
+        return { action: 'none', reason: 'seek-cooldown', signedDriftMs: pausedDriftMs };
+      }
       return { action: 'play', requiresUserGesture: false };
     }
 

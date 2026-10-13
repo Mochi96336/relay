@@ -76,6 +76,26 @@ describe('Choir follower only controls its own player', () => {
     assert.equal(repeated.action, 'none');
   });
 
+  test('a paused follower seeks to room time before starting on resume', () => {
+    const policy = new ChoirFollowerPolicy();
+    const out = policy.decide({
+      room, local: { ...local, state: 'paused', positionSeconds: 55 },
+      nowMs: 10_000, roomFresh: true,
+    });
+    assert.equal(out.action, 'seek');
+    if (out.action !== 'seek') return;
+    assert.equal(out.positionSeconds, 80);
+    const cooldown = policy.decide({
+      room, local: { ...local, state: 'paused', positionSeconds: 55 },
+      nowMs: 11_000, roomFresh: true,
+    });
+    assert.equal(cooldown.action, 'none');
+    assert.equal(policy.decide({
+      room, local: { ...local, state: 'paused', positionSeconds: 80.1 },
+      nowMs: 11_000, roomFresh: true,
+    }).action, 'play');
+  });
+
   test('A can pause the room; the follower pauses only its own YouTube', () => {
     const policy = new ChoirFollowerPolicy();
     assert.deepEqual(policy.decide({ room: { ...room, state: 'paused' },

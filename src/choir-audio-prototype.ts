@@ -188,9 +188,16 @@ export class ChoirAudioPrototype {
    * specific timing evidence. A raw correlation candidate is not enough.
    * Replacing an anchor fades this track back in; peers are left untouched.
    */
-  installAnchor(anchor: ChoirTrackAnchor, source: ChoirCalibrationSource): boolean {
+  installAnchor(
+    anchor: ChoirTrackAnchor,
+    source: ChoirCalibrationSource,
+    options: { takeFrozen?: boolean } = {},
+  ): boolean {
     const track = this.tracks.get(anchor.participantId);
-    if (!track || source === 'unavailable'
+    // Fallback and re-calibration are never authorized to mutate an active
+    // recording's read head. The future Take coordinator must provide this
+    // freeze gate; this prototype alone cannot determine recording state.
+    if (!track || options.takeFrozen === true || source === 'unavailable'
       || source === 'content-held'
       || anchor.songEpoch !== track.identity.songEpoch
       || anchor.captureGeneration !== track.identity.captureGeneration

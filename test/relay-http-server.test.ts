@@ -141,3 +141,12 @@ test('server delegates only the physical HTTP surface to the adapter', async () 
   }
   assert.doesNotMatch(adapter, /buildReadiness|deriveRemoteStatusHealth|buildRelayObservationStatusV1/);
 });
+
+test('live status is never cacheable, so a CDN cannot replay an old snapshot', async () => {
+  await withHttpServer({ readiness: () => ({ ready: false }) }, async (baseUrl) => {
+    for (const route of ['/healthz', '/statusz', '/api/status/v1', '/readyz']) {
+      const response = await fetch(baseUrl + route);
+      assert.equal(response.headers.get('cache-control'), 'no-store', route);
+    }
+  });
+});

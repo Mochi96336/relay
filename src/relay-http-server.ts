@@ -74,16 +74,23 @@ export function createRelayHttpServer(options: RelayHttpServerOptions): Server {
   });
   app.use('/shared', express.static(path.resolve(options.publicDir, '../shared')));
   app.use(express.static(options.publicDir));
-  app.get('/healthz', (_req, res) => {
+  // Live status must never be served from a cache. Behind Cloudflare a
+  // response without Cache-Control can be held at the edge, and the System
+  // panel then showed a Mic that had long since connected as absent.
+  const noStore: express.RequestHandler = (_req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+  };
+  app.get('/healthz', noStore, (_req, res) => {
     res.json({ ok: true });
   });
-  app.get('/statusz', (_req, res) => {
+  app.get('/statusz', noStore, (_req, res) => {
     res.json(options.remoteStatus());
   });
-  app.get('/api/status/v1', (_req, res) => {
+  app.get('/api/status/v1', noStore, (_req, res) => {
     res.json(options.observationStatusV1());
   });
-  app.get('/readyz', (_req, res) => {
+  app.get('/readyz', noStore, (_req, res) => {
     const readiness = options.readiness();
     res.status(readiness.ready ? 200 : 503).json(readiness);
   });

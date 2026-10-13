@@ -27,7 +27,7 @@ import { MicRawMeter } from './mic-raw-meter.js';
 import { readMicSlewedRange, crossfadeMicReadHeadJump, type MicSlewRead } from './mic-frame-reader.js';
 import { classifyMicReadMotion } from './mic-read-plan.js';
 import { MixBus } from './mix-bus.js';
-import { MicTrack } from './mic-track.js';
+import { MicTrack, type AlignmentState } from './mic-track.js';
 import { SourceOutputEdge } from './source-output-edge.js';
 
 /**
@@ -43,7 +43,7 @@ import { SourceOutputEdge } from './source-output-edge.js';
 export type { MicTimelineFold, MicTimelineUnfold } from './mic-frontier-correction.js';
 export { HEAVY_LIMIT_DB, LIMITER_THRESHOLD_DBFS } from './mic-limiter.js';
 
-export type { AlignmentState } from './mic-track.js';
+export type { AlignmentState };
 
 /**
  * Raw evidence for exactly one mixed output frame.

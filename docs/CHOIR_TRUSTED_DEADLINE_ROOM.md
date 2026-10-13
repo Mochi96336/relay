@@ -274,3 +274,65 @@ is still needed. This experiment intentionally does not implement automatic
 primary-Mic succession, live fallback demotion, large-lag crossfade, or a
 verified physical two-phone calibration adapter. Existing N=1 audio processing
 and deployed server routing are untouched.
+
+## Large Content disagreement: explicit reacquisition, never an audible jump
+
+The previous bounded live-recovery rule remains the fast path for differences
+inside the experimental 5 ms guard. Larger differences (for example, an
+already-audible Boot estimate of +120 ms versus new verified Content at +180 ms)
+do **not** change the currently applied Mic lag.
+
+The offline trusted-coordinator contract is:
+
+1. `requestTrustedLargeContentReacquisition(transportId, mediaEpoch,
+   proofRevision, contentDecision, nowMs, takeFrozen)` may stage exactly
+   one outstanding large disagreement on a **verified, still-connected**,
+   already-audible Sample/Boot rebound capture. It requires same singer
+   epoch/capture generation as the established fallback; held Content,
+   duplicate/replayed revisions, Take freeze, nonfinite data and small
+   differences are refused. This is an intent, not a replacement of the
+   active Mic read head or permission to reuse the candidate as authority.
+2. While staged, that singer **keeps using the original fallback**. Its PCM,
+   limiter, gain, source clock and per-singer evidence remain unchanged.
+   A subsequent small Content proof cannot bypass the staged requirement.
+   The other singer, room clock and Robot backing remain untouched.
+3. The user/coordinator must **explicitly disconnect** the old publisher;
+   the existing immutable deadlines consume its previously admitted PCM
+   and complete the SourceOutputEdge fade before another Media Epoch may
+   reclaim the same singer seat. A slow tail can outlive reconnect grace;
+   when that happens the existing explicit-seat-claim rule still applies.
+4. `replaceDisconnectedSinger` creates a completely new MicTrack. When the
+   predecessor had staged a large reacquisition, the new slot records
+   `requiresFreshContent=true` but does **not** inherit its earlier
+   target, residual, cached PCM or acoustic proof. The ordinary fallback or
+   initial Content admission method cannot clear this gate.
+5. Only `acceptTrustedReacquiredContent(transportId, mediaEpoch,
+   { mediaEpoch, captureGeneration, revision }, contentDecision, nowMs)`
+   can authorize this slot; the new native generation must already have been
+   received and must exactly match a fresh, **upstream-verified** Content
+   proof for that replacement Media Epoch. On acceptance, the fresh
+   MicTrack enters the canonical Mic frontier, output edge, limiter and
+   join-fade path. Authorization still does not invent missing PCM.
+
+Every server event seals due frames **before** changing these decisions;
+old transport and old media epoch messages cannot retroactively alter an
+already-committed frame. Real PCM tests exercise 60 ms of disagreement,
+deferred old tail, replacement sample authority and independent B output.
+The singer evidence includes `reacquisitionPending` for an unchanged
+active fallback and `requiresFreshContent` for the replacement's muted
+calibration gate.
+
+**Deliberate tradeoff:** this is safe *interrupted* reacquisition, not
+phase-continuous in-place correction. It favors no wrong-verse jump over
+seamless voice during large Content disagreement. The new Content measurement
+has to come from the **new** capture; relabeling an old candidate with a
+new epoch would defeat the purpose.
+
+**Critical outstanding integration:** none of these experimental
+`acceptTrusted*` APIs establish cryptographic or acoustic proof by
+themselves. Their argument objects are not safe client-facing APIs. The real
+server must derive transport identity, capture generation, proof revision,
+media-epoch binding, accepted source, Take freeze and evidence age from a
+private authoritative verifier. An authenticated user merely supplying a
+new `proofRevision` is **not** enough. No production adapter, UI, live two-phone
+test or automatic primary-Mic succession is introduced here.

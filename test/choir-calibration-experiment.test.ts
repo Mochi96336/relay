@@ -99,7 +99,11 @@ describe('dual-singer real Content plus separate fallback strategies', () => {
     assert.ok(Math.abs(b.candidate.result.micLagMs + 340) <= 25, `B: ${b.candidate.result.micLagMs}`);
     assert.equal(choice(model, A)?.source, 'unavailable', 'analyzer output alone is not authority');
     assert.equal(model.confirmContent(a.candidate, false), false, 'external validation is required');
-    assert.equal(model.confirmContent(a.candidate, true), true);
+    assert.equal(model.confirmContent(a.candidate, true), false, 'a rejected candidate cannot be replayed');
+    const accepted = model.analyzeContent(A, int16(micA), int16(backing), RATE);
+    assert.equal(accepted.status, 'candidate');
+    if (accepted.status !== 'candidate') return;
+    assert.equal(model.confirmContent(accepted.candidate, true), true);
     assert.equal(model.confirmContent(b.candidate, true), true);
     assert.equal(choice(model, A)?.source, 'content');
     assert.equal(choice(model, B)?.source, 'content');
@@ -171,9 +175,9 @@ describe('dual-singer real Content plus separate fallback strategies', () => {
       mic: leg(250), backing: leg(100), deltaMs: 20,
       sampleRate: RATE, playbackRate: 1,
     };
-    assert.equal(model.observeBoot(A, boot, false), false, 'unverified probe must not be used');
-    assert.equal(model.observeBoot(A, boot, true), true);
-    assert.equal(model.observeBoot(B, boot, true), true);
+    assert.equal(model.observeBoot(A, boot, false, 1000), false, 'unverified probe must not be used');
+    assert.equal(model.observeBoot(A, boot, true, 1000), true);
+    assert.equal(model.observeBoot(B, boot, true, 1000), true);
     assert.equal(choice(model, A)?.source, 'sample-song-estimate');
     assert.equal(choice(model, B)?.source, 'unavailable', 'no fresh Robot delta and no Sample');
     assert.equal(choice(model, B, { freshRobotDeltaMs: 20 })?.source, 'boot-probe-estimate');
@@ -182,6 +186,44 @@ describe('dual-singer real Content plus separate fallback strategies', () => {
     assert.equal(choice(model, A, { freshRobotDeltaMs: 20, preference: 'sample-song' })?.source, 'sample-song-estimate');
     assert.equal(choice(model, A, { freshRobotDeltaMs: 40, preference: 'boot-probe', playbackRate: 2 })?.advanceMs, 170,
       'live media delta must be divided by current playback rate');
+  });
+
+  test('a later Content attempt invalidates an old pending confirmation, including after a rejected retry', () => {
+    const model = new ChoirCalibrationExperiment();
+    model.activate(A);
+    const { mic, backing } = laggedMultibandMusicPair(6, RATE, 120);
+    const older = model.analyzeContent(A, int16(mic), int16(backing), RATE);
+    assert.equal(older.status, 'candidate');
+    if (older.status !== 'candidate') return;
+    const newer = model.analyzeContent(A, int16(mic), int16(backing), RATE);
+    assert.equal(newer.status, 'candidate');
+    if (newer.status !== 'candidate') return;
+    assert.equal(model.confirmContent(older.candidate, true), false);
+    assert.equal(model.confirmContent(newer.candidate, true), true);
+    assert.equal(choice(model, A)?.source, 'content');
+
+    const pending = model.analyzeContent(A, int16(mic), int16(backing), RATE);
+    assert.equal(pending.status, 'candidate');
+    if (pending.status !== 'candidate') return;
+    const rejected = model.analyzeContent(A, new Int16Array(RATE * 6), int16(backing), RATE);
+    assert.equal(rejected.status, 'rejected');
+    assert.equal(model.confirmContent(pending.candidate, true), false);
+    assert.equal(choice(model, A)?.source, 'content', 'old confirmed Content is preserved');
+  });
+
+  test('five-minute Boot evidence expires even if Robot delta is still fresh', () => {
+    const model = new ChoirCalibrationExperiment();
+    model.activate(A);
+    const leg = (ms: number) => ({
+      targetSample: RATE, actualSample: RATE + ms * RATE / 1000, correlation: .9,
+    });
+    assert.equal(model.observeBoot(A, {
+      mic: leg(250), backing: leg(100), deltaMs: 0,
+      sampleRate: RATE, playbackRate: 1,
+    }, true, 1000), true);
+    assert.equal(choice(model, A, { freshRobotDeltaMs: 20, nowMs: 301_000 })?.source, 'boot-probe-estimate');
+    assert.equal(choice(model, A, { freshRobotDeltaMs: 20, nowMs: 301_001 })?.source, 'unavailable');
+    assert.equal(choice(model, A, { freshRobotDeltaMs: 20, nowMs: 500 })?.source, 'unavailable');
   });
 
   test('primary loss does not alter secondary calibration evidence', () => {

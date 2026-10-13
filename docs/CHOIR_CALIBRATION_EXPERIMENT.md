@@ -42,6 +42,11 @@ magic bias in milliseconds.
 - A Boot path is only retained after the caller asserts both actual probe legs
   passed their normal acceptance checks. The stored path difference does NOT
   freeze `delta`; Boot cannot be used without a fresh Robot/player delta.
+  Even with a fresh delta, the experimental probe baseline expires after five
+  minutes. This is a conservative test policy, not proven device stability.
+- Content candidates carry a monotonic singer-specific analysis revision.
+  A stale, rejected or replayed candidate cannot become authority; new attempts
+  retire pending old ones without discarding separately confirmed Content.
 - No source silently overwrites measured Content authority. Where Content is
   unavailable or revoked, an explicitly configured fallback preference chooses
   between **fresh usable candidates**. Both remain labeled estimates.

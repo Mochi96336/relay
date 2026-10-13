@@ -23,6 +23,7 @@ export type ChoirCalibrationIdentity = {
 
 export type ChoirContentCandidate = {
   identity: ChoirCalibrationIdentity;
+  analysisRevision: number;
   result: TimingCalibrationResult;
 };
 
@@ -43,13 +44,19 @@ export type ChoirAlignmentDecision = {
 type BootPath = {
   pathDifferenceMs: number;
   confidence: number;
+  measuredAtMs: number;
 };
+
+/** A probe cannot be retained indefinitely merely because Robot delta is fresh. */
+const EXPERIMENTAL_BOOT_MAX_AGE_MS = 5 * 60_000;
 
 type SingerState = {
   identity: ChoirCalibrationIdentity;
   content: TimingCalibrationResult | null;
   sample: SampleSongFallback;
   boot: BootPath | null;
+  analysisRevision: number;
+  pendingContent: { revision: number; result: TimingCalibrationResult } | null;
 };
 
 function validEpoch(value: number) {
@@ -90,7 +97,8 @@ export class ChoirCalibrationExperiment {
     const previous = this.singers.get(identity.participantId);
     if (previous && sameIdentity(previous.identity, identity)) return false;
     this.singers.set(identity.participantId, {
-      identity: { ...identity }, content: null, sample: new SampleSongFallback(), boot: null,
+      identity: { ...identity }, content: null, sample: new SampleSongFallback(),
+      boot: null, analysisRevision: 0, pendingContent: null,
     });
     return true;
   }
@@ -119,14 +127,24 @@ export class ChoirCalibrationExperiment {
     | { status: 'rejected' | 'stale-identity'; reason: string } {
     const state = this.matching(identity);
     if (!state) return { status: 'stale-identity', reason: 'identity-not-active' };
+    // Starting a replacement attempt retires a pending older candidate even
+    // if the new attempt fails. It does NOT revoke prior confirmed authority.
+    const revision = ++state.analysisRevision;
+    state.pendingContent = null;
     try {
       const result = analyzeTimingCalibration(mic, backing, sampleRate, maxLagMs);
       if (!Number.isFinite(result.micLagMs) || !Number.isFinite(result.confidence)) {
         return { status: 'rejected', reason: 'nonfinite-content-result' };
       }
-      // Correlation alone does not prove a safe mixer authority. The normal
-      // CalibrationSession / validator must accept this candidate explicitly.
-      return { status: 'candidate', candidate: { identity: { ...identity }, result } };
+      // The candidate is not authority. Only this revision can be promoted
+      // and the stored canonical result, not user-mutated candidate fields,
+      // becomes authoritative on explicit acceptance.
+      state.pendingContent = { revision, result };
+      return {
+        status: 'candidate', candidate: {
+          identity: { ...identity }, analysisRevision: revision, result,
+        },
+      };
     } catch (error) {
       return { status: 'rejected', reason: error instanceof Error ? error.message : String(error) };
     }
@@ -135,12 +153,14 @@ export class ChoirCalibrationExperiment {
   /** Confirmation is separate from analysis; never promote a raw correlation. */
   confirmContent(candidate: ChoirContentCandidate, externallyAccepted: boolean): boolean {
     const state = this.matching(candidate.identity);
-    if (!state || !externallyAccepted
-      || !Number.isFinite(candidate.result.micLagMs)
-      || !Number.isFinite(candidate.result.confidence)
-      || candidate.result.confidence <= 0
-      || candidate.result.confidence > 1) return false;
-    state.content = candidate.result;
+    if (!state || !state.pendingContent
+      || state.pendingContent.revision !== candidate.analysisRevision) return false;
+    const result = state.pendingContent.result;
+    state.pendingContent = null; // rejected/accepted candidates cannot replay
+    if (!externallyAccepted || !Number.isFinite(result.micLagMs)
+      || !Number.isFinite(result.confidence)
+      || result.confidence <= 0 || result.confidence > 1) return false;
+    state.content = result;
     return true;
   }
 
@@ -169,9 +189,10 @@ export class ChoirCalibrationExperiment {
     identity: ChoirCalibrationIdentity,
     measurement: BootCalibrationInput,
     probeAccepted: boolean,
+    measuredAtMs: number,
   ): boolean {
     const state = this.matching(identity);
-    if (!state || !probeAccepted
+    if (!state || !probeAccepted || !Number.isFinite(measuredAtMs)
       || !Number.isFinite(measurement.sampleRate) || measurement.sampleRate <= 0
       || !Number.isFinite(measurement.playbackRate) || measurement.playbackRate <= 0
       || !Number.isFinite(measurement.deltaMs)
@@ -185,6 +206,7 @@ export class ChoirCalibrationExperiment {
     state.boot = {
       pathDifferenceMs: result.micLatencyMs - result.backingLatencyMs,
       confidence: result.confidence,
+      measuredAtMs,
     };
     return true;
   }
@@ -207,11 +229,17 @@ export class ChoirCalibrationExperiment {
       || input.sessionSampleRate <= 0) return null;
     // 'revoke' is a permanent authority invalidation, not a temporary
     // absence of new Content evidence. No implicit revival on the next query.
-    if (input.contentApplicability === 'revoke') state.content = null;
+    if (input.contentApplicability === 'revoke') {
+      state.content = null;
+      state.pendingContent = null;
+    }
     const sampleCandidateMs = state.sample.estimate(
       input.nowMs, input.identity.videoId, input.sampleMap, input.sessionSampleRate,
     );
-    const bootCandidateMs = state.boot && Number.isFinite(input.freshRobotDeltaMs)
+    const bootCandidateMs = state.boot
+      && input.nowMs >= state.boot.measuredAtMs
+      && input.nowMs - state.boot.measuredAtMs <= EXPERIMENTAL_BOOT_MAX_AGE_MS
+      && Number.isFinite(input.freshRobotDeltaMs)
       && Number.isFinite(input.playbackRate) && input.playbackRate > 0
       ? state.boot.pathDifferenceMs
         + mediaToWallMs(input.freshRobotDeltaMs!, input.playbackRate)

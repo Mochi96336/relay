@@ -59,7 +59,13 @@ describe('canonical MicTrack N=2 through the production MixBus (no live server)'
     const signalB = new Int16Array(45_000);
     // Truth is independent of the read plan, in capture-native PCM samples.
     signalA[expectedEvent + 5_760] = 16_000;
-    signalB[expectedEvent - 16_320] = 16_000;
+    const bSourceEvent = expectedEvent - 16_320;
+    // B becomes audible after structural negative-lag pre-roll. Give the
+    // original 2ms SourceOutputEdge enough *real* voiced onset before the
+    // transient; a mathematical single-sample impulse as the first nonzero
+    // sample is intentionally tapered to zero as an anti-click edge.
+    signalB.fill(1_200, bSourceEvent - 180, bSourceEvent);
+    signalB[bSourceEvent] = 16_000;
     assert.equal(mix.ingestMic(A, samples(signalA), RATE, 45_000), true);
     assert.equal(mix.ingestMic(B, samples(signalB), RATE, 45_000), true);
 
@@ -92,6 +98,11 @@ describe('canonical MicTrack N=2 through the production MixBus (no live server)'
     assert.equal(perSinger[1].participantId, 'singer-b');
     assert.equal(perSinger[0].gapSamples, 0);
     assert.equal(perSinger[1].gapSamples, 0);
+    assert.equal(perSinger[0].readStartSample, 20 * FRAME + 5_760);
+    assert.equal(perSinger[1].readStartSample, 20 * FRAME - 16_320);
+    assert.ok(perSinger[0].voicePeakAbs > 0.3);
+    assert.ok(perSinger[1].voicePeakAbs > 0.3,
+      'B produces a real post-edge voice, rather than only a correct read index');
     assert.equal(mix.setConfirmedLag(B, 0), false,
       'a live calibration hard jump is not authorized by this test harness');
   });

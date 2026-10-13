@@ -37,6 +37,8 @@ export type ChoirDeadlineRoomOptions = {
   /** Defaults to 8; larger outages require an explicit new room epoch. */
   maxCatchupFrames?: number;
   reconnectGraceMs?: number;
+  /** New trusted Room Epoch must allocate disjoint singer Media Epochs. */
+  firstMediaEpoch?: number;
 };
 
 export type ChoirDeadlineResult =
@@ -113,11 +115,18 @@ export class ChoirDeadlineRoomExperiment {
       throw new RangeError('Invalid Choir Content video ID');
     this.videoId = config.videoId ?? null;
     this.seats = new ChoirSession(2);
-    this.registry = new ChoirPublisherRegistry(this.seats, config.reconnectGraceMs ?? 2_000);
+    this.registry = new ChoirPublisherRegistry(
+      this.seats, config.reconnectGraceMs ?? 2_000, config.firstMediaEpoch ?? 1,
+    );
     this.room = new CanonicalChoirMixExperiment({
       ...config, contentHistoryMs: this.videoId === null
         ? undefined : config.contentHistoryMs ?? 7_000,
     });
+  }
+
+  /** Server-owned frontier, including epochs consumed by failed admissions. */
+  get nextUnissuedMediaEpoch() {
+    return this.registry.nextUnissuedMediaEpoch;
   }
 
   private validNow(nowMs: number): boolean {

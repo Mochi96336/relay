@@ -562,4 +562,147 @@ export class MicTrack {
   }
 
 
+
+  /** Capture-scoped detector state; cumulative limiter evidence stays intact. */
+  resetLimiterState() {
+    this.limiter.reset();
+    this.limiterResetPending = false;
+  }
+
+  /**
+   * Seeds limiter detector/gain from one already-buffered future window.
+   *
+   * This is used only at semantic edges where the previous detector state no
+   * longer describes the next audible signal. It does not charge cumulative
+   * limited-sample evidence; only emitted samples do.
+   */
+  private seedMicLimiterFromWindow(
+    samples: Int16Array,
+    fromOffset: number,
+    toOffset: number,
+    currentMicGainDb: number,
+  ) {
+    const end = Math.min(samples.length - 1, Math.max(fromOffset, toOffset));
+    let peak = 0;
+    for (let offset = fromOffset; offset <= end; offset += 1) {
+      const gainDb = offset === fromOffset
+        ? currentMicGainDb
+        : this.gain.projectDb(offset - fromOffset);
+      const magnitude = Math.abs(samples[offset]! / 32768) * (10 ** (gainDb / 20));
+      if (magnitude > peak) peak = magnitude;
+    }
+
+    this.limiter.seedPeak(peak);
+  }
+
+  /**
+   * Starts a new capture's limiter from that capture's own first look-ahead.
+   *
+   * A fresh unity gain is unsafe when the replacement itself is already hot:
+   * the ordinary attack needs time to converge, while replacement audio starts
+   * immediately. Seed directly to the safe target implied by the first detector
+   * window.
+   */
+  private seedMicLimiterForCapture(
+    samples: Int16Array,
+    fromOffset: number,
+    toOffset: number,
+    currentMicGainDb: number,
+  ) {
+    this.seedMicLimiterFromWindow(samples, fromOffset, toOffset, currentMicGainDb);
+    this.limiterResetPending = false;
+  }
+
+
+  /**
+   * The limiter's look-ahead offset for sample `i`, kept on the old capture
+   * while a retained restart boundary lies inside the look-ahead.
+   */
+  private restartBoundedDetectOffset(
+    i: number,
+    micSourceSample: number,
+    micReadStart: number,
+    micSlew: MicSlewRead | null,
+    micSlewFrameEndPosition: number,
+  ) {
+    let detectOffset = i + this.limiter.lookaheadSamples;
+    const requestedDetectSourceSample = micSlew
+      ? detectOffset < this.frameSamples
+        ? micSlew.firstPosition + detectOffset * micSlew.rate
+        : micSlewFrameEndPosition + (detectOffset - this.frameSamples)
+      : micReadStart + detectOffset;
+    const detectorRestartBoundary = this.captureRestarts.firstCrossing(
+      micSourceSample,
+      requestedDetectSourceSample,
+    );
+    if (detectorRestartBoundary !== null) {
+      // Retain every old-capture look-ahead sample that still exists. This
+      // is better than disabling look-ahead wholesale near the boundary:
+      // transients on the old capture remain protected without letting the
+      // replacement attenuate audio that precedes its semantic ownership.
+      while (detectOffset > i) {
+        const candidateSourceSample = micSlew
+          ? detectOffset < this.frameSamples
+            ? micSlew.firstPosition + detectOffset * micSlew.rate
+            : micSlewFrameEndPosition + (detectOffset - this.frameSamples)
+          : micReadStart + detectOffset;
+        if (candidateSourceSample < detectorRestartBoundary) break;
+        detectOffset -= 1;
+      }
+    }
+
+    return detectOffset;
+  }
+
+
+  /**
+   * Render ONE singer's canonical post-read PCM sample through its own gain,
+   * capture-restart-aware lookahead limiter, and source-edge envelope.
+   * The room alone sums the returned voice with the shared backing.
+   * Never read or write room/other-singer state here.
+   */
+  processVoiceSample(input: {
+    samples: Int16Array;
+    i: number;
+    sourceSample: number;
+    micReadStart: number;
+    slew: MicSlewRead | null;
+    slewFrameEndPosition: number;
+    evidenceMissing: boolean;
+    audibleMissing: boolean;
+  }): { voice: number; limited: boolean; heavilyLimited: boolean } {
+    const {
+      samples, i, sourceSample, micReadStart, slew,
+      slewFrameEndPosition, evidenceMissing, audibleMissing,
+    } = input;
+    if (this.beginCaptureRestartEdgeIfDue(sourceSample)) {
+      this.micLimiterResetPending = true;
+    }
+
+    const micGainDb = this.gain.advanceDb();
+    const micGain = 10 ** (micGainDb / 20);
+    const detectOffset = this.captureRestarts.size > 0
+      ? this.restartBoundedDetectOffset(
+          i, sourceSample, micReadStart, slew, slewFrameEndPosition,
+        )
+      : i + this.limiter.lookaheadSamples;
+    const recoveringFromFullMicSilence = !audibleMissing && this.edge.silenced;
+    if (this.micLimiterResetPending && !audibleMissing) {
+      this.seedMicLimiterForCapture(samples, i, detectOffset, micGainDb);
+    } else if (recoveringFromFullMicSilence) {
+      this.seedMicLimiterFromWindow(samples, i, detectOffset, micGainDb);
+    }
+    const detectMicGain = 10 ** (this.gain.projectDb(detectOffset - i) / 20);
+    let voice = this.limiter.apply(
+      (samples[i] / 32768) * micGain,
+      (samples[detectOffset] / 32768) * detectMicGain,
+    );
+    const limited = !audibleMissing && this.limiter.limiting;
+    const heavilyLimited = !audibleMissing && this.limiter.heavilyLimiting;
+    voice = this.edge.apply(voice, evidenceMissing, audibleMissing);
+    this.lastEmittedMicSourceSample = sourceSample;
+    return { voice, limited, heavilyLimited };
+  }
+
+
 }

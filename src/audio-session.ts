@@ -935,7 +935,7 @@ export class AudioSession {
     // These are audio state, not just diagnostics. Carrying gain reduction into
     // a new epoch makes the beginning of the next take inherit the previous
     // singer's last transient and can attenuate it for hundreds of milliseconds.
-    this.resetMicLimiterState();
+    this.micTrack.resetLimiterState();
     this.micEdge.reset();
     this.backingEdge.reset();
     this.micTrack.lastEmittedMicSourceSample = null;
@@ -958,56 +958,6 @@ export class AudioSession {
       this.backingCaptureRestartBoundaries.clear();
     }
     resetPcmTimeline(timeline);
-  }
-
-  /** Capture-scoped detector state; cumulative limiter evidence stays intact. */
-  private resetMicLimiterState() {
-    this.micLimiter.reset();
-    this.micTrack.micLimiterResetPending = false;
-  }
-
-  /**
-   * Seeds limiter detector/gain from one already-buffered future window.
-   *
-   * This is used only at semantic edges where the previous detector state no
-   * longer describes the next audible signal. It does not charge cumulative
-   * limited-sample evidence; only emitted samples do.
-   */
-  private seedMicLimiterFromWindow(
-    samples: Int16Array,
-    fromOffset: number,
-    toOffset: number,
-    currentMicGainDb: number,
-  ) {
-    const end = Math.min(samples.length - 1, Math.max(fromOffset, toOffset));
-    let peak = 0;
-    for (let offset = fromOffset; offset <= end; offset += 1) {
-      const gainDb = offset === fromOffset
-        ? currentMicGainDb
-        : this.micGain.projectDb(offset - fromOffset);
-      const magnitude = Math.abs(samples[offset]! / 32768) * (10 ** (gainDb / 20));
-      if (magnitude > peak) peak = magnitude;
-    }
-
-    this.micLimiter.seedPeak(peak);
-  }
-
-  /**
-   * Starts a new capture's limiter from that capture's own first look-ahead.
-   *
-   * A fresh unity gain is unsafe when the replacement itself is already hot:
-   * the ordinary attack needs time to converge, while replacement audio starts
-   * immediately. Seed directly to the safe target implied by the first detector
-   * window.
-   */
-  private seedMicLimiterForCapture(
-    samples: Int16Array,
-    fromOffset: number,
-    toOffset: number,
-    currentMicGainDb: number,
-  ) {
-    this.seedMicLimiterFromWindow(samples, fromOffset, toOffset, currentMicGainDb);
-    this.micTrack.micLimiterResetPending = false;
   }
 
   /** Forgets the trajectory the last emitted Mic frame was read along. */
@@ -1304,18 +1254,6 @@ export class AudioSession {
     this.backingEdge.beginReplacement();
   }
 
-  /**
-   * One sample through the peak limiter. `detect` is the sample the detector
-   * should react to - a few milliseconds ahead of `value` - so the reduction is
-   * already in place when the peak arrives.
-   */
-  private limit(value: number, detect: number, countLimitedSample = true) {
-    const limited = this.micLimiter.apply(value, detect);
-    if (countLimitedSample && this.micLimiter.limiting) this.limitedSamples += 1;
-    if (countLimitedSample && this.micLimiter.heavilyLimiting) this.heavyLimitedSamples += 1;
-    return limited;
-  }
-
   /** One room-owned clock tick; all source-specific planning runs on the track. */
   private planMicRead(frameIndex: number): MicReadPlan {
     // Timeline fold/rebase remains part of the canonical room ingest/clock
@@ -1346,46 +1284,6 @@ export class AudioSession {
     };
   }
 
-  /**
-   * The limiter's look-ahead offset for sample `i`, kept on the old capture
-   * while a retained restart boundary lies inside the look-ahead.
-   */
-  private restartBoundedDetectOffset(
-    i: number,
-    micSourceSample: number,
-    micReadStart: number,
-    micSlew: MicSlewRead | null,
-    micSlewFrameEndPosition: number,
-  ) {
-    let detectOffset = i + this.micLimiter.lookaheadSamples;
-    const requestedDetectSourceSample = micSlew
-      ? detectOffset < this.frameSamples
-        ? micSlew.firstPosition + detectOffset * micSlew.rate
-        : micSlewFrameEndPosition + (detectOffset - this.frameSamples)
-      : micReadStart + detectOffset;
-    const detectorRestartBoundary = this.micCaptureRestartBoundaries.firstCrossing(
-      micSourceSample,
-      requestedDetectSourceSample,
-    );
-    if (detectorRestartBoundary !== null) {
-      // Retain every old-capture look-ahead sample that still exists. This
-      // is better than disabling look-ahead wholesale near the boundary:
-      // transients on the old capture remain protected without letting the
-      // replacement attenuate audio that precedes its semantic ownership.
-      while (detectOffset > i) {
-        const candidateSourceSample = micSlew
-          ? detectOffset < this.frameSamples
-            ? micSlew.firstPosition + detectOffset * micSlew.rate
-            : micSlewFrameEndPosition + (detectOffset - this.frameSamples)
-          : micReadStart + detectOffset;
-        if (candidateSourceSample < detectorRestartBoundary) break;
-        detectOffset -= 1;
-      }
-    }
-
-    return detectOffset;
-  }
-
   private mixFrame(frameIndex: number): { frame: Buffer; evidence: MixFrameEvidence } {
     const plan = this.planMicRead(frameIndex);
     const {
@@ -1412,8 +1310,6 @@ export class AudioSession {
       gapMask: backingGapMask,
       frontierMissingStart: backingFrontierMissingStart,
     } = this.readBackingFrame(startSample);
-    const lookahead = this.micLimiter.lookaheadSamples;
-
     this.micTrack.micUnplayableRunFrames = this.bus.micExpected
       && micReadEvidence.gapSamples + micReadEvidence.frontierMissingSamples > 0
       ? this.micTrack.micUnplayableRunFrames + 1
@@ -1448,10 +1344,6 @@ export class AudioSession {
       // it. Keep old-capture limiting until the audible trajectory actually
       // crosses the semantic boundary. The first real replacement sample then
       // seeds fresh dynamics from replacement PCM itself.
-      if (this.micTrack.beginCaptureRestartEdgeIfDue(micSourceSample)) {
-        this.micTrack.micLimiterResetPending = true;
-      }
-
       const micEvidenceMissing = micSlew
         ? micSlew.missingMask[i] === 1
         : micGapMask?.[i] === 1 || i >= micFrontierMissingStart;
@@ -1465,52 +1357,19 @@ export class AudioSession {
         backingGapMask?.[i] === 1 || i >= backingFrontierMissingStart;
       const effectiveTwoSourceOwnership = this.bus.twoSourceOwnership;
 
-      const micGainDb = this.micGain.advanceDb();
-      const micGain = 10 ** (micGainDb / 20);
-
-      // Look-ahead belongs to one acoustic capture. Only pay the extra boundary
-      // lookup while retained restart state exists; the ordinary mixer path
-      // keeps the same direct +3 ms detector as before.
-      const detectOffset = this.micCaptureRestartBoundaries.size > 0
-        ? this.restartBoundedDetectOffset(i, micSourceSample, micReadStart, micSlew, micSlewFrameEndPosition)
-        : i + lookahead;
-
-      const recoveringFromFullMicSilence = !micAudibleMissing && this.micEdge.silenced;
-
-      if (this.micTrack.micLimiterResetPending && !micAudibleMissing) {
-        this.seedMicLimiterForCapture(
-          mic,
-          i,
-          detectOffset,
-          micGainDb,
-        );
-      } else if (recoveringFromFullMicSilence) {
-        // Once a missing-source edge has fully reached silence, the old limiter
-        // detector has had time to release and no longer protects a suddenly
-        // hot recovery. Seed from the recovered PCM's own look-ahead before the
-        // first real sample becomes audible. Very short gaps that never reached
-        // silence deliberately keep their existing limiter continuity.
-        this.seedMicLimiterFromWindow(
-          mic,
-          i,
-          detectOffset,
-          micGainDb,
-        );
-      }
-
-      // The limiter detector looks ahead in source samples, so it must also see
-      // the gain that will apply when that future sample reaches the output.
-      const detectMicGain = 10 ** (this.micGain.projectDb(detectOffset - i) / 20);
-      let voice = this.limit(
-        (mic[i] / 32768) * micGain,
-        (mic[detectOffset] / 32768) * detectMicGain,
-        !micAudibleMissing,
-      );
-
-      // A proven source gap or frontier miss takes over from a capture
-      // replacement; structural pre-roll is silent but not source failure, so
-      // an active restart transition keeps ownership through it.
-      voice = this.micEdge.apply(voice, micEvidenceMissing, micAudibleMissing);
+      const processedVoice = this.micTrack.processVoiceSample({
+        samples: mic,
+        i,
+        sourceSample: micSourceSample,
+        micReadStart,
+        slew: micSlew,
+        slewFrameEndPosition: micSlewFrameEndPosition,
+        evidenceMissing: micEvidenceMissing,
+        audibleMissing: micAudibleMissing,
+      });
+      const voice = processedVoice.voice;
+      if (processedVoice.limited) this.limitedSamples += 1;
+      if (processedVoice.heavilyLimited) this.heavyLimitedSamples += 1;
       // Release only once the departing source has run out: silent at the
       // output *and* read past everything it retained. A hole inside the tail
       // also silences it, and releasing there un-ducked the song and dropped
@@ -1541,7 +1400,6 @@ export class AudioSession {
       ) {
         this.bus.releaseBackingHold();
       }
-      this.micTrack.lastEmittedMicSourceSample = micSourceSample;
       const value = this.bus.mixSample(
         voice,
         songContribution,

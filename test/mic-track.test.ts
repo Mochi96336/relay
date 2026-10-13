@@ -299,6 +299,31 @@ describe('extracted MicTrack owns per-singer components independently', () => {
       'an unexpected / released source does not count starvation again');
   });
 
+  test('two source processors apply independent gain and limiter dynamics', () => {
+    const a = new MicTrack(config);
+    const b = new MicTrack(config);
+    a.gain.setTargetDb(0, false);
+    b.gain.setTargetDb(-6, false);
+    const source = new Int16Array(1100).fill(4000);
+    const input = {
+      samples: source, i: 0, sourceSample: 0, micReadStart: 0,
+      slew: null, slewFrameEndPosition: 0,
+      evidenceMissing: false, audibleMissing: false,
+    };
+    const av = a.processVoiceSample(input);
+    const bv = b.processVoiceSample(input);
+    assert.ok(av.voice > 0 && bv.voice > 0);
+    assert.ok(av.voice > bv.voice * 1.8, 'different singers keep their own Mic gain');
+    assert.equal(a.lastEmittedMicSourceSample, 0);
+    assert.equal(b.lastEmittedMicSourceSample, 0);
+    assert.equal(av.limited, false);
+    assert.equal(bv.limited, false);
+    a.micLimiterResetPending = true;
+    a.processVoiceSample({ ...input, i: 1, sourceSample: 1 });
+    assert.equal(a.micLimiterResetPending, false);
+    assert.equal(b.micLimiterResetPending, false);
+  });
+
   test('current AudioSession still uses its actual existing Mic clock and limits', () => {
     const session = new AudioSession({
       sampleRate: 48_000, frameMs: 20, prebufferMs: 400,

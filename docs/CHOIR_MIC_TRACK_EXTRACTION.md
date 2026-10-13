@@ -209,3 +209,20 @@ Additional A/B tests use separate native 44.1-kHz origins against one
 48-kHz room rate. This does **not** yet move the canonical PCM ingest
 and resampler into MicTrack; the authoritative AudioSession.ingest()
 still performs capture-clock anchoring to the room time.
+
+## Stage 9: per-singer sample gain/limiter/source edges
+
+The canonical output loop now calls `MicTrack.processVoiceSample()` for
+its Mic gain ramp, capture-restart-limited lookahead detection, fresh
+limiter seeding, peak limiting, missing-source envelope, and track-local
+last-emitted source position. The method returns the already-processed
+voice **plus** per-sample limiting evidence, which the current N=1 room
+aggregates exactly as before. The shared `MixBus` still owns ducking,
+backing, recording/monitor output and final clipping. The source processing
+uses the same original methods and ordering; no separate simplified voice
+pipeline is promoted to production.
+
+The former `AudioSession.resetMicLimiterState()`, limiter seed helpers and
+`restartBoundedDetectOffset()` now execute inside MicTrack. Tests check
+that two track instances apply different gains independently, while the
+existing N=1 Golden PCM captures any drift from the original limiter path.

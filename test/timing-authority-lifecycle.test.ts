@@ -53,7 +53,7 @@ test('timing authority keeps polling across idle and observes the later applied 
   }
 
   const window = {
-    relayTimingAuthority: null as null | { authorityFresh: boolean; valueMs: number | null },
+    relayTimingAuthority: null as null | { authorityFresh: boolean; valueMs: number | null; pendingReason?: string | null },
     dispatchEvent() {},
   };
 
@@ -112,6 +112,7 @@ test('timing authority keeps polling across idle and observes the later applied 
 
   assert.equal(window.relayTimingAuthority?.authorityFresh, true);
   assert.equal(window.relayTimingAuthority?.valueMs, null);
+  assert.equal(window.relayTimingAuthority?.pendingReason, 'mix-idle', 'the dash says why');
   assert.equal(clearedIntervals.has(refreshId!), false,
     'an idle source snapshot must not stop observation of a later active mix');
 
@@ -134,6 +135,7 @@ test('timing authority keeps polling across idle and observes the later applied 
   assert.equal(window.relayTimingAuthority?.authorityFresh, true);
   assert.equal(window.relayTimingAuthority?.valueMs, null,
     'path-ready Robot calibration awaiting player delta must not expose fallback zero as user timing');
+  assert.equal(window.relayTimingAuthority?.pendingReason, 'robot-position');
 
   socket.emit('message', {
     data: JSON.stringify({

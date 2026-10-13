@@ -5,6 +5,7 @@ import {
   playbackContinuationDecision,
   reloadDesiredFromRoom,
 } from '../public/playback-continuation.js';
+import { roomSongCommandConvergence } from '../shared/room-song-command-convergence.js';
 import { RoomSongCommandSession } from '../src/room-song-command-session.js';
 import { SongSession } from '../src/song-session.js';
 
@@ -60,9 +61,24 @@ test('reload desired state maps terminal YouTube state to paused at the same pos
     state: 2,
     positionSeconds: 199,
     playbackRate: 1,
+    ended: true,
   });
 
   assert.equal(reloadDesiredFromRoom({ videoId: 'bad' }), null);
+});
+
+test('a player restored to the end of a finished song may report ENDED and still be restored', () => {
+  const desired = reloadDesiredFromRoom({ videoId: VIDEO, state: 0, serverTime: 199, playbackRate: 1 });
+  assert.ok(desired);
+  const observed = { videoId: VIDEO, currentTime: 199, playbackRate: 1 };
+  assert.equal(roomSongCommandConvergence({ desired, observed: { ...observed, state: 0 } }), 'complete');
+  assert.equal(roomSongCommandConvergence({ desired, observed: { ...observed, state: 2 } }), 'complete');
+
+  // A room deliberately paused mid-song is not satisfied by a player that ended.
+  const paused = reloadDesiredFromRoom({ videoId: VIDEO, state: 2, serverTime: 199, playbackRate: 1 });
+  assert.ok(paused);
+  assert.equal(paused.ended, false);
+  assert.equal(roomSongCommandConvergence({ desired: paused, observed: { ...observed, state: 0 } }), 'none');
 });
 
 test('reload continuation key changes when authoritative room revision changes', () => {

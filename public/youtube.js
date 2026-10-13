@@ -277,7 +277,7 @@ function normalizedDesiredState(value) {
   // Only a command that exists to move the player says so, and an older page or
   // a payload without the flag keeps the previous behaviour of positioning.
   const mustApplyPosition = desired.mustApplyPosition !== false;
-  return { videoId, positionSeconds, state, playbackRate, mustApplyPosition };
+  return { videoId, positionSeconds, state, playbackRate, mustApplyPosition, ended: desired.ended === true };
 }
 
 function projectedDesiredPosition(mutation, now = performance.now()) {

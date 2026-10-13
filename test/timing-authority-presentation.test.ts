@@ -63,3 +63,12 @@ test('normal Live has no fine tune and timing copy has no singing restriction', 
   assert.match(i18n, /'timing\.unavailable': '目前無法重新對齊'/);
   assert.doesNotMatch(i18n, /Don’t sing|Don't sing|先不要唱|不要出聲|停止唱歌/);
 });
+
+test('an enabled Realign without a value says why instead of a bare dash', () => {
+  assert.match(calibrationUi, /setText\(calibrateStatus, pendingValueText\(\)\)/);
+  assert.match(calibrationUi, /timing\.pending\.robotPosition/);
+  assert.match(calibrationUi, /timing\.pending\.mixIdle/);
+  for (const key of ['timing.pending.mixIdle', 'timing.pending.robotPosition']) {
+    assert.equal((i18n.match(new RegExp(`'${key.replaceAll('.', '\\.')}':`, 'g')) ?? []).length, 2, key);
+  }
+});

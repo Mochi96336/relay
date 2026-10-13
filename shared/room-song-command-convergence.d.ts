@@ -6,6 +6,8 @@ export type RoomSongDesiredLike = {
   state: number;
   playbackRate: number;
   mustApplyPosition?: boolean;
+  /** A finished room: paused at its end, where the player may report ENDED. */
+  ended?: boolean;
 };
 
 export type RoomSongObservedLike = {

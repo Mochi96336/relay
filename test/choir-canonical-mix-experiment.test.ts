@@ -226,9 +226,30 @@ describe('canonical MicTrack N=2 through the production MixBus (no live server)'
     assert.equal(mix.replaceDisconnectedSinger(A2), true);
     assert.equal(mix.mediaEpochFor('singer-a'), A2.mediaEpoch);
     assert.equal(mix.ingestMic(A, pcm(FRAME, 18_000), RATE, FRAME * 4), false);
-    const accepted = mix.ingestMic(A2, pcm(FRAME, 10_000), RATE, FRAME * 4);
-    assert.equal(accepted, true);
-    const f = mix.render(FRAME * 3);
+    assert.equal(mix.ingestMic(A2, pcm(FRAME, 10_000), RATE, FRAME * 4), true);
+    const pending = mix.render(FRAME * 3);
+    assert.equal(pending.singers[0].awaitingCalibration, true);
+    assert.equal(pending.singers[0].voicePeakAbs, 0);
+    assert.equal(pending.singers[1].awaitingCalibration, false);
+    const valid = {
+      source: 'content' as const,
+      advanceMs: 0,
+      sampleResidualMs: null, bootResidualMs: null,
+      sampleCandidateMs: null, bootCandidateMs: null,
+    };
+    assert.equal(mix.acceptReboundAlignment(A, valid), false,
+      'old media epoch cannot reactivate even a confirmed Content result');
+    assert.equal(mix.acceptReboundAlignment(A2, {
+      ...valid, source: 'content-held',
+    }), false, 'held Content cannot unmute a new capture');
+    assert.equal(mix.acceptReboundAlignment(A2, {
+      ...valid, source: 'unavailable', advanceMs: null,
+    }), false, 'missing fallback cannot unmute a new capture');
+    assert.equal(mix.acceptReboundAlignment(A2, valid), true);
+    assert.equal(mix.acceptReboundAlignment(A2, valid), false,
+      'replaying an old decision cannot change an already audible source');
+    const f = mix.render(FRAME * 4);
+    assert.equal(f.singers[0].awaitingCalibration, false);
     assert.equal(f.singers[0].mediaEpoch, A2.mediaEpoch);
     assert.equal(f.singers[1].mediaEpoch, B.mediaEpoch);
     assert.equal(f.singers[0].latePacketDrops, 0);

@@ -200,8 +200,28 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     const output = coordinator.renderDue(280);
     if (output.state !== 'ready') throw Error('must continue');
     assert.equal(output.frames[0].singers[0].mediaEpoch, next.mediaEpoch);
+    assert.equal(output.frames[0].singers[0].awaitingCalibration, true);
+    assert.equal(output.frames[0].singers[0].voicePeakAbs, 0);
     assert.equal(output.frames[0].singers[1].mediaEpoch, b.mediaEpoch);
     assert.equal(output.frames[0].singers[1].expected, true);
+    const valid = {
+      source: 'sample-song-estimate' as const, advanceMs: 0,
+      sampleResidualMs: null, bootResidualMs: null,
+      sampleCandidateMs: 0, bootCandidateMs: null,
+    };
+    assert.equal(coordinator.acceptTrustedReboundAlignment(
+      'socket-A', next.mediaEpoch, valid, 281), false);
+    assert.equal(coordinator.acceptTrustedReboundAlignment(
+      'socket-A2', a.mediaEpoch, valid, 281), false);
+    assert.equal(coordinator.acceptTrustedReboundAlignment(
+      'socket-A2', next.mediaEpoch,
+      { ...valid, source: 'content-held' }, 281), false);
+    assert.equal(coordinator.acceptTrustedReboundAlignment(
+      'socket-A2', next.mediaEpoch, valid, 281), true);
+    const resumed = coordinator.renderDue(300);
+    if (resumed.state !== 'ready') throw Error('post calibration must advance');
+    assert.equal(resumed.frames[0].singers[0].awaitingCalibration, false);
+    assert.equal(resumed.frames[0].singers[1].expected, true);
   });
 
   test('explicit B Take Mic requires authenticated transport and fresh CAS, no song takeover', () => {

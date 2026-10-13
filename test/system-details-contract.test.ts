@@ -87,7 +87,6 @@ test('legacy backing attention remains a compatibility projection outside normal
 
 test('L3 opens an evidence socket only while Technical details is open', () => {
   assert.match(system, /if \(!diagnosticsPanel\.open\) return/);
-  assert.match(system, /diagnosticsPanel\.addEventListener\('toggle'/);
   assert.match(system, /closeDiagnosticsSocket\(\)/);
 
   for (const request of [

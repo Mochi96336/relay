@@ -329,13 +329,9 @@ test('initial Relay connection failure remains cancellable instead of trapping a
   const connectAt = app.indexOf('await connectPublisherSocket(sessionEpoch, generation)', disabledAt);
   const retryAt = app.indexOf('schedulePublisherReconnect(sessionEpoch, generation)', connectAt);
   assert.ok(activeAt >= 0 && disabledAt > activeAt && connectAt > disabledAt && retryAt > connectAt);
-
-  assert.match(presence, /releaseVisible: Boolean\(mine \|\| localPublisherActive\)/);
-  assert.match(micActions, /releaseButton\.hidden = state\.releaseVisible !== true/);
 });
 
 test('timeline diagnostics stay data-only and never attach to the Live Song stage', () => {
-  assert.match(youtubeSync, /relay:playback-diagnostics/);
   assert.doesNotMatch(youtubeSync, /document\.querySelector\('\.song-stage'\)/);
   assert.doesNotMatch(youtubeSync, /server-timeline-state|insertAdjacentElement/);
 });

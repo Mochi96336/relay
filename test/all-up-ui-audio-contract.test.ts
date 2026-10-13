@@ -7,6 +7,7 @@ const listen = readFileSync(new URL('../public/listen.js', import.meta.url), 'ut
 const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 
 test('all-up phone UI keeps #13 singer ownership while using the v2 media plane', () => {
+  assert.match(app, /role:\s*'publisher'/);
   assert.match(app, /let publisherActive = false/);
   assert.match(app, /setPublisherActive\(true\)/);
   assert.match(app, /new PreferredAudioTransport/);
@@ -19,8 +20,8 @@ test('all-up phone UI keeps #13 singer ownership while using the v2 media plane'
   assert.match(app, /captureInputGapSamples \+= samples/);
 
   assert.doesNotMatch(app, /role:\s*'monitor'/);
-  assert.doesNotMatch(app, /\bactiveRole\b|setActiveRole/);
-  assert.doesNotMatch(app, /connectMonitorSocket|playbackNode|monitorGainNode|linearResample|int16ToFloat32/);
+  assert.doesNotMatch(app, /\bactiveRole\b|setActiveRole|setPublisherActive\('monitor'\)/);
+  assert.doesNotMatch(app, /startMonitor|connectMonitorSocket|playbackNode|monitorGainNode|linearResample|int16ToFloat32/);
   assert.doesNotMatch(app, /socket\.send\(framePcm\(/);
 });
 

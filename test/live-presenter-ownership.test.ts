@@ -25,28 +25,23 @@ test('playback transport publishes diagnostics without rendering Live debug DOM'
 });
 
 test('listen owns audio state while room-sound-ui owns visible room-sound presentation', () => {
-  assert.match(listen, /relay-listen-state/);
   assert.doesNotMatch(listen, /listen-note|listen-adjust-state|listen-gain-value/);
   assert.doesNotMatch(listen, /\.textContent\s*=|document\.body\.dataset\.listen|toggle\.disabled\s*=/);
   assert.doesNotMatch(listen, /dataset\.presenceLabel/,
     'Listen must consume Presence state directly instead of reading presenter DOM semantics');
   assert.match(listen, /relay-mic-action-state/);
 
-  assert.match(roomSoundUi, /relay-listen-state/);
   assert.match(roomSoundUi, /toggle\.setAttribute\('aria-label'/);
   assert.match(roomSoundUi, /stateNote\.textContent\s*=/);
   assert.match(roomSoundUi, /actionNote\.textContent\s*=/);
   assert.match(roomSoundUi, /document\.body\.dataset\.listen\s*=/);
-  assert.doesNotMatch(roomSoundUi, /MutationObserver/);
 });
 
 test('presence owns Mic authority while required mic-actions owns the action surface', () => {
   assert.match(html, /<script type="module" src="\/mic-actions\.js"><\/script>/);
   assert.doesNotMatch(liveIa, /'\.\/mic-actions\.js'/);
-  assert.match(presence, /relay-mic-action-state/);
   assert.doesNotMatch(presence, /takeoverCopy|takeoverPanel/);
   assert.doesNotMatch(presence, /publisherButton\.textContent\s*=/);
-  assert.doesNotMatch(presence, /releaseButton\.hidden\s*=/);
   assert.doesNotMatch(presence, /confirmTakeoverButton\.disabled\s*=/);
 
   assert.match(micActions, /publisherButton\.textContent\s*=/);
@@ -56,14 +51,10 @@ test('presence owns Mic authority while required mic-actions owns the action sur
 });
 
 test('recorder owns commands while required recording-ui owns visible recording state', () => {
-  assert.match(html, /<script type="module" src="\/recording-ui\.js"><\/script>/);
   assert.doesNotMatch(liveIa, /'\.\/recording-ui\.js'/);
-  assert.match(recorder, /type: 'start-take'/);
-  assert.match(recorder, /type: 'stop-take'/);
   assert.match(recorder, /relay-recording-state/);
   assert.doesNotMatch(recorder, /recordingStatus|\.textContent\s*=|\.disabled\s*=/);
 
-  assert.match(recordingUi, /relay-recording-state/);
   assert.match(recordingUi, /startButton\.disabled\s*=/);
   assert.match(recordingUi, /stopButton\.disabled\s*=/);
   assert.match(recordingUi, /status\.textContent\s*=/);

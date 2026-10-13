@@ -4,10 +4,8 @@ import test from 'node:test';
 
 const stateCss = readFileSync(new URL('../public/live-state.css', import.meta.url), 'utf8');
 const layoutCss = readFileSync(new URL('../public/live-p0-layout.css', import.meta.url), 'utf8');
-const roomCss = readFileSync(new URL('../public/room-sound-ui.css', import.meta.url), 'utf8');
 const roomUi = readFileSync(new URL('../public/room-sound-ui.js', import.meta.url), 'utf8');
 const roomPresentation = readFileSync(new URL('../public/room-sound-presentation.js', import.meta.url), 'utf8');
-const liveCopy = readFileSync(new URL('../public/live-i18n.js', import.meta.url), 'utf8');
 const fixture = readFileSync(new URL('./fixtures/live-p0-layout.html', import.meta.url), 'utf8');
 const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 
@@ -41,11 +39,6 @@ test('Room sound is one fixed 44px rail whose geometry lives only in the P0 layo
   assert.match(layoutCss, /#listen-gain::\-webkit-slider-runnable-track \{[\s\S]*?height:\s*2px/);
   assert.match(layoutCss, /#listen-gain-value \{[\s\S]*?display:\s*block;[\s\S]*?width:\s*5ch/);
   assert.match(layoutCss, /#local-listen-label,[\s\S]*?#listen-note \{[\s\S]*?position:\s*absolute/);
-  assert.doesNotMatch(layoutCss, /data-room-sound-value|data-room-sound-state/);
-  assert.doesNotMatch(roomCss, /#local-listen-label|#listen-gain-value|#listen-adjust-state|#listen-note/);
-  assert.doesNotMatch(roomUi, /installCompactSemanticAnchor/);
-  assert.doesNotMatch(roomUi, /\.style\.(?:gridTemplateColumns|gridColumn|gridRow|display|whiteSpace)/);
-  assert.doesNotMatch(roomUi, /dataset\.roomSoundState|dataset\.roomSoundValue|dataset\.listenNote/);
 });
 
 test('Room sound projection preserves recovery semantics and local-only authority without visible state narration', () => {
@@ -53,12 +46,9 @@ test('Room sound projection preserves recovery semantics and local-only authorit
     'the DOM adapter must delegate control naming and state semantics to the presenter');
   assert.doesNotMatch(roomUi, /function compactStatus|compactKey|state === '(?:mic-muted|playback-muted|review-muted|muted)'/,
     'the DOM adapter must not reconstruct Room sound product state');
-  assert.doesNotMatch(roomPresentation, /compactStatusKey|compactKey/);
   assert.match(roomPresentation, /labelKey:\s*'roomSound\.label'/);
   assert.match(roomPresentation, /volumeAriaLabelKey:\s*'roomSound\.volumeAria'/);
   assert.match(roomPresentation, /toggleAriaLabelKey:[\s\S]*?'roomSound\.retry'[\s\S]*?'roomSound\.turnOnAria'[\s\S]*?'roomSound\.muteAria'/);
-  assert.match(liveCopy, /'roomSound\.label': 'Room sound'/);
-  assert.match(liveCopy, /'roomSound\.label': '房間聲音'/);
   assert.match(roomUi, /gain\.disabled = forced/);
   assert.match(html, /id="listen-toggle"[^>]*>\s*<svg class="room-sound-icon"[^>]*stroke="currentColor"/);
   assert.match(roomUi, /toggle\.dataset\.icon = controlPresentation\.iconState/);

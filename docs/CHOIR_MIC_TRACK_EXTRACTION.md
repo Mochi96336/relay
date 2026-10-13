@@ -84,6 +84,20 @@ The track does **not** invent capture-to-room offsets or touch Robot backing.
 concealment and anti-click logic. The Golden PCM gate must remain byte-exact
 over its existing restart, clock drift, clipping and packet-loss cases.
 
+## Stage 4: canonical sample reads and evidence on MicTrack
+
+The old `AudioSession.readMicFrame()` now runs as `MicTrack.readMicFrame()`,
+along with its bounded-rate PCM read and immediate read-head crossfade helpers.
+The **same existing** `readMicSlewedRange`, `crossfadeMicReadHeadJump`,
+`readPcmRange`, `readPcmEvidence` and clipping/boundary code is called.
+Only `MicTrack`'s own timeline, clipping and capture-boundary states are
+accessible to this frame reader. The room retains timing planning and final
+voice/backing mixing. No new producer or audio codec has been introduced.
+
+`test/mic-track.test.ts` now asserts two independent MicTracks can return
+different real PCM and missing-frontier evidence at the same room position.
+Existing N=1 Golden PCM digests must stay untouched.
+
 ## Still *inside* AudioSession and must be extracted next
 
 The existing canonical methods continue to own:
@@ -92,7 +106,7 @@ The existing canonical methods continue to own:
   input clipping and MixBus summing loop;
 - the remaining Mic PCM transport placement in `ingestMic`,
   source sample-to-session mapping, trim/restart handling,
-  `planMicRead`, `readMicFrame`, and `mixFrame`.
+  `planMicRead` and `mixFrame`; `readMicFrame` is now on MicTrack.
 
 **These must not be duplicated into the experimental ChoirAudioPrototype**
 and silently bypass the actual single-singer correction code. The next

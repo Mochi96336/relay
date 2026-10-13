@@ -24,10 +24,10 @@ import { MicInputClipping } from './mic-input-clipping.js';
 import { MicGainRamp } from './mic-gain-ramp.js';
 import { MicLimiter } from './mic-limiter.js';
 import { MicRawMeter } from './mic-raw-meter.js';
-import { readMicSlewedRange, crossfadeMicReadHeadJump, type MicSlewRead } from './mic-frame-reader.js';
+import type { MicSlewRead } from './mic-frame-reader.js';
 import { classifyMicReadMotion } from './mic-read-plan.js';
 import { MixBus } from './mix-bus.js';
-import { MicTrack, type AlignmentState } from './mic-track.js';
+import { MicTrack, type AlignmentState, type MicReadPlan } from './mic-track.js';
 import { SourceOutputEdge } from './source-output-edge.js';
 
 /**
@@ -155,22 +155,6 @@ const MIC_CONCEALMENT_HISTORY_MS = 60;
  */
 const MIC_CONCEALMENT_JOIN_GUARD_MS = 8;
 
-/** Where one frame reads the Mic, and how the read head got there from the frame before. */
-type MicReadPlan = {
-  startSample: number;
-  /** The advance the previous frame was actually heard at; null before any audible history. */
-  previouslyEmittedAdvanceSamples: number | null;
-  previousAdvanceSamplesExact: number;
-  advanceSamplesExact: number;
-  advanceSamples: number;
-  micReadStart: number;
-  /** A bounded runtime correction moved the read head, so the frame is read at a slewed rate. */
-  boundedRuntimeAdvanceMoved: boolean;
-  /** An immediate jump with real audio on both legs, so it is crossfaded. */
-  canCrossfadeReadHeadJump: boolean;
-  crossfadeSamples: number;
-};
-
 /** Where a batch of ingested samples landed on the shared session timeline. */
 export type IngestResult = {
   samples: Int16Array;
@@ -287,6 +271,7 @@ export class AudioSession {
       sourceEdgeFadeSamples: this.sourceEdgeFadeSamples,
       safetyMs: ADVANCE_SAFETY_MS,
       slewFraction: RUNTIME_CALIBRATION_SLEW_FRACTION,
+      readHeadCrossfadeMs: MIC_READ_HEAD_CROSSFADE_MS,
     });
     // Keep the existing single-Mic methods literally unchanged: their fields
     // point to exactly the same component instances owned by micTrack.
@@ -1316,71 +1301,6 @@ export class AudioSession {
     };
   }
 
-  /**
-   * Reads one microphone frame while a bounded runtime timing correction moves
-   * the live read head.
-   *
-   * Both content-validation slew and frontier-correction release are explicitly
-   * limited to about one percent per 20 ms frame. That is a read-rate policy:
-   * the frame should consume about 19.8-20.2 ms of microphone audio. Changing
-   * only the integer frame start instead skips/repeats about ten samples every
-   * 20 ms at 48 kHz, a 50 Hz train of waveform discontinuities that voiced
-   * harmonics expose as zipper/buzz.
-   *
-   * Interpolate a continuous source position across the emitted frame, landing
-   * exactly on the new advance at the next frame boundary. Limiter look-ahead
-   * then continues at unity rate from that landing point, so it observes the
-   * same future waveform the emitted frame is moving toward. Large authority or
-   * frontier-acquisition jumps remain deliberate discontinuities and do not use
-   * this bounded-rate path.
-   */
-  private readMicSlewedRange(
-    startSample: number,
-    fromAdvanceSamples: number,
-    toAdvanceSamples: number,
-    lookaheadSamples: number,
-  ): MicSlewRead {
-    return readMicSlewedRange({
-      timeline: this.mic,
-      frameSamples: this.frameSamples,
-      startSample,
-      fromAdvanceSamples,
-      toAdvanceSamples,
-      lookaheadSamples,
-      inputClipping: this.micInputClipping,
-      captureRestartBoundaries: this.micCaptureRestartBoundaries,
-    });
-  }
-
-  /**
-   * Crossfades an immediate Mic read-head jump without delaying its authority.
-   *
-   * The first sample continues the previously-emitted trajectory; by the end of
-   * this short window the output is entirely the newly-authoritative trajectory.
-   * Callers must prove both source windows contain real PCM before using this:
-   * a crossfade must never disguise a gap or frontier miss by replaying history.
-   */
-  private crossfadeMicReadHeadJump(
-    startSample: number,
-    fromAdvanceSamples: number,
-    toStartSample: number,
-    current: Int16Array<ArrayBuffer>,
-  ) {
-    return crossfadeMicReadHeadJump({
-      timeline: this.mic,
-      frameSamples: this.frameSamples,
-      sampleRate: this.sampleRate,
-      readHeadCrossfadeMs: MIC_READ_HEAD_CROSSFADE_MS,
-      startSample,
-      fromAdvanceSamples,
-      toStartSample,
-      previousSourceSample: this.micTrack.lastEmittedMicSourceSample,
-      current,
-      inputClipping: this.micInputClipping,
-      captureRestartBoundaries: this.micCaptureRestartBoundaries,
-    });
-  }
-
   private trim(timeline: PcmTimeline, beforeSample: number) {
     trimPcmTimeline(timeline, beforeSample);
 
@@ -1606,79 +1526,6 @@ export class AudioSession {
     if (this.backingHeadroomMs < 0 && this.bus.backingExpected) this.backingStarvedFrames += 1;
   }
 
-  /**
-   * The Mic samples this frame mixes, with the limiter's look-ahead after
-   * them, and the evidence for exactly the source samples that feed them.
-   */
-  private readMicFrame(plan: MicReadPlan) {
-    const {
-      startSample,
-      previouslyEmittedAdvanceSamples,
-      previousAdvanceSamplesExact,
-      advanceSamplesExact,
-      micReadStart,
-      boundedRuntimeAdvanceMoved,
-      canCrossfadeReadHeadJump,
-    } = plan;
-    // The extra tail is the limiter's look-ahead, not audio to be emitted.
-    const lookahead = this.micLimiter.lookaheadSamples;
-    const micSlew = boundedRuntimeAdvanceMoved
-      ? this.readMicSlewedRange(
-          startSample,
-          previousAdvanceSamplesExact,
-          advanceSamplesExact,
-          lookahead,
-        )
-      : null;
-
-    // Take evidence must describe the source samples that actually feed the
-    // emitted frame. During a bounded read-rate slew that trajectory is
-    // fractional and begins at the previously-emitted advance, not at the new
-    // rounded micReadStart. Reuse the exact trajectory evidence produced beside
-    // the interpolated PCM; keep the ordinary hot path unchanged.
-    const micReadEvidence = micSlew?.evidence
-      ?? readPcmEvidence(this.mic, micReadStart, this.frameSamples);
-    // Frontier misses are always the trailing portion of ordinary readPcmEvidence().
-    // Slew frames instead carry an exact per-output missing mask because a
-    // changing read rate can encounter gaps/frontier at non-trailing positions.
-    const micFrontierMissingStart = this.frameSamples - micReadEvidence.frontierMissingSamples;
-    const micGapMask = !micSlew && micReadEvidence.gapSamples > 0
-      ? readPcmGapMask(this.mic, micReadStart, this.frameSamples)
-      : null;
-    const micInputClippingMask = micSlew?.inputClippingMask
-      ?? this.micInputClipping.mask(micReadStart, this.frameSamples);
-
-    let mic = micSlew?.samples
-      ?? readPcmRange(this.mic, micReadStart, this.frameSamples + lookahead);
-    let crossfadeUnheaderedSamplesDelta = 0;
-    let crossfadeMicInputClippedSamplesDelta = 0;
-    if (
-      canCrossfadeReadHeadJump
-      && previouslyEmittedAdvanceSamples !== null
-      && !boundedRuntimeAdvanceMoved
-    ) {
-      const crossfade = this.crossfadeMicReadHeadJump(
-        startSample,
-        previouslyEmittedAdvanceSamples,
-        micReadStart,
-        mic,
-      );
-      mic = crossfade.samples;
-      crossfadeUnheaderedSamplesDelta = crossfade.unheaderedSamplesDelta;
-      crossfadeMicInputClippedSamplesDelta = crossfade.inputClippedSamplesDelta;
-    }
-    return {
-      samples: mic,
-      slew: micSlew,
-      evidence: micReadEvidence,
-      gapMask: micGapMask,
-      frontierMissingStart: micFrontierMissingStart,
-      inputClippingMask: micInputClippingMask,
-      crossfadeUnheaderedSamplesDelta,
-      crossfadeInputClippedSamplesDelta: crossfadeMicInputClippedSamplesDelta,
-    };
-  }
-
   /** The song samples this frame mixes, read at the mix position itself, and their evidence. */
   private readBackingFrame(startSample: number) {
     const evidence = readPcmEvidence(this.backing, startSample, this.frameSamples);
@@ -1751,7 +1598,7 @@ export class AudioSession {
       inputClippingMask: micInputClippingMask,
       crossfadeUnheaderedSamplesDelta,
       crossfadeInputClippedSamplesDelta: crossfadeMicInputClippedSamplesDelta,
-    } = this.readMicFrame(plan);
+    } = this.micTrack.readMicFrame(plan);
     const {
       samples: song,
       evidence: backingReadEvidence,

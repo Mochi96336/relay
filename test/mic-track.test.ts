@@ -11,6 +11,7 @@ import { AudioSession } from '../src/audio-session.js';
 const config = {
   sampleRate: 48_000, frameMs: 20, frameSamples: 960,
   sourceEdgeFadeSamples: 96, safetyMs: 200, slewFraction: .01,
+  readHeadCrossfadeMs: 5,
 };
 
 describe('extracted MicTrack owns per-singer components independently', () => {
@@ -95,6 +96,40 @@ describe('extracted MicTrack owns per-singer components independently', () => {
     assert.equal(b.micCaptureOriginSample, null);
     assert.equal(b.captureRestarts.size, 0);
     assert.equal(b.meter.peakDbfs, null);
+  });
+
+  test('canonical source frame reads remain per-singer and report actual PCM loss', () => {
+    const a = new MicTrack(config);
+    const b = new MicTrack(config);
+    a.timeline.chunks.push({
+      start: 0, samples: new Int16Array(960).fill(10_000), positioned: true,
+    });
+    a.timeline.totalSamples = 960;
+    b.timeline.chunks.push({
+      start: 0, samples: new Int16Array(960).fill(-15_000), positioned: true,
+    });
+    b.timeline.totalSamples = 960;
+    const plan = {
+      startSample: 0,
+      previouslyEmittedAdvanceSamples: null,
+      previousAdvanceSamplesExact: 0,
+      advanceSamplesExact: 0,
+      advanceSamples: 0,
+      micReadStart: 0,
+      boundedRuntimeAdvanceMoved: false,
+      canCrossfadeReadHeadJump: false,
+      crossfadeSamples: 0,
+    };
+    const aFrame = a.readMicFrame(plan);
+    const bFrame = b.readMicFrame(plan);
+    assert.equal(aFrame.samples[100], 10_000);
+    assert.equal(bFrame.samples[100], -15_000);
+    assert.equal(aFrame.evidence.gapSamples, 0);
+    assert.equal(bFrame.evidence.gapSamples, 0);
+    assert.equal(aFrame.evidence.frontierMissingSamples, 0);
+    assert.equal(aFrame.samples[960], 0, 'limiter lookahead past source frontier remains silence');
+    assert.equal(aFrame.frontierMissingStart, 960);
+    assert.notStrictEqual(aFrame.samples, bFrame.samples);
   });
 
   test('current AudioSession still uses its actual existing Mic clock and limits', () => {

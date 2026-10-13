@@ -267,6 +267,66 @@ describe('canonical MicTrack N=2 through the production MixBus (no live server)'
     assert.equal(mix.setConfirmedLag(A, 0), false, 'stale A calibration rejected');
   });
 
+  test('a fresh small Content recovery slews an audible Sample-rebound Mic without moving B', () => {
+    const mix = room();
+    const A2 = { ...A, mediaEpoch: A.mediaEpoch + 1 };
+    assert.equal(mix.addSinger(A), true);
+    assert.equal(mix.addSinger(B), true);
+    mix.setGainDb(A, 0);
+    mix.setGainDb(B, 0);
+    mix.ingestMic(A, pcm(FRAME, 7_000), RATE, FRAME);
+    mix.ingestMic(B, pcm(FRAME * 35, 6_000), RATE, FRAME * 35);
+    mix.disconnect(A);
+    for (let i = 0; i < 3; i++) mix.render(i * FRAME);
+    assert.equal(mix.replaceDisconnectedSinger(A2), true);
+    mix.setGainDb(A2, 0);
+    assert.equal(mix.ingestMic(A2, pcm(FRAME * 30, 9_000), RATE, FRAME * 30), true);
+    const fallback = {
+      source: 'sample-song-estimate' as const, advanceMs: 0,
+      sampleResidualMs: null, bootResidualMs: null,
+      sampleCandidateMs: 0, bootCandidateMs: null,
+    };
+    const content = { ...fallback, source: 'content' as const, advanceMs: 2 };
+    assert.equal(mix.acceptReboundAlignment(A2, fallback), true);
+    let previous = mix.render(3 * FRAME);
+    for (let i = 4; i <= 8; i++) previous = mix.render(i * FRAME);
+    assert.ok(previous.singers[0].voicePeakAbs > 0.1);
+    assert.equal(previous.singers[0].frontierMissingSamples, 0);
+    assert.equal(previous.singers[0].calibrationSource, 'sample-song-estimate');
+
+    assert.equal(mix.recoverContentWithoutJump(A2, 1, { ...content, source: 'content-held' }, false),
+      false, 'paused Content cannot replace active fallback');
+    assert.equal(mix.recoverContentWithoutJump(A2, 1, { ...content, advanceMs: 60 }, false),
+      false, 'large disagreements need explicit reacquisition, not a live jump');
+    assert.equal(mix.recoverContentWithoutJump(A, 1, content, false), false,
+      'revoked media epoch has no live read-head authority');
+    assert.equal(mix.recoverContentWithoutJump(A2, 1, content, true), false,
+      'a trusted Take freeze must preserve capture read position');
+    assert.equal(mix.recoverContentWithoutJump(A2, 1, content, false), true);
+    assert.equal(mix.recoverContentWithoutJump(A2, 1, content, false), false,
+      'replayed Content revision cannot reapply a transition');
+
+    const offsets: number[] = [];
+    for (let i = 9; i < 24; i++) {
+      const frame = mix.render(i * FRAME);
+      offsets.push(frame.singers[0].readStartSample - i * FRAME);
+      assert.equal(frame.singers[0].calibrationSource, 'content');
+      assert.equal(frame.singers[0].frontierMissingSamples, 0);
+      assert.ok(frame.singers[0].voicePeakAbs > 0.1);
+      assert.equal(frame.singers[1].mediaEpoch, B.mediaEpoch);
+      assert.ok(frame.singers[1].voicePeakAbs > 0.1);
+    }
+    assert.ok(offsets[0] >= -1 && offsets[0] <= 13,
+      `first Content frame must move by at most 1% slew: ${offsets[0]}`);
+    for (let i = 1; i < offsets.length; i++) {
+      assert.ok(offsets[i] - offsets[i - 1] >= -1
+        && offsets[i] - offsets[i - 1] <= 12,
+      `read-head motion must remain bounded: ${JSON.stringify(offsets)}`);
+    }
+    assert.ok(Math.abs(offsets[offsets.length - 1] - 96) <= 2,
+      `final position should approach the 2ms Content target: ${JSON.stringify(offsets)}`);
+  });
+
   test('future-dated, duplicate and stale capture packets never move one singer timeline', () => {
     const mix = room();
     assert.equal(mix.addSinger(A), true);

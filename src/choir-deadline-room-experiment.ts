@@ -248,6 +248,48 @@ export class ChoirDeadlineRoomExperiment {
     }, proofRevision, decision, takeFrozen);
   }
 
+  /**
+   * Record a large Content disagreement without mutating live PCM alignment.
+   * The singer keeps audible fallback until an explicit disconnect and safe
+   * replacement. Transport, Take and evidence verification are server-owned.
+   */
+  requestTrustedLargeContentReacquisition(
+    transportId: string, mediaEpoch: number, proofRevision: number,
+    decision: ChoirAlignmentDecision, nowMs: number, takeFrozen: boolean,
+  ): boolean {
+    if (!this.sealDueNow(nowMs)) return false;
+    const active = this.registry.activePublisherForTransport(transportId);
+    if (!active || active.mediaEpoch !== mediaEpoch) return false;
+    return this.room.stageLargeContentReacquisition({
+      participantId: active.participantId,
+      mediaEpoch: active.mediaEpoch,
+      songEpoch: this.songEpoch,
+      backingGeneration: this.backingGeneration,
+    }, proofRevision, decision, takeFrozen);
+  }
+
+  /**
+   * Only after a NEW server Media Epoch and NEW capture generation can an
+   * independently verified Content proof enable a re-acquired singer.
+   * The host must derive proof identity/revision from its private validator.
+   */
+  acceptTrustedReacquiredContent(
+    transportId: string, mediaEpoch: number,
+    proof: { mediaEpoch: number; captureGeneration: number; revision: number },
+    decision: ChoirAlignmentDecision, nowMs: number,
+  ): boolean {
+    if (!this.sealDueNow(nowMs)) return false;
+    const active = this.registry.activePublisherForTransport(transportId);
+    if (!active || active.mediaEpoch !== mediaEpoch
+      || proof.mediaEpoch !== mediaEpoch) return false;
+    return this.room.acceptReacquiredContent({
+      participantId: active.participantId,
+      mediaEpoch: active.mediaEpoch,
+      songEpoch: this.songEpoch,
+      backingGeneration: this.backingGeneration,
+    }, proof, decision);
+  }
+
   disconnectTransport(transportId: string, nowMs: number): boolean {
     if (!this.sealDueNow(nowMs)) return false;
     const active = this.registry.activePublisherForTransport(transportId);

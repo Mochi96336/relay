@@ -841,4 +841,32 @@ export class MicTrack {
   }
 
 
+
+  /**
+   * Moves the whole Mic timeline `shift` samples later and takes the same
+   * amount off the frontier correction, so every frame reads exactly the audio
+   * it would have read anyway. Only bookkeeping moves: the retained history,
+   * the capture anchor and every position kept relative to them shift together.
+   */
+  rebaseCaptureTimeline(shift: number) {
+    for (const chunk of this.timeline.chunks) chunk.start += shift;
+    this.timeline.totalSamples += shift;
+    this.timeline.originOffset += shift;
+    this.captureRestarts.rebase(shift);
+    this.clipping.shift(shift);
+    if (this.micCaptureOriginSample !== null) this.micCaptureOriginSample += shift;
+    if (this.lastEmittedMicSourceSample !== null) this.lastEmittedMicSourceSample += shift;
+    // The read position is the frame start plus the advance, so the advance
+    // moves with the audio it was reading.
+    if (this.lastEmittedMicAdvanceSamples !== null) this.lastEmittedMicAdvanceSamples += shift;
+    this.frontier.rebase(shift);
+  }
+
+  /** New authenticated capture generation: drift/frontier debt never survives it. */
+  onCaptureClockReplaced() {
+    this.frontier.reset(this.timeline.generation);
+    this.clockTrim.reset();
+  }
+
+
 }

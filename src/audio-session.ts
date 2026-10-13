@@ -590,7 +590,7 @@ export class AudioSession {
       this.micFrontierCorrectionCapSamples(),
     );
     if (shift > 0) {
-      this.rebaseMicTimeline(shift);
+      this.micTrack.rebaseCaptureTimeline(shift);
       this.micFrontier.folded(shift, correctionBefore);
       return;
     }
@@ -604,31 +604,11 @@ export class AudioSession {
     const advanceBefore = this.budgetedMicAdvanceMs();
     this.micTrack.calibrationUnfoldedSamples += measuredAcross;
     const advanceAfter = this.budgetedMicAdvanceMs();
-    this.rebaseMicTimeline(-unfold);
+    this.micTrack.rebaseCaptureTimeline(-unfold);
     // The advance itself moved back by up to the part measured across, so the
     // correction holds only what the advance did not.
     this.micFrontier.release(Math.round(((advanceBefore - advanceAfter) * this.sampleRate) / 1000));
     this.micFrontier.unfolded(unfold, correctionBefore, measuredAcross);
-  }
-
-  /**
-   * Moves the whole Mic timeline `shift` samples later and takes the same
-   * amount off the frontier correction, so every frame reads exactly the audio
-   * it would have read anyway. Only bookkeeping moves: the retained history,
-   * the capture anchor and every position kept relative to them shift together.
-   */
-  private rebaseMicTimeline(shift: number) {
-    for (const chunk of this.mic.chunks) chunk.start += shift;
-    this.mic.totalSamples += shift;
-    this.mic.originOffset += shift;
-    this.micCaptureRestartBoundaries.rebase(shift);
-    this.micInputClipping.shift(shift);
-    if (this.micTrack.micCaptureOriginSample !== null) this.micTrack.micCaptureOriginSample += shift;
-    if (this.micTrack.lastEmittedMicSourceSample !== null) this.micTrack.lastEmittedMicSourceSample += shift;
-    // The read position is the frame start plus the advance, so the advance
-    // moves with the audio it was reading.
-    if (this.micTrack.lastEmittedMicAdvanceSamples !== null) this.micTrack.lastEmittedMicAdvanceSamples += shift;
-    this.micFrontier.rebase(shift);
   }
 
   ingestMic(frame: PcmFrame, sourceRate: number | null, nowMs = performance.now()) {
@@ -984,8 +964,7 @@ export class AudioSession {
           // dropping a held correction here, or the timing a new capture
           // invalidates, applied before the next frame - must crossfade like
           // any other jump, so read continuity is kept.
-          this.micFrontier.reset(this.mic.generation);
-          this.micClockTrim.reset();
+          this.micTrack.onCaptureClockReplaced();
         }
       } else if (timeline.sourceRate === null) {
         timeline.sourceRate = sourceRate;

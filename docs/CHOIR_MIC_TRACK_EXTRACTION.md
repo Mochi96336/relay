@@ -258,3 +258,18 @@ The 2ms PCM hole tapers are now shared pure functions in
 without duplicating algorithms. New isolated tests cover A filling a 20ms
 voiced hole while B remains untouched, and refusing to overwrite already
 heard samples. Existing N=1 Golden PCM digests remain immutable.
+
+
+## Stage 12: capture replacement and timeline rebase are track-owned
+
+The room still decides whether the Mic needs a confirmed capture-loss fold
+or unfold, but `MicTrack.rebaseCaptureTimeline(shift)` now shifts the entire
+PCM timeline, the capture's own origin, clipping evidence, restart boundaries,
+frontier correction and previously emitted source/advance coordinates as one
+atomic singer-local operation. Another singer's PCM and history cannot move.
+
+A new capture-generation clock reset also uses
+`MicTrack.onCaptureClockReplaced()`, clearing only its measured Mic clock
+trim and frontier. Synthetic tests verify A-only rebase and clock reset
+while B's state remains intact. This keeps the original room-calibration
+fold/unfold policy, with N=1 Golden PCM unchanged.

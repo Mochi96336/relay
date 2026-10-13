@@ -468,6 +468,48 @@ describe('extracted MicTrack owns per-singer components independently', () => {
     assert.equal(a.micConcealedSamples, 0);
   });
 
+  test('Mic source rebase shifts only A own samples, clip clock and audible continuity', () => {
+    const a = new MicTrack(config);
+    const b = new MicTrack(config);
+    for (const track of [a, b]) {
+      track.timeline.chunks.push({
+        start: 0, samples: new Int16Array(960).fill(4_000), positioned: true,
+      });
+      track.timeline.totalSamples = 960;
+      track.timeline.originOffset = 40;
+      track.micCaptureOriginSample = 0;
+      track.lastEmittedMicSourceSample = 480;
+      track.lastEmittedMicAdvanceSamples = 15.5;
+    }
+    a.rebaseCaptureTimeline(120);
+    assert.equal(a.timeline.chunks[0].start, 120);
+    assert.equal(a.timeline.totalSamples, 1_080);
+    assert.equal(a.timeline.originOffset, 160);
+    assert.equal(a.micCaptureOriginSample, 120);
+    assert.equal(a.lastEmittedMicSourceSample, 600);
+    assert.equal(a.lastEmittedMicAdvanceSamples, 135.5);
+    assert.equal(b.timeline.chunks[0].start, 0);
+    assert.equal(b.timeline.totalSamples, 960);
+    assert.equal(b.timeline.originOffset, 40);
+    assert.equal(b.micCaptureOriginSample, 0);
+    assert.equal(b.lastEmittedMicSourceSample, 480);
+    assert.equal(b.lastEmittedMicAdvanceSamples, 15.5);
+    a.rebaseCaptureTimeline(-120);
+    assert.equal(a.timeline.chunks[0].start, 0);
+    assert.equal(a.timeline.originOffset, 40);
+  });
+
+  test('replaced A capture forgets its own trim without resetting B clock', () => {
+    const a = new MicTrack(config);
+    const b = new MicTrack(config);
+    a.clockTrim.setPpm(420);
+    b.clockTrim.setPpm(-380);
+    a.timeline.generation = 9;
+    a.onCaptureClockReplaced();
+    assert.equal(a.clockTrim.ppm, 0);
+    assert.equal(b.clockTrim.ppm, -380);
+  });
+
   test('current AudioSession still uses its actual existing Mic clock and limits', () => {
     const session = new AudioSession({
       sampleRate: 48_000, frameMs: 20, prebufferMs: 400,

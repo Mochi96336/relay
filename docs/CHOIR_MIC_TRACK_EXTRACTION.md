@@ -177,3 +177,19 @@ Before production dual Publisher admission:
 
 **Do not** interpret this state extraction as a reason to merge unfinished
 Choir into `main`.
+
+## Stage 6–7 CI audit: state-location-sensitive white-box tests
+
+The full Relay CI surfaced six tests in `test/mic-read-plan.test.ts`
+that assigned `lastEmittedMicAdvanceSamples` and
+`lastEmittedMicFrameComplete` on the old `AudioSession` instance.
+Those scalar properties now live on its `MicTrack`, so the test setup no
+longer established the previous audible trajectory. The resulting six
+crossfade/convergence assertions failed despite the existing N=1 Golden
+PCM digests passing. The test-only state setup is updated to set
+`session.micTrack.*` directly, matching the new ownership boundary.
+No production compatibility scalar aliases are reintroduced.
+
+The Choir focused CI now also executes `test/mic-read-plan.test.ts`,
+so tests of previously emitted source continuity, old/new leg gap/frontier
+gating and convergence cannot be missed by the smaller validation suite.

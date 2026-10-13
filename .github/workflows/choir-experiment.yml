@@ -9,6 +9,7 @@ on:
       - 'test/choir-*.test.ts'
       - 'test/mic-track.test.ts'
       - 'test/audio-session-golden.test.ts'
+      - 'test/mic-read-plan.test.ts'
       - 'docs/CHOIR_*.md'
       - '.github/workflows/choir-experiment.yml'
   push:
@@ -31,4 +32,4 @@ jobs:
       - run: npm ci
       - run: npm run check
       - name: Exercise Choir contracts and exact N=1 Golden PCM baseline
-        run: node --import tsx --test --test-concurrency=1 test/choir-*.test.ts test/mic-track.test.ts test/audio-session-golden.test.ts
+        run: node --import tsx --test --test-concurrency=1 test/choir-*.test.ts test/mic-track.test.ts test/mic-read-plan.test.ts test/audio-session-golden.test.ts

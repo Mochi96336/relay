@@ -28,6 +28,8 @@ export type ChoirDeadlineRoomOptions = {
   backingGeneration: number;
   /** Trusted playback/video identity; mandatory for the real Content proof route. */
   videoId?: string;
+  /** Dedicated Content-only PCM history, independent of short playback rings. */
+  contentHistoryMs?: number;
   /** Shared room time origin established by the trusted server clock. */
   roomEpochMs: number;
   /** Additional time allowed for both singers' packets before a frame seals. */
@@ -70,12 +72,17 @@ export class ChoirDeadlineRoomExperiment {
   private readonly songEpoch: number;
   private readonly backingGeneration: number;
   private readonly videoId: string | null;
+  private playbackMapping: {
+    mappingEpoch: number; videoId: string; robotCaptureGeneration: number;
+    playbackRate: number; playing: boolean;
+  } | null = null;
   private readonly contentRevisions = new Map<string, number>();
   private readonly pendingCanonicalContent = new Map<string, {
     participantId: string; transportId: string; mediaEpoch: number;
     songEpoch: number; backingGeneration: number; videoId: string;
     captureGeneration: number; sourceRate: number;
     revision: number; measuredAtMs: number; endSample: number; advanceMs: number;
+    mappingEpoch: number;
   }>();
   private nextFrameIndex = 0;
   private readonly sealedFrames: CanonicalChoirFrame[] = [];
@@ -104,7 +111,10 @@ export class ChoirDeadlineRoomExperiment {
     this.videoId = config.videoId ?? null;
     this.seats = new ChoirSession(2);
     this.registry = new ChoirPublisherRegistry(this.seats, config.reconnectGraceMs ?? 2_000);
-    this.room = new CanonicalChoirMixExperiment(config);
+    this.room = new CanonicalChoirMixExperiment({
+      ...config, contentHistoryMs: this.videoId === null
+        ? undefined : config.contentHistoryMs ?? 7_000,
+    });
   }
 
   private validNow(nowMs: number): boolean {
@@ -307,6 +317,52 @@ export class ChoirDeadlineRoomExperiment {
   }
 
   /**
+   * Explicitly trusted Robot-to-YouTube playback transition. The call is only
+   * for the server's own Robot controller, NEVER a client PCM/control field.
+   * Every pause, seek, video change or Robot source rebuild requires a NEW
+   * mappingEpoch; prior acoustic history and pending Content are cleared.
+   *
+   * The fixed Choir room song/backing epoch must be replaced by a fresh room
+   * for a different video or Robot source. It cannot silently change in place.
+   */
+  setTrustedPlaybackMapping(
+    update: {
+      mappingEpoch: number; videoId: string;
+      songEpoch: number; backingGeneration: number;
+      robotCaptureGeneration: number; playbackRate: number; playing: boolean;
+    }, nowMs: number,
+  ): boolean {
+    if (!this.sealDueNow(nowMs)) return false;
+    if (this.videoId === null || update.videoId !== this.videoId
+      || update.songEpoch !== this.songEpoch
+      || update.backingGeneration !== this.backingGeneration
+      || !Number.isSafeInteger(update.mappingEpoch) || update.mappingEpoch < 1
+      || !Number.isSafeInteger(update.robotCaptureGeneration)
+      || update.robotCaptureGeneration < 0
+      || !Number.isFinite(update.playbackRate) || update.playbackRate <= 0
+      || typeof update.playing !== 'boolean'
+      || (this.playbackMapping && update.mappingEpoch <= this.playbackMapping.mappingEpoch))
+      return false;
+    this.playbackMapping = {
+      mappingEpoch: update.mappingEpoch, videoId: update.videoId,
+      robotCaptureGeneration: update.robotCaptureGeneration,
+      playbackRate: update.playbackRate, playing: update.playing,
+    };
+    this.pendingCanonicalContent.clear();
+    this.room.invalidateContentEvidenceHistory();
+    return true;
+  }
+
+  /** Only diagnostics, never grants playback or acoustic authority. */
+  get contentBufferSampleCounts() {
+    return Object.fromEntries(
+      this.registry.snapshot().map(p => [
+        p.participantId, this.room.contentHistorySamples(p.participantId),
+      ]),
+    );
+  }
+
+  /**
    * Actually analyze six seconds of Mic + Robot backing already ingested in
    * their CANONICAL room PCM timelines. This never accepts supplied samples,
    * client-claimed lag, confidence, proof token or generation. A caller may
@@ -322,6 +378,8 @@ export class ChoirDeadlineRoomExperiment {
     const active = this.registry.activePublisherForTransport(transportId);
     if (!active || active.mediaEpoch !== mediaEpoch || this.videoId === null)
       return { status: 'rejected', reason: 'untrusted-transport-or-song' };
+    if (!this.playbackMapping?.playing)
+      return { status: 'rejected', reason: 'robot-mapping-not-playing' };
     const participantId = active.participantId;
     this.pendingCanonicalContent.delete(participantId);
     // Six seconds held in retention are not necessarily six seconds of
@@ -360,6 +418,7 @@ export class ChoirDeadlineRoomExperiment {
         videoId: this.videoId, captureGeneration: state.captureGeneration,
         sourceRate: state.sourceRate, revision, measuredAtMs: nowMs,
         endSample, advanceMs: result.micLagMs,
+        mappingEpoch: this.playbackMapping.mappingEpoch,
       });
       return { status: 'candidate', revision, lagMs: result.micLagMs,
         confidence: result.confidence };
@@ -381,7 +440,8 @@ export class ChoirDeadlineRoomExperiment {
   ): 'applied' | 'staged' | 'rejected' {
     if (!this.sealDueNow(nowMs)) return 'rejected';
     const active = this.registry.activePublisherForTransport(transportId);
-    if (!active || active.mediaEpoch !== mediaEpoch || takeFrozen) return 'rejected';
+    if (!active || active.mediaEpoch !== mediaEpoch || takeFrozen
+      || !this.playbackMapping?.playing) return 'rejected';
     const pending = this.pendingCanonicalContent.get(active.participantId);
     if (!pending) return 'rejected';
     this.pendingCanonicalContent.delete(active.participantId);
@@ -390,6 +450,7 @@ export class ChoirDeadlineRoomExperiment {
       || pending.songEpoch !== this.songEpoch
       || pending.backingGeneration !== this.backingGeneration
       || pending.videoId !== this.videoId
+      || pending.mappingEpoch !== this.playbackMapping.mappingEpoch
       || !Number.isFinite(nowMs) || nowMs < pending.measuredAtMs
       || nowMs - pending.measuredAtMs > 20_000
       // An old candidate cannot gain playback authority after the source

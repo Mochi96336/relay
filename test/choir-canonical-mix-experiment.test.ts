@@ -383,6 +383,8 @@ describe('canonical MicTrack N=2 through the production MixBus (no live server)'
     };
     const content = { ...fallback, source: 'content' as const, advanceMs: 60 };
     assert.equal(mix.acceptReboundAlignment(A2, fallback), true);
+    assert.equal(mix.stageLargeContentReacquisition(A2, 1, content, false), false,
+      'freshly authorized but unheard PCM is not yet an active playback trajectory');
     for (let i = 3; i < 9; i++) mix.render(i * FRAME);
     assert.equal(mix.stageLargeContentReacquisition(A2, 1, content, true), false,
       'Take freeze blocks staging a disruptive re-acquisition');

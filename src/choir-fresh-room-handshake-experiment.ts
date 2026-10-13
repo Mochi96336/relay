@@ -49,6 +49,10 @@ export class ChoirFreshRoomHandshakeExperiment {
   private lastSongEpoch = 0;
   private nextMediaEpoch = 1;
   private retired = false;
+  private lastVoiceEvidence: Array<{
+    participantId: string; mediaEpoch: number;
+    awaitingCalibration: boolean; voicePeakAbs: number;
+  }> = [];
 
   /**
    * Called after an explicit trusted song/Robot restart decision.
@@ -79,6 +83,7 @@ export class ChoirFreshRoomHandshakeExperiment {
     }, spec.roomEpochMs)) return false;
     this.lastRoomEpoch = spec.roomEpoch;
     this.lastSongEpoch = spec.songEpoch;
+    this.lastVoiceEvidence = [];
     this.retired = false;
     this.current = {
       room, spec: { ...spec }, tickets: new Map(), contentVerified: new Set(),
@@ -150,11 +155,28 @@ export class ChoirFreshRoomHandshakeExperiment {
       && c.room.receiveTrustedBacking(frame, sampleRate, nowMs));
   }
 
-  /** Offline test scheduler; discards output, never routes it to production. */
+  /**
+   * Offline test scheduler: discard all PCM output. Only bounded diagnostic
+   * evidence escapes, so no public/audio output route is created.
+   */
   advanceDue(roomEpoch: number, nowMs: number): boolean {
     const c = this.current;
     if (!c || c.spec.roomEpoch !== roomEpoch) return false;
-    return c.room.renderDue(nowMs).state !== 'resync-required';
+    const due = c.room.renderDue(nowMs);
+    if (due.state === 'resync-required') return false;
+    if (due.state === 'ready' && due.frames.length) {
+      const last = due.frames[due.frames.length - 1];
+      this.lastVoiceEvidence = last.singers.map(s => ({
+        participantId: s.participantId, mediaEpoch: s.mediaEpoch,
+        awaitingCalibration: s.awaitingCalibration, voicePeakAbs: s.voicePeakAbs,
+      }));
+    }
+    return true;
+  }
+
+  /** Copies only numerical evidence, never PCM or a mutable MicTrack. */
+  lastSingerEvidence() {
+    return this.lastVoiceEvidence.map(x => ({ ...x }));
   }
 
   /**
@@ -207,6 +229,7 @@ export class ChoirFreshRoomHandshakeExperiment {
     c.room.invalidateTrustedPlaybackAuthority(nowMs);
     this.nextMediaEpoch = Math.max(this.nextMediaEpoch, c.room.nextUnissuedMediaEpoch);
     this.current = null;
+    this.lastVoiceEvidence = [];
     this.retired = true;
     return true;
   }

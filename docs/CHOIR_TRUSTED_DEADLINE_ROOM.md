@@ -403,3 +403,67 @@ verify a valid one-shot Content authorization, reject closed/old transports,
 block Take-frozen commits, and reject a pending analysis after a native
 capture-generation restart. This is NOT equivalent to two physical devices
 or a complete production evidence adapter.
+
+## Content-only PCM memory and trusted Robot playback epoch (2026-10-14)
+
+The latest offline Choir experiment no longer needs to enlarge the mixer
+`retentionMs` to obtain six seconds for Content analysis. When a fixed
+trusted 11-character video ID is configured, the deadline coordinator
+creates a separate `ChoirContentPcmBuffer` for each admitted singer and the
+Robot backing. The default is 7,000 ms, independently configurable between
+6,000 and 10,000 ms. This cache mirrors *only new chunks admitted by the
+canonical Mic/Backing ingest*, copying at most its configured sample budget.
+It trims on every append, including within oversized chunks, and rejects
+a six-second query if its oldest samples were evicted.
+
+The PCM metadata is preserved (positioned versus unheadered, genuine
+capture versus synthetic gap concealment, capture generation and source
+rate). Any hole, concealed fill, missing frontier, wrong generation, or
+non-positioned source rejects the whole Content window. The cache resets
+when the native capture generation/rate changes, when a new trusted Media
+Epoch replaces the singer, or when the Robot playback mapping changes.
+These rules prevent the source playback ring's older samples from being
+silently assembled into a new calibration. At 48 kHz mono int16, three
+7-second caches occupy at most 2,016,000 bytes of raw sample payload
+plus object overhead, distinct from the mixer and decoder allocations.
+
+**Playback retention is not calibration retention:** `retentionMs=3_000`
+still configures the existing Mic read budget. It is not automatically a
+hard memory budget for all pre-existing source timeline structures, which
+need a separate full-service memory audit. The new Content-only cache,
+by contrast, has a bounded sample count verified by regression tests.
+
+The experimental server-boundary requires an explicit
+`setTrustedPlaybackMapping({ mappingEpoch, videoId, songEpoch,
+backingGeneration, robotCaptureGeneration, playbackRate, playing }, nowMs)`
+from its PRIVATE Robot controller before allowing any Content analysis.
+This is not a client RPC. The first mapping must match the fixed room
+song/video/Robot identity and be actively playing. A repeated or older
+mapping epoch cannot promote new authority.
+
+When the server observes a pause, seek, playback-rate/timeline revision,
+video replacement or Robot capture-clock rebuild, the safe experimental
+policy is to **fail the whole room closed** with
+`resync-required: playback-mapping-changed`, clear undelivered PCM and
+pending calibration, and require a genuinely fresh room/media mapping.
+An unexpected backing generation or native source-rate change does the
+same. This is intentionally stricter than an eventual user-facing
+pause/resume implementation; it prevents the old Content lag or recorded
+song-time map from surviving as a seemingly valid singing position. It
+does not automatically promote the secondary Mic.
+
+The Content analyzer's pending private proof includes the trusted
+`mappingEpoch` and is consumed only while that mapping remains active.
+The newer tests verify six-second analysis while the mixer is configured
+with 3,000 ms retention, the 7-second hard Content-cache sample limit,
+source/gap/generation rejection, Robot pause and seek hard latching,
+and source generation/sample-rate replacement.
+
+**Still missing for production:** the real Robot/YouTube controller must
+provide a verified media timeline with explicit seek, pause and rate
+transitions, room restart coordination, clock-mapping accuracy, and
+authorized participant handshakes. Merely passing fields to a
+`setTrustedPlaybackMapping`-named experimental API is not a secure
+source of authenticity. Do not wire these methods straight to client
+WebSocket or WebTransport messages. This change also does not build an
+automatic primary-Mic succession or physical two-phone runtime.

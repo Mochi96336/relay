@@ -16,6 +16,8 @@ export type PcmIngestResult = {
   samples: Int16Array;
   start: number;
   captureRestarted: boolean;
+  /** Present only for explicit experimental native mirror audits. */
+  nativeFrameMirroringSafe?: boolean;
 };
 
 export type CapturePacketTrim = {
@@ -34,6 +36,8 @@ export type PcmIngestInput = {
   mixRate: number;
   roomSampleNow: () => number;
   trackSourceClock?: boolean;
+  /** Opt-in proof for forwarding the complete original native PCM frame. */
+  auditNativeMirroring?: boolean;
   sourceRateDefinesCapture?: boolean;
   onCaptureClockChanged?: () => void;
   trimSourcePacket?: (input: CapturePacketTrim) => Int16Array;
@@ -47,6 +51,7 @@ export function ingestPcmTimeline(input: PcmIngestInput): PcmIngestResult {
   const {
     timeline, frame, sourceRate, mixRate, roomSampleNow,
     trackSourceClock = false, sourceRateDefinesCapture = false,
+    auditNativeMirroring = false,
     onCaptureClockChanged, trimSourcePacket,
   } = input;
     if (!sourceRate) {
@@ -84,6 +89,14 @@ export function ingestPcmTimeline(input: PcmIngestInput): PcmIngestResult {
     const sourceContinuous = positioned
       && !captureClockChanged
       && timeline.sourceFrontier === frame.firstSampleIndex;
+    // Resampling changes output counts; never infer full native acceptance
+    // from output length. Reject overlapping or partly admitted source PCM.
+    let nativeFrameMirroringSafe = positioned
+      && frame.generation !== null
+      && Number.isSafeInteger(frame.firstSampleIndex)
+      && Number.isSafeInteger(frame.firstSampleIndex! + sourceSampleCount)
+      && (captureClockChanged || timeline.sourceFrontier === null
+        || frame.firstSampleIndex! >= timeline.sourceFrontier);
     const resampled = resamplePcm(
       frame.pcm,
       sourceRate,
@@ -166,6 +179,7 @@ export function ingestPcmTimeline(input: PcmIngestInput): PcmIngestResult {
           stretched.set(prefix, 0);
           stretched.set(stretchedCurrentFrame, sourceAlignedSampleOffset);
           samples = stretched;
+          nativeFrameMirroringSafe = false;
 
           timeline.originOffset += 1;
           timeline.clockErrorSamples -= 1;
@@ -177,6 +191,7 @@ export function ingestPcmTimeline(input: PcmIngestInput): PcmIngestResult {
       if (trimSourcePacket) {
         // Mic-owned trim or another caller-supplied source correction.
         // The common ingest path never guesses which stream is authoritative.
+        const beforeTrim = samples;
         samples = trimSourcePacket({
           samples,
           sourceAlignedSampleOffset,
@@ -185,6 +200,7 @@ export function ingestPcmTimeline(input: PcmIngestInput): PcmIngestResult {
           sourceRate,
           contiguous: sourceContinuous && start === timeline.totalSamples,
         });
+        if (samples !== beforeTrim) nativeFrameMirroringSafe = false;
       }
       const sourceEnd = frame.firstSampleIndex! + sourceSampleCount;
       const previousSourceFrontier = timeline.sourceFrontier;
@@ -206,6 +222,7 @@ export function ingestPcmTimeline(input: PcmIngestInput): PcmIngestResult {
     }
 
     if (start < timeline.totalSamples) {
+      nativeFrameMirroringSafe = false;
       // Transport ordering is no longer an AudioSession contract. The packet
       // receiver normally prevents late overlap, but this boundary still must
       // not relocate old audio to "now" if a caller violates it. Keep only a
@@ -237,6 +254,10 @@ export function ingestPcmTimeline(input: PcmIngestInput): PcmIngestResult {
       samples: samples.subarray(consumerOffset),
       start: start + consumerOffset,
       captureRestarted,
+      ...(auditNativeMirroring ? {
+        nativeFrameMirroringSafe: nativeFrameMirroringSafe
+          && consumerOffset < samples.length,
+      } : {}),
     };
   }
 

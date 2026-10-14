@@ -354,6 +354,9 @@ const choirSecondaryIngress = choirRestartCoordinator
 function tickChoirShadow(nowMs: number) {
   // No Mic/Backing PCM is copied and no client can call the approval API.
   choirRestartCoordinator?.observe(nowMs);
+  // Release expired socket ownership without ever allowing an old B frame
+  // to fall through the regular Mic/Robot routes.
+  choirSecondaryIngress?.sweepStale(nowMs);
 }
 if (choirRestartCoordinator) {
   console.log('[choir-shadow] server-owned restart observation only; Choir audio/UI disabled');

@@ -390,6 +390,10 @@ window.relayIdentityReady = (async () => {
       socket = null;
       sessionAuthorityFresh = false;
       choirConsentAvailable = false;
+      choirMediaEnabled = false;
+      window.dispatchEvent(new CustomEvent('relay-choir-media-mode', {
+        detail: { enabled: false },
+      }));
       announceChoirConsentAvailable();
       publishMicActionState();
       publishPresenceState();

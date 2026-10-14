@@ -32,6 +32,11 @@ function fixture() {
   const disconnected: ChoirFreshCaptureTicket[] = [];
   let roomEpoch = 1;
   const ingress = new ChoirSecondaryPcmIngressExperiment({
+    mayAcceptVerifiedTicket(ticket) {
+      return ticket.roomEpoch === roomEpoch && ticket.seat === 'secondary'
+        && ticket.participantId === 'B' && ticket.transportId === 'socket-B'
+        && ticket.mediaEpoch === 2;
+    },
     receiveVerifiedMic(ticket, frame, _rate, nowMs) {
       if (ticket.roomEpoch !== roomEpoch) return false;
       accepted.push({ ticket, generation: frame.generation, at: nowMs });

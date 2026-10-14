@@ -180,6 +180,25 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
       'calibration-required');
   });
 
+  test('cannot adopt another component\'s out-of-band Shadow rearm', () => {
+    const f = fixture();
+    const rev1 = f.startSong(0);
+    f.coordinator.observe(0);
+    assert.equal(f.approve(rev1, 0), true);
+    assert.equal(f.songs.update(playing({ currentTime: 80 }), leader, null, 100).accepted, true);
+    f.coordinator.observe(100);
+    assert.equal(f.coordinator.preview().state, 'restart-required');
+    // Simulate an unrelated trusted caller rearming the Shadow before this
+    // coordinator issued its own explicit restart CAS.
+    assert.equal(f.shadow.authorizeExplicitFreshRoom(1, 2, 2), true);
+    assert.equal(f.shadow.observe(101, 9).state, 'shadow-active');
+    const rev2 = (f.songs.statusPayload(101) as { revision: number }).revision;
+    f.coordinator.observe(101);
+    assert.equal(f.approve(rev2, 102, 1), false,
+      'the new Shadow incarnation is not a substitute for our private CAS');
+    assert.equal(f.coordinator.preview().monitoring, 'unavailable');
+  });
+
   test('Robot generation swap, expired leader and playback loss invalidate pending room', () => {
     for (const reason of ['robot-swap', 'backing-generation', 'leader-expired'] as const) {
       const f = fixture();

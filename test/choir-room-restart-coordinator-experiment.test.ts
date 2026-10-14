@@ -10,6 +10,7 @@ import { ChoirSecondaryPcmIngressExperiment } from '../src/choir-secondary-pcm-i
 import { ChoirSecondaryConsentExperiment } from '../src/choir-secondary-consent-experiment.js';
 import { ChoirSecondaryMediaTicketExperiment } from '../src/choir-secondary-media-ticket-experiment.js';
 import { ChoirTrustedSourceMirrorExperiment } from '../src/choir-trusted-source-mirror-experiment.js';
+import { ChoirLiveContentPipelineExperiment } from '../src/choir-live-content-pipeline-experiment.js';
 import { encodePcmFrame } from '../src/pcm-frame.js';
 import { encodeAudioPacket } from '../src/audio-packet.js';
 
@@ -477,6 +478,81 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
     assert.equal(mirror.revokeRoom(1), false,
       'late old-room revocation cannot clear the newly authorized mirror');
     assert.equal(mirror.roomEpoch, 2);
+  });
+
+
+  test('real Worker asynchronously aligns A and B from trusted server-side 6s PCM', {
+    timeout: 30_000,
+  }, async () => {
+    const f = fixture();
+    const rev = f.startSong(0);
+    f.coordinator.observe(0);
+    assert.equal(f.approve(rev, 0), true);
+    const a = f.admit(1, 1, 'A', 'primary-A', 1)!;
+    const b = f.admit(1, 1, 'B', 'secondary-B', 2)!;
+    const primarySocket = { id: 'existing-n1-a' };
+    const robotBackingSocket = { id: 'robot-backed-source' };
+    const current = {
+      primarySocket, primaryOwnerId: 'A', primaryGeneration: 7,
+      primaryRate: RATE, robotBackingSocket, robotBackingGeneration: 9,
+      robotControlGeneration: f.robot.generation, robotRate: RATE,
+      robotIsAuthoritative: true,
+    };
+    const mirror = new ChoirTrustedSourceMirrorExperiment(f.coordinator, () => current);
+    assert.equal(mirror.bindPrimary(a, 3), true);
+    const { mic, backing } = laggedMultibandMusicPair(6, RATE, 120, { singerGain: .18 });
+    const chunk = 2 * RATE;
+    for (let at = 20; at <= 6_000; at += 20) {
+      if (at % 1_000 === 0) {
+        assert.equal(f.songs.update(
+          playing({ currentTime: 12 + at / 1_000 }), leader, null, at,
+        ).accepted, true);
+      }
+      if (at % 2_000 === 0) {
+        const first = (at / 2_000 - 1) * chunk;
+        const end = first + chunk;
+        assert.equal(mirror.mirrorPrimary({
+          generation: 7, firstSampleIndex: first,
+          pcm: mic.subarray(first * 2, end * 2),
+        }, true, at), true);
+        assert.equal(mirror.mirrorRobot({
+          generation: 9, firstSampleIndex: first,
+          pcm: backing.subarray(first * 2, end * 2),
+        }, true, at), true);
+        assert.equal(f.coordinator.receiveVerifiedMic(b, {
+          generation: 8, firstSampleIndex: first,
+          pcm: mic.subarray(first * 2, end * 2),
+        }, RATE, at), true);
+      }
+      assert.equal(f.coordinator.advanceDue(1, at), true);
+    }
+
+    let approvedClock = 6_020;
+    const pipeline = new ChoirLiveContentPipelineExperiment(f.coordinator, {
+      now: () => approvedClock, workTimeoutMs: 2_400, retryDelayMs: 250,
+    });
+    const until = async (condition: () => boolean, reason: string) => {
+      const deadline = Date.now() + 9_000;
+      while (!condition() && Date.now() < deadline)
+        await new Promise(resolve => setTimeout(resolve, 30));
+      assert.ok(condition(), reason);
+    };
+    try {
+      assert.equal(pipeline.tick(6_001), true,
+        'A is eligible from real source-mirrored PCM, without direct analyzer invocation');
+      await until(() => !pipeline.isBusy, 'A worker must settle');
+      assert.equal(pipeline.stats.applied, 1, 'A result commits only through coordinator');
+      assert.equal(f.coordinator.preview().state, 'partially-ready');
+      approvedClock = 6_350;
+      assert.equal(pipeline.tick(6_340), true, 'B uses its own independent ticket and capture');
+      await until(() => !pipeline.isBusy, 'B worker must settle');
+      assert.equal(pipeline.stats.applied, 2);
+      assert.equal(f.coordinator.preview().state, 'duet-ready');
+      assert.equal(f.coordinator.preview().monitoring, 'two-voices',
+        'proof-only readiness is not a deployed duet monitor');
+    } finally {
+      pipeline.close();
+    }
   });
 
   test('A capture replacement, Robot control replacement and invalid native generation retire old mirror', () => {

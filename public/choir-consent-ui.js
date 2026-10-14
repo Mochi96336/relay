@@ -224,9 +224,13 @@ beginRoomButton?.addEventListener('click', () => {
   render();
 });
 connectMediaButton?.addEventListener('click', () => {
-  if (!mediaEnabled || !acceptedAsGuest) return;
-  if (publishCommand('choir-secondary-media-claim-request'))
-    statusKey = 'choir.connecting';
+  if (!mediaEnabled || !acceptedAsGuest || !authorityFresh) return;
+  // Dispatch inside the actual click handler: iOS and other browsers
+  // require a user gesture for the *separate* B microphone permission.
+  // The client requests a short-lived media claim only AFTER capture is ready
+  // and the actual hardware sample rate is known.
+  window.dispatchEvent(new Event('relay-choir-start-secondary-capture'));
+  statusKey = 'choir.preparingMic';
   render();
 });
 closeButton?.addEventListener('click', () => {

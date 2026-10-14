@@ -58,7 +58,9 @@ export class ChoirSecondaryConsentExperiment {
   private validInvite(invite: Invite, nowMs: number) {
     const scope = this.policy.scopeNow(nowMs);
     return Number.isFinite(nowMs) && nowMs >= 0
-      && nowMs < invite.expiresAtMs
+      // Pending invitations expire quickly. Accepted consent persists for
+      // the exact room until withdrawal, socket loss or authority change.
+      && (invite.accepted || nowMs < invite.expiresAtMs)
       && scope !== null && this.sameScope(invite.scope, scope)
       && !this.policy.takeFrozenNow()
       && this.policy.primaryStillOwnsMic(invite.primaryId)

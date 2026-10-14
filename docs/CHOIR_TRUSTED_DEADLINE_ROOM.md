@@ -798,3 +798,44 @@ confirms a SongSession Seek rejects the very next packet. A real
 browser/phone secondary publishing session and role-grant UI remain
 unimplemented. The default-off production Shadow does not grant
 secondary tickets or route any Choir audio.
+
+## First-version Mic owner, B consent and Take gates (2026-10-14)
+
+A private experimental role policy now explicitly distinguishes Relay's
+**current live Mic owner** from the **YouTube playback leader**. The latter
+is a clock authority and may be another person; it cannot approve another
+participant's microphone. An eligible room grant requires all of:
+
+- The authenticated request actor is the current Relay primary Mic owner.
+- The existing `ParticipantSession.micOwnerId` and the live
+  `MicRuntime.mediaOwnerId` agree with that primary; its control socket
+  remains connected and the primary participant has a live presence.
+- The named secondary is a distinct, connected Relay participant who has
+  **explicitly consented to this exact upcoming Room Epoch** through a
+  future separately authenticated server consent channel. Mere presence
+  and a nickname are not proof of consent.
+- The Take lifecycle is not `recording` or `finalizing`.
+- All existing SongSession, Robot, Room/Song/Media Epoch and verified PCM
+  protections remain in force independently.
+
+`authorizeChoirRestartWithLiveRoles` implements and tests the above as
+a SERVER-ONLY policy. No live client consent handshake exists yet.
+Production's existing Shadow coordinator still injects an unconditional
+**deny** for new grants, and a deny-by-default ongoing role check;
+this new policy is not silently promoted into public room authority.
+
+Once a room is approved in the offline fixture, **ongoing** Mic owner,
+B consent and Take authority are rechecked on each control/media
+operation. The role continuation predicate includes the *exact current
+Room Epoch*. If any permission changes or Take starts, the Shadow room is
+now irrevocably retired as `restart-required`, not simply hidden behind
+an ambiguous `awaiting-authority` state. Recovery requires a new explicit
+restart CAS with fresh A/B Media Epochs and individual Content proofs.
+Tests confirm neither ending Take nor restoring consent can revive old
+tickets automatically.
+
+Next missing production piece: an authenticated, explicit secondary
+opt-in/opt-out control-plane workflow that is revocable before and during
+each Room Epoch, with proper per-participant consent and host display.
+Until then the server remains deny-by-default and a second phone cannot
+join Choir using any current client command.

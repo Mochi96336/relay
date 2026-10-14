@@ -287,7 +287,11 @@ window.relayIdentityReady = (async () => {
 
   function handleMessage(message) {
     if (message.type === 'choir-consent-available') {
-      choirConsentAvailable = message.mode === 'invitation-only';
+      choirConsentAvailable = message.mode === 'invitation-only'
+        || message.mode === 'media-experiment';
+      window.dispatchEvent(new CustomEvent('relay-choir-media-mode', {
+        detail: { enabled: message.mode === 'media-experiment' },
+      }));
       announceChoirConsentAvailable();
       return;
     }

@@ -12,6 +12,7 @@ import { BackingRuntime } from './backing-runtime.js';
 import { SourceRuntime } from './source-runtime.js';
 import { ChoirShadowLifecycleExperiment } from './choir-shadow-lifecycle-experiment.js';
 import { ChoirRoomRestartCoordinatorExperiment } from './choir-room-restart-coordinator-experiment.js';
+import { ChoirSecondaryPcmIngressExperiment } from './choir-secondary-pcm-ingress-experiment.js';
 import { loadAudioTransportConfig } from './audio-transport-config.js';
 import { parseAudioUplinkHealth, type AudioUplinkHealth } from './audio-uplink-health.js';
 import { parseMicPresenceTelemetry } from './mic-presence-telemetry.js';
@@ -340,6 +341,15 @@ const choirRestartCoordinator = choirShadow
     // No production Take-clearance integration exists: fail closed.
     () => true,
     choirShadowConfig,
+  ) : null;
+// The secondary byte path is physically present only under the default-off
+// shadow flag. No production handler calls bindVerifiedSecondary(): the
+// private role/Take approval and fresh-room admission remain intentionally
+// unimplemented. Thus there are NO live Choir sockets or mixed Choir output.
+const choirSecondaryIngress = choirRestartCoordinator
+  ? new ChoirSecondaryPcmIngressExperiment(
+    choirRestartCoordinator,
+    (socket) => (socket as RelaySocket).readyState === WebSocket.OPEN,
   ) : null;
 function tickChoirShadow(nowMs: number) {
   // No Mic/Backing PCM is copied and no client can call the approval API.
@@ -4468,6 +4478,11 @@ function backingCaptureRestarted() {
  * timing in that order.
  */
 function audioUplinkReceived(socket: RelaySocket, data: Buffer) {
+  // Exclusively server-bound secondary transports never touch the N=1 Mic,
+  // backing, recording or monitor paths, even if their frame is malformed.
+  // In production none can be bound until a private restart approval exists.
+  const choir = choirSecondaryIngress?.interceptBinary(socket, data, performance.now());
+  if (choir?.intercepted) return;
   if (micRuntime.isPublisher(socket)) {
     deliverMicPackets(micRuntime.receivePublisher(socket, data, performance.now()));
     return;
@@ -4598,6 +4613,9 @@ wss.on('connection', (rawSocket, request) => {
 
     if (!message || typeof message !== 'object') return;
     const payload = message as Record<string, unknown>;
+    // A socket bound to Choir secondary may carry ONLY its binary PCM. Never
+    // allow it to claim the production Mic, issue a Take or change Robot/song.
+    if (choirSecondaryIngress?.isAttached(socket)) return;
     if (monitorTransport.acknowledge(socket, payload)) return;
     if (subscribeBroadcasts(socket, payload)) return;
     if (queryProtocol.dispatch(socket, payload)) return;
@@ -4615,6 +4633,7 @@ wss.on('connection', (rawSocket, request) => {
   });
 
   socket.on('close', () => {
+    choirSecondaryIngress?.disconnect(socket, performance.now());
     playbackClosed(socket);
     let micTransportChanged = false;
 

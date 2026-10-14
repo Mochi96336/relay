@@ -94,7 +94,10 @@ export class ChoirSecondaryConsentExperiment {
     if (existing) this.pending.delete(existing.inviteId);
     // This is deliberately ONE outstanding secondary invitation per primary.
     for (const [id, p] of this.pending)
-      if (p.primaryId === primaryId) this.pending.delete(id);
+      if (p.primaryId === primaryId) {
+        this.pending.delete(id);
+        this.notifyRevoked(p, 'secondary-changed');
+      }
     const invite: Invite = {
       inviteId: randomUUID(), primaryId, secondaryId, primarySocket,
       consentSocket: null, scope: { ...scope }, accepted: false,
@@ -174,12 +177,26 @@ export class ChoirSecondaryConsentExperiment {
       && this.validInvite(p, nowMs));
   }
 
+  private notifyRevoked(invite: Invite, reason: string) {
+    if (!invite.accepted) return;
+    const notice = {
+      type: 'choir-secondary-consent-status', status: 'revoked',
+      reason, roomEpoch: invite.scope.roomEpoch,
+      secondaryId: invite.secondaryId,
+    };
+    if (this.policy.socketOpen(invite.primarySocket))
+      this.policy.notifySocket(invite.primarySocket, notice);
+    if (invite.consentSocket && this.policy.socketOpen(invite.consentSocket))
+      this.policy.notifySocket(invite.consentSocket, notice);
+  }
+
   /** Closing EITHER consenting socket permanently revokes the grant. */
   disconnected(socket: AuthenticatedSocket): boolean {
     let changed = false;
     for (const [id, p] of this.pending) {
       if (p.primarySocket !== socket && p.consentSocket !== socket) continue;
       this.pending.delete(id);
+      this.notifyRevoked(p, 'connection-closed');
       changed = true;
     }
     return changed;
@@ -191,6 +208,7 @@ export class ChoirSecondaryConsentExperiment {
     for (const [id, p] of this.pending)
       if (!this.validInvite(p, nowMs)) {
         this.pending.delete(id);
+        this.notifyRevoked(p, 'scope-or-authority-changed');
         removed++;
       }
     return removed;

@@ -495,7 +495,7 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
     assert.equal(f.coordinator.preview().secondary, 'join-required');
   });
 
-  test('failed physical media bind rolls back B admission with no usable or replayable ticket', () => {
+  test('failed physical B media bind retires the room and cannot replay a half-admitted seat', () => {
     const f = fixture();
     const rev = f.startSong(0);
     f.coordinator.observe(0);
@@ -522,20 +522,22 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
     );
     const grant = broker.issue(b, 4)!;
     assert.equal(broker.redeem(media, grant.claimToken, RATE, 2, 5), null);
-    assert.equal(f.coordinator.preview().secondary, 'join-required');
+    assert.equal(f.coordinator.preview().state, 'restart-required',
+      'a bound-seat failure is fatal for the old Room Epoch');
+    assert.equal(f.coordinator.preview().monitoring, 'unavailable');
+    assert.equal(f.coordinator.proposedRoomEpochForConsent, 2);
     assert.equal(broker.redeem(media, grant.claimToken, RATE, 2, 6), null);
-    assert.equal(broker.issue(b, 7)?.roomEpoch, 1,
-      'after physical bind failure B must be able to try a FRESH claim');
-    const nextIngress = new ChoirSecondaryPcmIngressExperiment(f.coordinator,
-      socket => (socket as Socket).open);
-    const retryBroker = new ChoirSecondaryMediaTicketExperiment(
-      f.coordinator, consent, nextIngress, socket => (socket as Socket).open,
-    );
-    const newGrant = retryBroker.issue(b, 8)!;
-    const newTicket = retryBroker.redeem(media, newGrant.claimToken, RATE, 2, 9);
-    assert.ok(newTicket, 'binding rollback must preserve a real fresh B retry');
-    assert.equal(newTicket.seat, 'secondary');
-    assert.equal(f.coordinator.preview().secondary, 'calibration-required');
+    assert.equal(broker.issue(b, 7), null,
+      'even freshly minted claims may not re-use a retired room or old consent');
+    assert.equal(f.admit(1, 1, 'B', 'another-B', 8), null,
+      'old room cannot hand the secondary seat to another transport');
+    assert.equal(f.coordinator.receiveVerifiedMic({
+      roomEpoch: 1, songEpoch: 1, participantId: 'B',
+      seat: 'secondary', transportId: 'another-B', mediaEpoch: 2,
+    }, {
+      generation: 7, firstSampleIndex: 0,
+      pcm: Buffer.from(new Int16Array(960).buffer),
+    }, RATE, 9), false);
   });
 
 });

@@ -941,3 +941,23 @@ publisher, verified Content calibration in the real runtime, and N=2
 monitor/record. Server restart authorization remains an unconditional
 deny. These UI additions are an intentionally isolated invitation
 experience and must not be described as a deployed duet.
+
+### Verified authenticated invite integration (positive path)
+
+The server smoke now also establishes real browser-capability identities for
+A and B, a distinct authenticated A publisher with a valid primary Mic lease,
+a registered Robot backing source, a live Robot control socket, and a genuine
+positioned PCM backing frame that establishes the native backing capture
+generation. It then drives the existing SongSession through accepted Load
+and Play command/telemetry handshakes, and asserts that A's invite reaches B,
+B's acceptance returns to both control sockets, and B's withdrawal revokes
+the opt-in. **No secondary-registered or new audio route** is ever created.
+This is a real WebSocket control-path proof, rather than simulating
+authentication or calling Choir classes alone.
+
+One earlier positive smoke correctly failed until the Robot sent its first
+PCM: a registered Robot *control* source without any PCM has no trusted
+`backingGeneration`. We fixed the test to provide real positioned backing
+audio rather than permitting a missing-generation Choir room. The temporary
+server diagnostic output used to identify this test fixture problem has
+been removed.

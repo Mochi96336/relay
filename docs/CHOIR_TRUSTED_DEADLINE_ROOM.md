@@ -696,3 +696,58 @@ CAS, operator rejection, frozen Take, stale revisions, emergency Seek
 without a clock-tick callback, fresh Room/Song/Media Epochs, A/B role
 isolation, and independent Content readiness. Do not confuse this with
 an end-to-end mobile/desktop Choir deployment test.
+
+## Secondary-only PCM ingress adapter and server quarantine (2026-10-14)
+
+`ChoirSecondaryPcmIngressExperiment` is a deliberately PRIVATE transport
+bridge for the already-authenticated secondary singer. It is instantiated
+only when `RELAY_CHOIR_SHADOW=1` and is called ahead of production
+`audioUplinkReceived`'s normal primary Mic/Robot switch. It consumes
+binary packets ONLY from a socket that the server has explicitly attached
+through `bindVerifiedSecondary(socket, ticket, sourceRate, nowMs)`. The
+production server **never calls that bind method**: its injected room
+approval and Take clearance are still unconditionally false. No new
+client-facing registration command, secondary-microphone UI, WebTransport
+path, recorder or monitor output is enabled.
+
+The private bind path requires a native authenticated
+`socket.participantId` matching the SERVER-issued ticket, a fresh
+`roomEpoch/songEpoch/mediaEpoch`, specifically the **secondary** seat,
+unclaimed `unknown` socket role (not an existing production
+publisher/backing/monitor), valid native sample rate, a live socket and
+`coordinator.mayAcceptVerifiedTicket` confirming the ticket is actually
+active in the current room. The ticket is stored in a WeakMap keyed by the
+exact physical socket; no sender-supplied participant ID, room ID, seat or
+lag is parsed from PCM or trusted. Closed sockets revoke only that singer
+and cannot accidentally promote a replacement primary.
+
+Binary frames must carry Relay's existing 16-byte `RL` v1 header with
+zero reserved flags, the native capture generation, integer non-negative
+sample cursor and complete non-empty little-endian int16 mono PCM. Frames
+over 200 ms, over the conservative 192kHz byte ceiling, or over 150
+packets/s per attached socket are rejected. After one native generation
+is accepted, a changed generation is rejected pending an explicit new
+Media Epoch rather than silently aligning two unrelated captures.
+No unheadered/legacy PCM is accepted by this N=2 ingress. Every frame
+then revalidates SongSession, Robot authority, exact current ticket and
+media epoch THROUGH the existing private Room Restart Coordinator.
+
+Importantly, once attached, a malformed, revoked or out-of-order
+secondary frame is still **intercepted**. It cannot fall through to the
+production N=1 Mic/Robot intake. The server also ignores JSON control
+commands on this attached socket to prevent a secondary singer from
+seizing the deployed primary Mic or controlling Robot/song playback via
+the same socket. An unattached socket follows the original production
+logic unmodified. The adapter does not copy any Choir PCM into production
+audio, monitor or Take recording.
+
+Test coverage includes authorization and role fences, RL framing and
+sample cursor validation, malformed, unpositioned and oversized frames,
+capture generation changes, per-socket ingress limits, socket identity
+changes, close, stale room and Seek between timer ticks. An integration
+test uses the REAL SongSession/SourceRuntime/Room Restart Coordinator
+with a secondary authenticated socket, then confirms the same old packet
+is intercepted but rejected after a Seek. This is a **transport skeleton**,
+not a functioning client-side second Mic feature; its attach entrypoint is
+unwired until real server role/Take authorization and fresh room approval
+are implemented and audited.

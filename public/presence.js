@@ -20,7 +20,7 @@ window.relayIdentityReady = (async () => {
   const PENDING_NICKNAME_KEY = 'relay.pendingNickname.v1';
   const RECONNECT_MS = 1_000;
   // The broadcasts handleMessage reads; Relay sends this socket no others.
-  const PRESENCE_BROADCAST_TYPES = ['session-status'];
+  const PRESENCE_BROADCAST_TYPES = ['session-status', 'choir-consent-available'];
   const adjectives = [
     'Blue', 'Quiet', 'Tiny', 'Silver', 'Mint', 'Soft', 'Bright', 'Lazy',
     'Lucky', 'Warm', 'Swift', 'Night', 'Sunny', 'Mellow', 'Cloud', 'Little',

@@ -254,6 +254,26 @@ export class ChoirRoomRestartCoordinatorExperiment {
       && this.handshake.hasVerifiedTicket(ticket);
   }
 
+  /**
+   * Fatal two-phase bind failure. Once the canonical seat has been admitted,
+   * this version of the Choir room does NOT permit arbitrary same-epoch
+   * re-admission, even when no voice PCM was received yet. Retire the entire
+   * experimental room rather than misrepresent a half-admitted B as retryable.
+   *
+   * No production Mic owner, publisher role or N=1 MixBus is changed.
+   */
+  retireFailedSecondaryBind(ticket: ChoirFreshCaptureTicket, nowMs: number): boolean {
+    this.observe(nowMs);
+    if (!this.approved || ticket.seat !== 'secondary'
+      || ticket.roomEpoch !== this.approved.roomEpoch
+      || ticket.songEpoch !== this.approved.songEpoch
+      || ticket.participantId !== this.approved.secondaryId
+      || !this.handshake.hasVerifiedTicket(ticket)) return false;
+    this.shadow.retireForTrustRevocation(nowMs);
+    this.observe(nowMs);
+    return this.approved === null;
+  }
+
   receiveVerifiedMic(
     ticket: ChoirFreshCaptureTicket,
     frame: import('./pcm-frame.js').PcmFrame,

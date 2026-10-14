@@ -1,4 +1,5 @@
-import { ChoirDeadlineRoomExperiment, type ChoirDeadlineRoomOptions } from './choir-deadline-room-experiment.js';
+import { ChoirDeadlineRoomExperiment, type ChoirDeadlineRoomOptions,
+  type ChoirWorkerContentSnapshot } from './choir-deadline-room-experiment.js';
 import type { ChoirSeat } from './choir-session.js';
 import type { PcmFrame } from './pcm-frame.js';
 
@@ -184,6 +185,39 @@ export class ChoirFreshRoomHandshakeExperiment {
   /** Copies only numerical evidence, never PCM or a mutable MicTrack. */
   lastSingerEvidence() {
     return this.lastVoiceEvidence.map(x => ({ ...x }));
+  }
+
+
+  /** Server-only polling of authorized uncalibrated seats; no client data. */
+  prepareWorkerContent(nowMs: number): {
+    ticket: ChoirFreshCaptureTicket;
+    proof: ChoirWorkerContentSnapshot;
+  } | null {
+    const c = this.current;
+    if (!c) return null;
+    for (const ticket of c.tickets.values()) {
+      if (c.contentVerified.has(ticket.participantId)) continue;
+      const proof = c.room.prepareTrustedWorkerContent(
+        ticket.transportId, ticket.mediaEpoch, nowMs,
+      );
+      if (proof) return { ticket, proof };
+    }
+    return null;
+  }
+
+  /** Source identity and private pending Content are consumed exactly once. */
+  acceptWorkerContent(
+    ticket: ChoirFreshCaptureTicket, proof: ChoirWorkerContentSnapshot,
+    result: { micLagMs: number; confidence: number }, nowMs: number,
+  ): boolean {
+    const c = this.matches(ticket);
+    if (!c || c.contentVerified.has(ticket.participantId)
+      || ticket.participantId !== proof.participantId
+      || ticket.transportId !== proof.transportId
+      || ticket.mediaEpoch !== proof.mediaEpoch
+      || ticket.songEpoch !== proof.songEpoch) return false;
+    if (!c.room.stageTrustedWorkerContent(proof, result, nowMs)) return false;
+    return this.commitFreshContent(ticket, nowMs, false);
   }
 
   /**

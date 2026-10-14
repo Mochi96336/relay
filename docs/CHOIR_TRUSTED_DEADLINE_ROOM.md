@@ -1077,3 +1077,60 @@ disconnect. B disconnect therefore retires the experimental room
 (instead of silently allowing a same-epoch replacement); any restart
 requires a new explicit CAS, fresh room-specific B consent and new
 Media Epoch. None of these rules imply automatic primary Mic takeover.
+
+## B mobile native-clock PCM uplink (2026-10-14)
+
+The separate, explicit B "Connect second-Mic test" tap now initiates its
+own `getUserMedia` permission prompt, new AudioContext, and Relay's
+existing `capture-worklet.js`. No ordinary invitation, accepted consent,
+login, server push, or successful Media Epoch registration starts capture.
+
+The capture uses the same unprocessed mono microphone constraints as the
+production Mic; applies `enforceUnprocessedCapture`; uses the running
+AudioContext's ACTUAL `sampleRate` (44.1 kHz, 48 kHz and other supported
+native rates are not silently relabeled as 48 kHz); and creates an
+independent random uint32 native capture generation and monotonically
+increasing sample cursor. The captured Worklet's 20 ms Int16 PCM chunks
+are framed exactly as `AudioPacket v2`: mic source, actual generation,
+uint32 packet sequence, actual sample count and native firstSampleIndex.
+The module reuses the existing Worklet graph lifecycle, including zero-
+gain output to the local playback, and does NOT request production Mic
+ownership or start the primary publisher.
+
+The B tap **prepares capture before requesting the 15-second server media
+claim**, so the short-lived claim is never left expiring while the browser
+asks permission or discovers a real hardware sample rate. Once that
+capture is ready, the verified Presence socket requests a claim; the
+already-separated B media Socket authenticates and registers with that
+actual rate. Only after the server confirms its server-owned Media Epoch
+does the browser send real PCM. A missing, wrong or revoked grant never
+transmits PCM as the primary Mic.
+
+The page advances its native cursor for EVERY Worklet PCM chunk, including
+chunks dropped during network backlog, stale main-thread dispatch or
+disconnection. Therefore rejected delivery leaves an explicit native-
+sample gap instead of compressing the music timeline. It discards PCM
+older than 200 ms and bounds WebSocket bufferedAmount to 256 KiB; no
+retained PCM is replayed after a reconnect. Capture input-gap, processor
+failure, device route replacement, local track mute/end, or AudioContext
+suspension/closure fail closed by disposing the graph, stopping tracks and
+closing the separate media socket. Changing Room Epoch or withdrawing
+consent requires a new deliberate user action and NEW Media Epoch.
+The worklet's recycled PCM buffer is returned only after packet bytes
+have been copied.
+
+A new parity test decodes browser-framed packets with the REAL server
+`decodeAudioPacket`, including 44.1k (882-sample) and 48k (960-sample)
+20 ms chunks, and asserts generation/sequence/sample-index integrity.
+Additional tests cover invalid native cursors, backlog gaps, stale PCM,
+buffer recycling, synthetic input-gap retirement and old-epoch callbacks.
+UI checks ensure the physical tap precedes the claim request.
+
+**Audio proof limitation:** This confirms native B Worklet PCM transport,
+NOT valid cross-device song alignment. The real server still does not
+copy the A production Mic or Robot PCM into the Choir proof-specific
+canonical room, nor expose the trusted six-second Content solver as a
+production authority. B remains muted within the isolated Choir room,
+and N=2 monitor/record output is intentionally absent. Two physical
+phones have NOT yet been measured or verified for live Content phase
+agreement; production N=1 is unchanged.

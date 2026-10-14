@@ -7,6 +7,8 @@ import { ChoirFreshRoomHandshakeExperiment } from '../src/choir-fresh-room-hands
 import { ChoirRoomRestartCoordinatorExperiment } from '../src/choir-room-restart-coordinator-experiment.js';
 import { laggedMultibandMusicPair } from './helpers/music-calibration.js';
 import { ChoirSecondaryPcmIngressExperiment } from '../src/choir-secondary-pcm-ingress-experiment.js';
+import { ChoirSecondaryConsentExperiment } from '../src/choir-secondary-consent-experiment.js';
+import { ChoirSecondaryMediaTicketExperiment } from '../src/choir-secondary-media-ticket-experiment.js';
 import { encodePcmFrame } from '../src/pcm-frame.js';
 import { encodeAudioPacket } from '../src/audio-packet.js';
 
@@ -380,4 +382,150 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
     assert.equal('mediaEpoch' in notice, false);
     assert.equal('PCM' in notice, false);
   });
+  test('one-time consenting B media grant binds only a distinct authenticated socket after A admission', () => {
+    const f = fixture();
+    const rev = f.startSong(0);
+    f.coordinator.observe(0);
+    assert.equal(f.approve(rev, 0), true);
+    type Socket = { participantId: string; role: string; open: boolean };
+    const aControl: Socket = { participantId: 'A', role: 'unknown', open: true };
+    const bControl: Socket = { participantId: 'B', role: 'unknown', open: true };
+    const bOtherTab: Socket = { participantId: 'B', role: 'unknown', open: true };
+    const bMedia: Socket = { participantId: 'B', role: 'unknown', open: true };
+    const cMedia: Socket = { participantId: 'C', role: 'unknown', open: true };
+    const consent = new ChoirSecondaryConsentExperiment({
+      scopeNow: () => ({
+        roomEpoch: 1, playbackRevision: rev, videoId: VIDEO,
+        backingGeneration: 9, robotSourceGeneration: f.robot.generation,
+      }),
+      primaryStillOwnsMic: id => id === 'A' && aControl.open,
+      participantConnected: id => id === 'B' && bControl.open,
+      takeFrozenNow: () => false,
+      socketOpen: socket => (socket as Socket).open,
+      notifyParticipant: () => {},
+      notifySocket: () => {},
+    });
+    const ingress = new ChoirSecondaryPcmIngressExperiment(f.coordinator,
+      socket => (socket as Socket).open);
+    const broker = new ChoirSecondaryMediaTicketExperiment(
+      f.coordinator, consent, ingress, socket => (socket as Socket).open, 1_000,
+    );
+    const id = consent.invite(aControl, 'B', 1)!;
+    assert.equal(consent.respond(bControl, id, true, 2), true);
+    assert.equal(broker.issue(bOtherTab, 3), null,
+      'another authenticated B tab is not the consenting socket');
+    assert.equal(broker.issue(bControl, 3), null,
+      'B consent alone must not reserve Media Epoch before A admission');
+    const a = f.admit(1, 1, 'A', 'socket-A', 4)!;
+    assert.ok(a && a.seat === 'primary');
+    const first = broker.issue(bControl, 5)!;
+    assert.match(first.claimToken, /^[0-9a-f]{64}$/);
+    assert.equal(f.coordinator.preview().secondary, 'join-required',
+      'issuing an opaque claim never consumes B Media Epoch');
+    assert.equal(broker.redeem(cMedia, first.claimToken, RATE, 2, 6), null,
+      'a claim stolen by an unrelated participant is burned');
+    assert.equal(broker.redeem(bMedia, first.claimToken, RATE, 2, 7), null);
+    const old = broker.issue(bControl, 8)!;
+    const latest = broker.issue(bControl, 9)!;
+    assert.notEqual(old.claimToken, latest.claimToken);
+    assert.equal(broker.pendingCount, 1);
+    assert.equal(broker.redeem(bMedia, old.claimToken, RATE, 2, 10), null,
+      'superseded token cannot be replayed');
+    const b = broker.redeem(bMedia, latest.claimToken, RATE, 2, 11)!;
+    assert.ok(b);
+    assert.equal(b.participantId, 'B');
+    assert.equal(b.seat, 'secondary');
+    assert.ok(b.mediaEpoch > a.mediaEpoch);
+    assert.equal(broker.pendingCount, 0);
+    assert.equal(ingress.isAttached(bMedia), true);
+    assert.equal(broker.redeem(bMedia, latest.claimToken, RATE, 2, 12), null);
+    assert.equal(f.coordinator.preview().monitoring, 'backing-only',
+      'a verified secondary PCM channel MUST wait for individual Content proof');
+
+    const pcm = Buffer.from(new Int16Array(960).fill(2_000).buffer);
+    const packet = encodeAudioPacket({
+      source: 'mic', generation: 7, firstSampleIndex: 0, sequence: 0, pcm,
+    });
+    assert.deepEqual(ingress.interceptBinary(bMedia, packet, 20), {
+      intercepted: true, accepted: true, reason: 'accepted',
+    });
+    assert.equal(f.coordinator.preview().secondary, 'calibration-required');
+    assert.equal(f.coordinator.preview().monitoring, 'backing-only');
+    assert.equal(f.songs.update(playing({ currentTime: 80 }), leader, null, 100).accepted, true);
+    assert.deepEqual(ingress.interceptBinary(bMedia,
+      encodeAudioPacket({
+        source: 'mic', generation: 7, firstSampleIndex: 960, sequence: 1, pcm,
+      }), 101), { intercepted: true, accepted: false, reason: 'stale-authority' });
+  });
+
+  test('media grants expire, revoke and cannot become a Mic Epoch if Take or consent ends', () => {
+    const f = fixture();
+    const rev = f.startSong(0);
+    f.coordinator.observe(0);
+    assert.equal(f.approve(rev, 0), true);
+    assert.ok(f.admit(1, 1, 'A', 'socket-A', 1));
+    type Socket = { participantId: string; role: string; open: boolean };
+    const a: Socket = { participantId: 'A', role: 'unknown', open: true };
+    const b: Socket = { participantId: 'B', role: 'unknown', open: true };
+    const media: Socket = { participantId: 'B', role: 'unknown', open: true };
+    const consent = new ChoirSecondaryConsentExperiment({
+      scopeNow: () => ({
+        roomEpoch: 1, playbackRevision: rev, videoId: VIDEO,
+        backingGeneration: 9, robotSourceGeneration: f.robot.generation,
+      }),
+      primaryStillOwnsMic: id => id === 'A' && a.open,
+      participantConnected: id => id === 'B' && b.open,
+      takeFrozenNow: () => false,
+      socketOpen: socket => (socket as Socket).open,
+      notifyParticipant: () => {}, notifySocket: () => {},
+    });
+    const ingress = new ChoirSecondaryPcmIngressExperiment(f.coordinator,
+      socket => (socket as Socket).open);
+    const broker = new ChoirSecondaryMediaTicketExperiment(
+      f.coordinator, consent, ingress, socket => (socket as Socket).open, 1_000);
+    const invite = consent.invite(a, 'B', 2)!;
+    assert.equal(consent.respond(b, invite, true, 3), true);
+    const expiry = broker.issue(b, 4)!;
+    assert.equal(broker.redeem(media, expiry.claimToken, RATE, 2, 1_005), null);
+    assert.equal(f.coordinator.preview().secondary, 'join-required');
+    const revoked = broker.issue(b, 1_006)!;
+    assert.equal(consent.withdraw(b, 1_007), true);
+    assert.equal(broker.redeem(media, revoked.claimToken, RATE, 2, 1_008), null);
+    assert.equal(broker.pendingCount, 0);
+    assert.equal(f.coordinator.preview().secondary, 'join-required');
+  });
+
+  test('failed physical media bind rolls back B admission with no usable or replayable ticket', () => {
+    const f = fixture();
+    const rev = f.startSong(0);
+    f.coordinator.observe(0);
+    assert.equal(f.approve(rev, 0), true);
+    assert.ok(f.admit(1, 1, 'A', 'socket-A', 1));
+    type Socket = { participantId: string; role: string; open: boolean };
+    const a: Socket = { participantId: 'A', role: 'unknown', open: true };
+    const b: Socket = { participantId: 'B', role: 'unknown', open: true };
+    const media: Socket = { participantId: 'B', role: 'unknown', open: true };
+    const consent = new ChoirSecondaryConsentExperiment({
+      scopeNow: () => ({ roomEpoch: 1, playbackRevision: rev, videoId: VIDEO,
+        backingGeneration: 9, robotSourceGeneration: f.robot.generation }),
+      primaryStillOwnsMic: id => id === 'A',
+      participantConnected: id => id === 'B',
+      takeFrozenNow: () => false,
+      socketOpen: socket => (socket as Socket).open,
+      notifyParticipant: () => {}, notifySocket: () => {},
+    });
+    const invite = consent.invite(a, 'B', 2)!;
+    assert.equal(consent.respond(b, invite, true, 3), true);
+    const broker = new ChoirSecondaryMediaTicketExperiment(
+      f.coordinator, consent, { bindVerifiedSecondary: () => false },
+      socket => (socket as Socket).open,
+    );
+    const grant = broker.issue(b, 4)!;
+    assert.equal(broker.redeem(media, grant.claimToken, RATE, 2, 5), null);
+    assert.equal(f.coordinator.preview().secondary, 'join-required');
+    assert.equal(broker.redeem(media, grant.claimToken, RATE, 2, 6), null);
+    assert.equal(broker.issue(b, 7)?.roomEpoch, 1,
+      'after physical bind failure B must be able to try a FRESH claim');
+  });
+
 });

@@ -322,9 +322,9 @@ const takeController = new TakeController({
 const sourceRuntime = new SourceRuntime<RelaySocket>({
   isConnected: (socket) => socket.readyState === WebSocket.OPEN,
 });
-// Diagnostic shadow only. Disabled by default and disconnected from actual
-// Mic/Robot PCM ingress, WebSocket handlers, mix output, monitor and recording.
-// No restart handshake is exposed or authorized by this server.
+// Default-off source authority observer. A second independent media flag
+// allows verified A/Robot PCM to enter an ISOLATED Choir proof room, never
+// the production MixBus, monitor or Take recording.
 const choirShadowConfig = {
   sampleRate: MIX_SAMPLE_RATE, frameMs: MIX_FRAME_MS,
   prebufferMs: LIVE_MIX_PREBUFFER_MS, retentionMs: MIC_RETENTION_MS,
@@ -368,19 +368,18 @@ const choirRestartCoordinator = choirShadow
       )),
     }),
   ) : null;
-// The secondary byte path is physically present only under the default-off
-// shadow flag. No production handler calls bindVerifiedSecondary(): the
-// private role/Take approval and fresh-room admission remain intentionally
-// unimplemented. Thus there are NO live Choir sockets or mixed Choir output.
+// B's secondary byte path is only armed after explicit double-flag
+// A/B consent and server-issued Media Epoch registration. Never routes
+// those bytes into the production N=1 Mic, backing, monitor or recording.
 const choirSecondaryIngress = choirRestartCoordinator
   ? new ChoirSecondaryPcmIngressExperiment(
     choirRestartCoordinator,
     (socket) => (socket as RelaySocket).readyState === WebSocket.OPEN,
   ) : null;
 /**
- * The ONLY live Choir client control plane in shadow mode: invitation and
- * explicit B consent. The room's restart authorizer is STILL hard-deny and
- * consent cannot grant a capture ticket or alter the deployed N=1 Mixer.
+ * Shadow-mode authenticated invitation and consent control plane.
+ * An accepted consent alone never grants a capture ticket or changes N=1.
+ * A separate disabled-by-default media flag is mandatory for any admission.
  */
 choirConsent = choirRestartCoordinator && choirShadow
   ? new ChoirSecondaryConsentExperiment({
@@ -428,9 +427,8 @@ choirConsent = choirRestartCoordinator && choirShadow
     },
     notifySocket: (raw, payload) => sendJson(raw as RelaySocket, payload),
   }) : null;
-// A private one-time B-claim broker is ready for a future *explicitly
-// authorized* media route. No current WebSocket JSON handler calls issue()
-// or redeem(): Choir restart stays hard-deny and existing N=1 PCM is untouched.
+// One-use B-claim broker is exercised ONLY under the second explicit media
+// flag and a successful A/B authorization. N=1 PCM ownership is unchanged.
 const choirSecondaryTickets = choirRestartCoordinator && choirConsent && choirSecondaryIngress
   ? new ChoirSecondaryMediaTicketExperiment(
     choirRestartCoordinator, choirConsent, choirSecondaryIngress,
@@ -4603,7 +4601,7 @@ function backingCaptureRestarted() {
 function audioUplinkReceived(socket: RelaySocket, data: Buffer) {
   // Exclusively server-bound secondary transports never touch the N=1 Mic,
   // backing, recording or monitor paths, even if their frame is malformed.
-  // In production none can be bound until a private restart approval exists.
+  // This requires explicit double-opt-in and a server-authorized room ticket.
   const choir = choirSecondaryIngress?.interceptBinary(socket, data, performance.now());
   if (choir?.intercepted) return;
   if (micRuntime.isPublisher(socket)) {
@@ -4725,9 +4723,9 @@ function handleChoirMediaMessage(socket: RelaySocket, payload: Record<string, un
     const secondaryId = normalizeParticipantId(payload.secondaryId);
     const roomEpoch = choirRestartCoordinator.proposedRoomEpochForConsent;
     const leaderStatus = youtubeTimeline.statusPayload(nowMs);
-    // An active, already-authenticated N=1 publisher must belong to A,
-    // but that existing PCM path remains untouched and is NOT routed into
-    // the Choir mixer here. A's new Choir seat is initially muted.
+    // An active authenticated N=1 v2 capture must belong to A.
+    // Its already-admitted PCM is mirrored into Choir's SEPARATE bounded
+    // proof room only; its production MixBus route remains untouched.
     const actualPublisher = [...wss.clients].some(raw =>
       (raw as RelaySocket).participantId === socket.participantId
       && micRuntime.isPublisher(raw as RelaySocket));

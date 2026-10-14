@@ -70,6 +70,10 @@ export class ChoirRoomRestartCoordinatorExperiment {
       'sampleRate' | 'frameMs' | 'prebufferMs' | 'retentionMs'
       | 'contentHistoryMs' | 'outputHoldbackMs'>,
     private readonly handshake = new ChoirFreshRoomHandshakeExperiment(),
+    // The production adapter MUST inject its live mic-owner / B-consent
+    // authority. Default is for the isolated offline protocol fixtures only.
+    private readonly roomRolesStillAuthorized: (primaryId: string, secondaryId: string) => boolean
+      = () => true,
   ) {}
 
   /**
@@ -89,7 +93,11 @@ export class ChoirRoomRestartCoordinatorExperiment {
       || witness.roomEpoch !== this.approved.roomEpoch
       || witness.songEpoch !== this.approved.songEpoch
       || witness.videoId !== this.approved.videoId
-      || witness.backingGeneration === null)) {
+      || witness.backingGeneration === null
+      || this.takeFrozenNow()
+      || !this.roomRolesStillAuthorized(
+        this.approved.primaryId, this.approved.secondaryId,
+      ))) {
       this.handshake.retireTrustedRoom(this.approved.roomEpoch, nowMs);
       this.approved = null;
     }
@@ -143,6 +151,7 @@ export class ChoirRoomRestartCoordinatorExperiment {
       || !request.secondaryId || request.secondaryId !== request.secondaryId.trim()
       || request.primaryId === request.secondaryId
       || this.takeFrozenNow()
+      || !this.roomRolesStillAuthorized(request.primaryId, request.secondaryId)
       || this.approved !== null) return false;
 
     this.observe(request.nowMs);

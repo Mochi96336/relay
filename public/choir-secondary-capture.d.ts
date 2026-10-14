@@ -17,6 +17,8 @@ export class ChoirSecondaryCapture {
   generation: number | null;
   cursor: number;
   sequence: number;
+  clockWallOriginMs: number | null;
+  clockSampleOrigin: number;
   prepare(): Promise<number | null>;
   attach(socket: any, sampleRate: number): boolean;
   onCapture(event: { data: unknown }, graph: any, epoch: number): void;

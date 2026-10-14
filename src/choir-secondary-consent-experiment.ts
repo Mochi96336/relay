@@ -124,6 +124,12 @@ export class ChoirSecondaryConsentExperiment {
       || secondarySocket.participantId !== invite.secondaryId
       || !this.policy.socketOpen(secondarySocket)
       || !this.validInvite(invite, nowMs)) return false;
+    if (invite.accepted) {
+      // Once B has consented, only its original physical socket can
+      // explicitly withdraw. A stale decline from another B tab must not
+      // remove the current consenting tab's authority.
+      return accept && secondarySocket === invite.consentSocket;
+    }
     if (!accept) {
       this.pending.delete(inviteId);
       this.policy.notifySocket(invite.primarySocket, {
@@ -131,10 +137,6 @@ export class ChoirSecondaryConsentExperiment {
         roomEpoch: invite.scope.roomEpoch, secondaryId: invite.secondaryId,
       });
       return true;
-    }
-    if (invite.accepted) {
-      // A retry from another B tab must not replace the consent-bearing socket.
-      return secondarySocket === invite.consentSocket;
     }
     invite.accepted = true;
     invite.consentSocket = secondarySocket;

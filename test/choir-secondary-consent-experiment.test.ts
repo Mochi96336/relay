@@ -116,12 +116,29 @@ describe('default-off Choir B secondary consent state machine', () => {
       f.changeScope(change);
       assert.equal(f.consent.hasConsent(A, B, 1, 20), false, JSON.stringify(change));
       assert.equal(f.consent.pendingCount, 0);
+      assert.equal(f.delivered.some(item =>
+        item.payload.type === 'choir-secondary-consent-status'
+        && item.payload.status === 'revoked'
+        && item.payload.reason === 'scope-or-authority-changed'), true,
+      'both participants are told their accepted room consent is revoked');
       assert.equal(f.consent.respond(f.b, id, true, 21), false);
     }
     const pending = fixture();
     const id = pending.invite(0)!;
     pending.setScope(null);
     assert.equal(pending.consent.respond(pending.b, id, true, 10), false);
+  });
+
+  test('physical B disconnection notifies the surviving primary of the revocation', () => {
+    const f = fixture();
+    const id = f.invite(0)!;
+    assert.equal(f.consent.respond(f.b, id, true, 10), true);
+    f.b.open = false;
+    assert.equal(f.consent.disconnected(f.b), true);
+    assert.equal(f.consent.hasConsent(A, B, 1, 11), false);
+    assert.equal(f.delivered.some(item => item.target === A
+      && item.payload.status === 'revoked'
+      && item.payload.reason === 'connection-closed'), true);
   });
 
   test('Take start, Mic lease loss, B presence loss, physical B close and A close each revoke consent', () => {

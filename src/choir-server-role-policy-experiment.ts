@@ -18,7 +18,7 @@ export function authorizeChoirRestartWithLiveRoles(
   request: ChoirRestartApproval,
   sources: {
     participants: Pick<ParticipantSession, 'micOwnerId' | 'participant'>;
-    mic: Pick<MicRuntime, 'mediaOwnerId' | 'publisherConnected'>;
+    mic: Pick<MicRuntime, 'mediaOwnerId' | 'controlConnected'>;
     takeLifecycle: TakeLifecycle;
     /** Server-owned, explicit B consent for this exact proposed room. */
     secondaryConsent: (participantId: string, proposedRoomEpoch: number) => boolean;
@@ -30,7 +30,7 @@ export function authorizeChoirRestartWithLiveRoles(
     && request.actorParticipantId === request.primaryId
     && request.primaryId === participants.micOwnerId
     && mic.mediaOwnerId === request.primaryId
-    && mic.publisherConnected
+    && mic.controlConnected()
     && participants.participant(request.primaryId)?.connected === true
     && request.secondaryId !== request.primaryId
     && participants.participant(request.secondaryId)?.connected === true

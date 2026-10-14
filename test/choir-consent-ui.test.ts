@@ -41,3 +41,25 @@ test('invitation text is generated as textContent, never injecting a nickname as
   assert.equal(i18n.match(/'choir\.withdraw':/g)?.length, 2);
   assert.equal(i18n.match(/'choir\.invitationFrom':/g)?.length, 2);
 });
+
+test('new mobile claim connector never auto-starts Mic or exposes token to page URL or storage', async () => {
+  const html = await file('../public/index.html');
+  const app = await file('../public/choir-consent-ui.js');
+  const media = await file('../public/choir-secondary-media-client.js');
+  const presence = await file('../public/presence.js');
+  assert.match(html, /id="choir-room-begin"[^>]*hidden/);
+  assert.match(html, /id="choir-secondary-connect"[^>]*hidden/);
+  assert.match(html, /src="\/choir-secondary-media-client\.js"/);
+  assert.match(app, /beginRoomButton\.hidden = !mediaEnabled/);
+  assert.match(app, /connectMediaButton\.hidden = !mediaEnabled/);
+  assert.match(presence, /payload\.type === 'choir-room-begin'/);
+  assert.match(presence, /'choir-secondary-media-claim-request'/);
+  assert.match(media, /wsUrl\(\{ compress: false \}\)/);
+  assert.match(media, /sendParticipantAuthentication\(socket\)/);
+  assert.match(media, /message\.participantId !== window\.relayParticipantId/);
+  assert.match(media, /'choir-secondary-media-register'/);
+  assert.match(media, /packetVersion: 2, sampleRate: 48_000/);
+  assert.match(media, /'relay-choir-media-mode'/);
+  assert.match(media, /'relay-choir-consent-message'/);
+  assert.doesNotMatch(media, /getUserMedia|AudioWorkletNode|localStorage|sessionStorage|console\.log/);
+});

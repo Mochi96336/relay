@@ -1210,6 +1210,11 @@ function attachParticipantIdentity(
   });
   if (changed) broadcastSessionStatus();
   else sendJson(socket, sessionStatusPayload());
+  // UI opt-in capability for authenticated Presence/control sockets ONLY.
+  // "invitation-only" does not enable Choir capture, mixing or playback.
+  if (choirConsent) sendJson(socket, {
+    type: 'choir-consent-available', mode: 'invitation-only',
+  });
   return true;
 }
 

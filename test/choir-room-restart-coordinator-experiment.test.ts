@@ -182,8 +182,9 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
     f.setTakeFrozen(false);
     assert.equal(f.coordinator.commitFreshContent(a, 3), false,
       'Take was unfrozen but the actual six-second acoustic proof is absent');
-    assert.equal(f.coordinator.previewForVerifiedSinger('A')?.stage,
-      'calibration-required');
+    assert.equal(f.coordinator.previewForVerifiedSinger('A'), null);
+    assert.equal(f.coordinator.preview().state, 'restart-required',
+      'Take start retires the WHOLE room, never just holds one old proof');
   });
 
   test('cannot adopt another component\'s out-of-band Shadow rearm', () => {

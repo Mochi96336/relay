@@ -11,6 +11,7 @@ import { AudioSession } from './audio-session.js';
 import { BackingRuntime } from './backing-runtime.js';
 import { SourceRuntime } from './source-runtime.js';
 import { ChoirShadowLifecycleExperiment } from './choir-shadow-lifecycle-experiment.js';
+import { ChoirRoomRestartCoordinatorExperiment } from './choir-room-restart-coordinator-experiment.js';
 import { loadAudioTransportConfig } from './audio-transport-config.js';
 import { parseAudioUplinkHealth, type AudioUplinkHealth } from './audio-uplink-health.js';
 import { parseMicPresenceTelemetry } from './mic-presence-telemetry.js';
@@ -319,21 +320,33 @@ const sourceRuntime = new SourceRuntime<RelaySocket>({
 // Diagnostic shadow only. Disabled by default and disconnected from actual
 // Mic/Robot PCM ingress, WebSocket handlers, mix output, monitor and recording.
 // No restart handshake is exposed or authorized by this server.
+const choirShadowConfig = {
+  sampleRate: MIX_SAMPLE_RATE, frameMs: MIX_FRAME_MS,
+  prebufferMs: LIVE_MIX_PREBUFFER_MS, retentionMs: MIC_RETENTION_MS,
+  outputHoldbackMs: 200, contentHistoryMs: 7_000,
+};
 const choirShadow = relayConfig.choirShadow
-  ? new ChoirShadowLifecycleExperiment(youtubeTimeline, sourceRuntime, {
-    sampleRate: MIX_SAMPLE_RATE, frameMs: MIX_FRAME_MS,
-    prebufferMs: LIVE_MIX_PREBUFFER_MS, retentionMs: MIC_RETENTION_MS,
-    outputHoldbackMs: 200, contentHistoryMs: 7_000,
-  }) : null;
+  ? new ChoirShadowLifecycleExperiment(
+    youtubeTimeline, sourceRuntime, choirShadowConfig,
+  ) : null;
+const choirRestartCoordinator = choirShadow
+  ? new ChoirRoomRestartCoordinatorExperiment(
+    choirShadow, youtubeTimeline, sourceRuntime,
+    // This source is trusted only while the actual backing socket is Robot.
+    () => backingRuntime.isRobot ? session.backingGeneration : null,
+    // No production authorization integration exists: NEVER grant a new
+    // singer room from an unverified request or a shadow status update.
+    () => false,
+    // No production Take-clearance integration exists: fail closed.
+    () => true,
+    choirShadowConfig,
+  ) : null;
 function tickChoirShadow(nowMs: number) {
-  if (!choirShadow) return;
-  // The backing PCM origin and the Robot control source are independent.
-  // No authenticated Robot backing clock: no new Choir shadow room.
-  choirShadow.observe(nowMs, backingRuntime.isRobot
-    ? session.backingGeneration : null);
+  // No Mic/Backing PCM is copied and no client can call the approval API.
+  choirRestartCoordinator?.observe(nowMs);
 }
-if (choirShadow) {
-  console.log('[choir-shadow] server-owned clock observation only; Choir audio/UI disabled');
+if (choirRestartCoordinator) {
+  console.log('[choir-shadow] server-owned restart observation only; Choir audio/UI disabled');
 }
 const AUTO_CALIBRATE = relayConfig.autoCalibrate;
 const AUTO_CALIBRATION_RETRY_MS = relayConfig.autoCalibrationRetryMs;

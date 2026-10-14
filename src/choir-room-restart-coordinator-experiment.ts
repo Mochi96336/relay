@@ -225,6 +225,15 @@ export class ChoirRoomRestartCoordinatorExperiment {
         || ticket.participantId === this.approved.secondaryId));
   }
 
+  /**
+   * Private binding preflight: no media routing unless this exact capture
+   * still belongs to the active authenticated room and transport registry.
+   */
+  mayAcceptVerifiedTicket(ticket: ChoirFreshCaptureTicket, nowMs: number): boolean {
+    return this.currentTicket(ticket, nowMs)
+      && this.handshake.hasVerifiedTicket(ticket);
+  }
+
   receiveVerifiedMic(
     ticket: ChoirFreshCaptureTicket,
     frame: import('./pcm-frame.js').PcmFrame,

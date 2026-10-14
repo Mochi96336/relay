@@ -437,8 +437,8 @@ export class ChoirDeadlineRoomExperiment {
    * sample positions or supply candidate PCM. A snapshot belongs to exactly
    * one transport / Media Epoch / capture / mapping and analysis attempt.
    *
-   * At most 20 bounded 50ms window checks are performed. Only ONE complete
-   * window is copied (2 x six seconds of Int16 PCM).
+   * At most 50 bounded native-room-frame window checks are performed. Only
+   * ONE complete window is copied (2 x six seconds of Int16 PCM).
    */
   prepareTrustedWorkerContent(
     transportId: string, mediaEpoch: number, nowMs: number,
@@ -457,7 +457,7 @@ export class ChoirDeadlineRoomExperiment {
     const count = 6 * this.sampleRate;
     const nowSample = Math.floor((nowMs - this.roomEpochMs) * this.sampleRate / 1000);
     const alignedEnd = Math.floor(nowSample / this.frameSamples) * this.frameSamples;
-    const step = Math.max(1, Math.round(this.sampleRate / 20)); // 50ms
+    const step = this.frameSamples; // room frame boundary, typically 20ms
     const lastOffset = Math.round(this.sampleRate * .95);
     for (let offset = 0; offset <= lastOffset; offset += step) {
       const endSample = alignedEnd - offset;

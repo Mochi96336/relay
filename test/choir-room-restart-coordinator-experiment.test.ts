@@ -26,6 +26,7 @@ function fixture() {
   let backingGeneration = 9;
   let takeFrozen = false;
   let allowOwner = true;
+  let rolesStillValid = true;
   const config = {
     sampleRate: RATE, frameMs: 20, prebufferMs: 400,
     retentionMs: 3_000, outputHoldbackMs: 200, contentHistoryMs: 7_000,
@@ -38,6 +39,7 @@ function fixture() {
       && approval.actorParticipantId === authority.leaderParticipantId
       && approval.primaryId === 'A' && approval.secondaryId === 'B',
     () => takeFrozen, config, handshake,
+    () => rolesStillValid,
   );
   const startSong = (at = 0) => {
     assert.equal(songs.update(playing(), leader, null, at).accepted, true);
@@ -59,6 +61,7 @@ function fixture() {
     startSong, approve, admit,
     setTakeFrozen: (v: boolean) => { takeFrozen = v; },
     setOwnerPermission: (v: boolean) => { allowOwner = v; },
+    setRolesValid: (v: boolean) => { rolesStillValid = v; },
     setBacking: (v: number) => { backingGeneration = v; },
   };
 }
@@ -275,6 +278,34 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
       'old secondary remains quarantined until close');
     assert.equal(ingress.disconnect(socket, 102), false,
       'retired B transport cannot affect a later primary publisher');
+  });
+
+  test('continuous owner or B-consent loss retires live ticket before its next PCM frame', () => {
+    for (const cause of ['owner-role-revoked', 'take-started'] as const) {
+      const f = fixture();
+      const revision = f.startSong(0);
+      f.coordinator.observe(0);
+      assert.equal(f.approve(revision, 0), true);
+      const a = f.admit(1, 1, 'A', 'socket-A', 1)!;
+      const b = f.admit(1, 1, 'B', 'socket-B', 2)!;
+      assert.ok(a && b);
+      if (cause === 'owner-role-revoked') f.setRolesValid(false);
+      else f.setTakeFrozen(true);
+      assert.equal(f.coordinator.receiveVerifiedMic(b, {
+        generation: 8, firstSampleIndex: 0,
+        pcm: Buffer.from(new Int16Array(960).buffer),
+      }, RATE, 20), false);
+      assert.equal(f.coordinator.preview().state, 'restart-required');
+      assert.equal(f.coordinator.preview().monitoring, 'unavailable');
+      assert.equal(f.coordinator.commitFreshContent(a, 21), false);
+      if (cause === 'owner-role-revoked') f.setRolesValid(true);
+      else f.setTakeFrozen(false);
+      assert.equal(f.coordinator.receiveVerifiedMic(b, {
+        generation: 8, firstSampleIndex: 960,
+        pcm: Buffer.from(new Int16Array(960).buffer),
+      }, RATE, 40), false,
+      'restoring consent or ending Take cannot recover the retired room implicitly');
+    }
   });
 
   test('Robot generation swap, expired leader and playback loss invalidate pending room', () => {

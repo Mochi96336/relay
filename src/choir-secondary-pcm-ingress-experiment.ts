@@ -36,6 +36,8 @@ export type ChoirIngressResult =
 
 export class ChoirSecondaryPcmIngressExperiment {
   private readonly sockets = new WeakMap<ChoirSecondarySocket, BoundSecondary>();
+  /** One physical socket per server-issued transport identity at a time. */
+  private readonly transportBindings = new Map<string, ChoirSecondarySocket>();
   private readonly maxFrameBytes: number;
 
   constructor(
@@ -64,7 +66,8 @@ export class ChoirSecondaryPcmIngressExperiment {
     sourceRate: number,
     nowMs: number,
   ): boolean {
-    if (this.sockets.has(socket) || !this.isSocketOpen(socket)
+    if (this.sockets.has(socket) || this.transportBindings.has(ticket.transportId)
+      || !this.isSocketOpen(socket)
       || socket.role !== 'unknown'
       || !socket.participantId || socket.participantId !== ticket.participantId
       || ticket.seat !== 'secondary'
@@ -80,6 +83,7 @@ export class ChoirSecondaryPcmIngressExperiment {
       ticket, sampleRate: sourceRate, generation: null,
       packetWindowStartMs: nowMs, packetCount: 0,
     });
+    this.transportBindings.set(ticket.transportId, socket);
     return true;
   }
 
@@ -128,9 +132,32 @@ export class ChoirSecondaryPcmIngressExperiment {
     const accepted = this.coordinator.receiveVerifiedMic(
       bound.ticket, frame, bound.sampleRate, nowMs,
     );
-    if (!accepted) return rejected('stale-authority');
+    if (!accepted) {
+      this.releaseTransportBinding(socket, bound.ticket.transportId);
+      return rejected('stale-authority');
+    }
     bound.generation = frame.generation;
     return { intercepted: true, accepted: true, reason: 'accepted' };
+  }
+
+  /** Retire a transport ownership claim without making its old socket PCM fall through. */
+  private releaseTransportBinding(socket: ChoirSecondarySocket, transportId: string) {
+    if (this.transportBindings.get(transportId) === socket)
+      this.transportBindings.delete(transportId);
+  }
+
+  /** Bounded periodic cleanup when the trusted room changes but old B is silent. */
+  sweepStale(nowMs: number): number {
+    let released = 0;
+    for (const [transportId, socket] of this.transportBindings) {
+      const bound = this.sockets.get(socket);
+      if (!bound || !this.isSocketOpen(socket)
+        || !this.coordinator.mayAcceptVerifiedTicket(bound.ticket, nowMs)) {
+        this.releaseTransportBinding(socket, transportId);
+        released++;
+      }
+    }
+    return released;
   }
 
   /** A physical close revokes its exact admitted transport, never another Mic. */
@@ -138,6 +165,7 @@ export class ChoirSecondaryPcmIngressExperiment {
     const bound = this.sockets.get(socket);
     if (!bound) return false;
     this.sockets.delete(socket);
+    this.releaseTransportBinding(socket, bound.ticket.transportId);
     return this.coordinator.disconnectVerifiedSinger(bound.ticket, nowMs);
   }
 

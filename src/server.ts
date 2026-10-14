@@ -336,6 +336,7 @@ const choirShadow = relayConfig.choirShadow
     youtubeTimeline, sourceRuntime, choirShadowConfig,
   ) : null;
 let choirConsent: ChoirSecondaryConsentExperiment | null = null;
+let choirSourceMirror: ChoirTrustedSourceMirrorExperiment | null = null;
 const choirRestartCoordinator = choirShadow
   ? new ChoirRoomRestartCoordinatorExperiment(
     choirShadow, youtubeTimeline, sourceRuntime,
@@ -367,6 +368,7 @@ const choirRestartCoordinator = choirShadow
         primary, id, epoch, performance.now(),
       )),
     }),
+    (retiredRoomEpoch) => { choirSourceMirror?.revokeRoom(retiredRoomEpoch); },
   ) : null;
 // B's secondary byte path is only armed after explicit double-flag
 // A/B consent and server-issued Media Epoch registration. Never routes
@@ -437,7 +439,7 @@ const choirSecondaryTickets = choirRestartCoordinator && choirConsent && choirSe
 // Explicitly double-opted-in experimental PCM mirror. Reads only server-owned
 // verified publisher and Robot backing frames, *after* ordinary N=1 admission.
 // The mirrored canonical room has no route to output/monitor/record.
-const choirSourceMirror = choirMediaEnabled && choirRestartCoordinator
+choirSourceMirror = choirMediaEnabled && choirRestartCoordinator
   ? new ChoirTrustedSourceMirrorExperiment(
     choirRestartCoordinator, () => ({
       primarySocket: micRuntime.publisher,

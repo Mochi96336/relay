@@ -17,6 +17,47 @@ function frame(generation: number | null, firstSampleIndex: number | null,
 }
 
 describe('shared canonical PCM ingestion without room or singer coupling', () => {
+
+  test('experimental mirror excludes partially clipped and clock-trimmed native PCM', () => {
+    const timeline = emptyPcmTimeline();
+    const ingest = (packet: PcmFrame) => ingestPcmTimeline({
+      timeline, frame: packet, sourceRate: RATE, mixRate: RATE,
+      roomSampleNow: () => 960, sourceRateDefinesCapture: true,
+      auditNativeMirroring: true,
+    });
+    assert.equal(ingest(frame(4, 0)).nativeFrameMirroringSafe, true);
+    const partial = ingest(frame(4, 480, 960, 23_000));
+    assert.equal(partial.samples.length, 480, 'production retains only the new tail');
+    assert.equal(partial.nativeFrameMirroringSafe, false,
+      'Choir cannot mirror the rejected first 480 native samples');
+    assert.equal(ingest(frame(4, 0)).nativeFrameMirroringSafe, undefined);
+    assert.equal(ingest(frame(4, 1_440)).nativeFrameMirroringSafe, true,
+      'a later complete packet remains mirrorable');
+
+    const trimmed = ingestPcmTimeline({
+      timeline: emptyPcmTimeline(), frame: frame(5, 0),
+      sourceRate: RATE, mixRate: RATE, roomSampleNow: () => 960,
+      auditNativeMirroring: true,
+      trimSourcePacket: ({ samples }) => samples.slice(1),
+    });
+    assert.equal(trimmed.nativeFrameMirroringSafe, false,
+      'a changed PCM span is not an exact native admission');
+  });
+
+  test('native mirror acceptance handles 44.1 kHz phase without assuming output counts', () => {
+    const timeline = emptyPcmTimeline();
+    for (const index of [0, 441, 882]) {
+      const pcm = new Int16Array(441).fill(2_000);
+      const proof = ingestPcmTimeline({
+        timeline, frame: { generation: 10, firstSampleIndex: index, pcm: Buffer.from(pcm.buffer) },
+        sourceRate: 44_100, mixRate: RATE, roomSampleNow: () => index * RATE / 44_100 + 480,
+        auditNativeMirroring: true,
+      });
+      assert.equal(proof.nativeFrameMirroringSafe, true,
+        'complete native source should not require native==mix sample counts');
+    }
+  });
+
   test('positioned gaps remain silent; late overlapping packets never replay at now', () => {
     const timeline = emptyPcmTimeline();
     let clock = 960;

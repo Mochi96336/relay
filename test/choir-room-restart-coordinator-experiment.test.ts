@@ -168,6 +168,12 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
     const { mic, backing } = laggedMultibandMusicPair(6, RATE, 120, { singerGain: .18 });
     const chunk = 2 * RATE;
     for (let at = 20; at <= 6_000; at += 20) {
+      // The real SongSession requires accepted fresh PLAYING telemetry;
+      // a six-second test without heartbeats must fail closed.
+      if (at % 1_000 === 0)
+        assert.equal(f.songs.update(
+          playing({ currentTime: 12 + at / 1_000 }), leader, null, at,
+        ).accepted, true);
       if (at % 2_000 === 0) {
         const first = (at / 2_000 - 1) * chunk;
         const end = first + chunk;

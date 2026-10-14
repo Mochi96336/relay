@@ -49,6 +49,27 @@ export type ChoirDeadlineResult =
   | { state: 'resync-required'; frames: []; reason: 'late-clock' | 'time-regression'
       | 'playback-mapping-changed' };
 
+/** Server-private immutable authority captured with the source PCM window.
+ * Raw PCM exists only transiently on the main thread before Worker transfer.
+ */
+export type ChoirWorkerContentSnapshot = {
+  readonly participantId: string;
+  readonly transportId: string;
+  readonly mediaEpoch: number;
+  readonly songEpoch: number;
+  readonly backingGeneration: number;
+  readonly videoId: string;
+  readonly mappingEpoch: number;
+  readonly captureGeneration: number;
+  readonly sourceRate: number;
+  readonly startSample: number;
+  readonly endSample: number;
+  readonly attempt: number;
+  readonly preparedAtMs: number;
+  readonly mic: Int16Array;
+  readonly backing: Int16Array;
+};
+
 export type ChoirTrustedAdmissionResult =
   | { ok: true; mediaEpoch: number; idempotent: boolean }
   | { ok: false; reason: 'invalid-clock' | 'rebind-deferred' | 'room-rejected'
@@ -83,6 +104,7 @@ export class ChoirDeadlineRoomExperiment {
     playbackRate: number; playing: boolean;
   } | null = null;
   private readonly contentRevisions = new Map<string, number>();
+  private readonly contentAttempts = new Map<string, number>();
   private readonly pendingCanonicalContent = new Map<string, {
     participantId: string; transportId: string; mediaEpoch: number;
     songEpoch: number; backingGeneration: number; videoId: string;
@@ -406,6 +428,110 @@ export class ChoirDeadlineRoomExperiment {
         p.participantId, this.room.contentHistorySamples(p.participantId),
       ]),
     );
+  }
+
+
+  /**
+   * Proof-only Worker preparation. The server picks a fully positioned window
+   * ending within one second of the trusted room clock; clients cannot choose
+   * sample positions or supply candidate PCM. A snapshot belongs to exactly
+   * one transport / Media Epoch / capture / mapping and analysis attempt.
+   *
+   * At most 20 bounded 50ms window checks are performed. Only ONE complete
+   * window is copied (2 x six seconds of Int16 PCM).
+   */
+  prepareTrustedWorkerContent(
+    transportId: string, mediaEpoch: number, nowMs: number,
+  ): ChoirWorkerContentSnapshot | null {
+    if (!this.sealDueNow(nowMs) || this.videoId === null
+      || !this.playbackMapping?.playing) return null;
+    const active = this.registry.activePublisherForTransport(transportId);
+    if (!active || active.mediaEpoch !== mediaEpoch) return null;
+    const id = {
+      participantId: active.participantId, mediaEpoch,
+      songEpoch: this.songEpoch, backingGeneration: this.backingGeneration,
+    };
+    const state = this.room.contentProofState(id);
+    if (!state || state.captureGeneration === null || state.sourceRate === null
+      || !state.awaitingCalibration) return null;
+    const count = 6 * this.sampleRate;
+    const nowSample = Math.floor((nowMs - this.roomEpochMs) * this.sampleRate / 1000);
+    const alignedEnd = Math.floor(nowSample / this.frameSamples) * this.frameSamples;
+    const step = Math.max(1, Math.round(this.sampleRate / 20)); // 50ms
+    const lastOffset = Math.round(this.sampleRate * .95);
+    for (let offset = 0; offset <= lastOffset; offset += step) {
+      const endSample = alignedEnd - offset;
+      const startSample = endSample - count;
+      if (startSample < 0) continue;
+      const clip = this.room.readTrustedContentWindow(
+        id, state.captureGeneration, startSample,
+      );
+      if (!clip) continue;
+      const attempt = (this.contentAttempts.get(active.participantId) ?? 0) + 1;
+      this.contentAttempts.set(active.participantId, attempt);
+      this.pendingCanonicalContent.delete(active.participantId);
+      return {
+        participantId: active.participantId, transportId, mediaEpoch,
+        songEpoch: this.songEpoch, backingGeneration: this.backingGeneration,
+        videoId: this.videoId, mappingEpoch: this.playbackMapping.mappingEpoch,
+        captureGeneration: state.captureGeneration, sourceRate: state.sourceRate,
+        startSample, endSample, attempt, preparedAtMs: nowMs,
+        mic: clip.mic, backing: clip.backing,
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Accept a result from the server-owned analysis worker ONLY after all
+   * source authority and clock facts match the immutable PCM snapshot.
+   * This does not commit sound; commitTrustedCanonicalContent owns the final
+   * one-time eligibility check and applies the stored result.
+   */
+  stageTrustedWorkerContent(
+    proof: ChoirWorkerContentSnapshot,
+    result: { micLagMs: number; confidence: number }, nowMs: number,
+  ): boolean {
+    if (!this.sealDueNow(nowMs)
+      || !this.playbackMapping?.playing
+      || !Number.isFinite(result.micLagMs)
+      || !Number.isFinite(result.confidence)
+      || result.confidence <= 0 || result.confidence > 1
+      || Math.abs(result.micLagMs) > 2_800
+      || this.videoId !== proof.videoId
+      || this.songEpoch !== proof.songEpoch
+      || this.backingGeneration !== proof.backingGeneration
+      || this.playbackMapping.mappingEpoch !== proof.mappingEpoch
+      || this.contentAttempts.get(proof.participantId) !== proof.attempt
+      || nowMs < proof.preparedAtMs
+      || nowMs - proof.preparedAtMs > 2_500
+      || !Number.isSafeInteger(proof.endSample)
+      || Math.abs(Math.floor((nowMs - this.roomEpochMs) * this.sampleRate / 1000)
+        - proof.endSample) > this.sampleRate) return false;
+    const active = this.registry.activePublisherForTransport(proof.transportId);
+    if (!active || active.participantId !== proof.participantId
+      || active.mediaEpoch !== proof.mediaEpoch) return false;
+    const id = {
+      participantId: active.participantId, mediaEpoch: proof.mediaEpoch,
+      songEpoch: this.songEpoch, backingGeneration: this.backingGeneration,
+    };
+    const state = this.room.contentProofState(id);
+    if (!state || !state.awaitingCalibration
+      || state.captureGeneration !== proof.captureGeneration
+      || state.sourceRate !== proof.sourceRate) return false;
+    const revision = (this.contentRevisions.get(proof.participantId) ?? 0) + 1;
+    this.contentRevisions.set(proof.participantId, revision);
+    // One attempt is one-shot, including after a rejected commit.
+    this.contentAttempts.delete(proof.participantId);
+    this.pendingCanonicalContent.set(proof.participantId, {
+      participantId: proof.participantId, transportId: proof.transportId,
+      mediaEpoch: proof.mediaEpoch, songEpoch: this.songEpoch,
+      backingGeneration: this.backingGeneration, videoId: this.videoId,
+      captureGeneration: proof.captureGeneration, sourceRate: proof.sourceRate,
+      revision, measuredAtMs: proof.preparedAtMs, endSample: proof.endSample,
+      advanceMs: result.micLagMs, mappingEpoch: proof.mappingEpoch,
+    });
+    return true;
   }
 
   /**

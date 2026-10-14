@@ -137,6 +137,13 @@ export class ChoirTrustedSourceMirrorExperiment {
     );
   }
 
+  /** The coordinator has retired this exact Room Epoch, even if no new PCM arrives. */
+  revokeRoom(roomEpoch: number): boolean {
+    if (this.binding?.primaryTicket.roomEpoch !== roomEpoch) return false;
+    this.binding = null;
+    return true;
+  }
+
   /** Native source capture/control changed: never combine old PCM history. */
   sourceDiscontinuity(nowMs: number): boolean {
     if (!this.binding) return false;

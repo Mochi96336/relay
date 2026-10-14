@@ -1153,3 +1153,57 @@ These are conservative *admission* fences, not time-alignment solvers.
 Real-world two-device Content and drift measurements are still required
 before any singer can be made audible. A slow or interrupted capture is
 aborted rather than guessed forward.
+
+## Trusted A + Robot production PCM mirror (2026-10-14)
+
+The experimental N=2 room now has a **source-owned PCM bridge** instead of
+waiting for clients to claim that two audio streams belong to the same song.
+`ChoirTrustedSourceMirrorExperiment` binds at A's successful explicit room
+start to all of these actual server-observed identities: current production
+N=1 publisher socket, authenticated primary Mic owner, native v2 Mic capture
+generation, Mic native sample rate, actual Robot backing transport socket,
+Robot PCM capture generation/rate, and Robot control-source generation.
+
+The bridge cannot mint a Media Epoch, read an arbitrary browser filename or
+claim an unrelated song. Once bound, it is fed ONLY from:
+
+- `processPublisherFrame()`, **after the existing N=1 ordered decoder and
+  production Session have accepted a positioned primary Mic PCM frame**.
+  Browser packets on B's transport, old publisher packets, unpositioned
+  legacy Mic data, or invalid/rejected duplicates cannot become Choir A
+  evidence. Native A and B rates need not be the same: each track retains
+  its own source rate before canonical room resampling.
+- `audioUplinkReceived()` on the existing Robot backing path, **after
+  Session has accepted a true Robot PCM frame**. The source must still be
+  the same trusted Robot backing socket, capture generation, rate and
+  control generation that were fixed at explicit room admission.
+
+Both actual source clocks are placed into the same isolated canonical room
+time axis using its existing native-generation-aware MicTrack and
+PcmTimeline mapping. Existing separate seven-second Content history buffers
+accumulate those accepted positioned samples; the ordinary three-second
+live mixer retention was **not** increased to six seconds. The existing
+five-millisecond mixer timer may drain the experimental room's due frames
+into numeric evidence only; none of its PCM, effects or monitor output are
+sent to N=1 clients or Take recording.
+
+The bridge rechecks source ownership before every frame. Replacement of
+A's publisher socket, Mic capture generation, Robot PCM source/socket or
+Robot control generation retires the *entire experimental Room Epoch*
+rather than combining old and new chunks or automatically making B the
+primary. An A room cannot start without a true positioned v2 generation.
+A real-six-second Content contract test feeds music-like Mic and Robot
+PCM through this server-owned bridge alongside B's separately verified
+Mic and proves both independent Content analyses can accept and commit,
+while a separate test shows each source swap invalidates the room and
+refuses subsequent old PCM.
+
+**Not yet bridged:** invoking the expensive six-second Content analyzer
+safely in a real asynchronous worker from the production Node server;
+this test calls the analyzer explicitly in its isolated fixture. The
+browser and server have a trusted data path, but **no live Choir microphone
+has been unmuted and there is no N=2 output**. Content is not a mere
+continuous PCM byte counter: the solver must reject incomplete, stale,
+concealed or mismatched-mapping windows before using an inferred lag.
+Actual dual-phone Content measurements and song-clock calibration remain
+required before any of this is considered deployable.

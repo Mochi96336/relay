@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { startRelay, RelayClient, sleep } from './helpers/harness.js';
 import { encodePcmFrame } from '../src/pcm-frame.js';
+import { encodeAudioPacket } from '../src/audio-packet.js';
 import { participantIdForCapability } from '../src/participant-capability.js';
 
 /**
@@ -219,6 +220,143 @@ test('real authenticated A and B complete opt-in and withdrawal without obtainin
       && m.status === 'withdrawn')).secondaryId, idB);
   } finally {
     for (const c of clients) c.close();
+    await relay.stop();
+  }
+});
+
+test('double opt-in A/B room issues real one-use v2 B Media Epoch but no N=1 audio takeover', async () => {
+  const relay = await startRelay({
+    RELAY_CHOIR_SHADOW: '1', RELAY_CHOIR_MEDIA_EXPERIMENT: '1',
+    RELAY_TEST_LEGACY_PARTICIPANTS: '0',
+    RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000',
+  });
+  const clients: RelayClient[] = [];
+  const connect = async () => {
+    const c = await RelayClient.connect(relay);
+    clients.push(c);
+    return c;
+  };
+  try {
+    const [a, b, publisher, robotBacking, robotControl, bMedia] = await Promise.all(
+      Array.from({ length: 6 }, () => connect()),
+    );
+    const capA = 'e'.repeat(64);
+    const capB = 'f'.repeat(64);
+    const idA = participantIdForCapability(capA)!;
+    const idB = participantIdForCapability(capB)!;
+    const authenticate = async (client: RelayClient, id: string, cap: string) => {
+      client.send({ type: 'participant-authenticate', participantId: id,
+        capability: cap, nickname: id === idA ? 'A' : 'B' });
+      await client.waitFor((m) =>
+        m.type === 'participant-authenticated' && m.participantId === id);
+    };
+    await Promise.all([
+      authenticate(a, idA, capA),
+      authenticate(b, idB, capB),
+      authenticate(publisher, idA, capA),
+      authenticate(bMedia, idB, capB),
+    ]);
+    assert.equal((await a.waitForType('choir-consent-available')).mode,
+      'media-experiment');
+    publisher.send({ type: 'register', role: 'publisher', sampleRate: 48_000,
+      captureGeneration: 1 });
+    await publisher.waitFor((m) => m.type === 'registered' && m.role === 'publisher');
+    robotBacking.send({ type: 'register', role: 'backing', robot: true,
+      sampleRate: 48_000, captureGeneration: 9, captureSampleCursor: 0 });
+    await robotBacking.waitFor((m) => m.type === 'registered' && m.role === 'backing');
+    robotBacking.resumeCaptureSession(9, 0);
+    robotBacking.sendPcm(Buffer.from(new Int16Array(960).fill(900).buffer));
+    robotControl.send({ type: 'robot-source-hello' });
+    a.send({ type: 'playback-hello', playbackTransportId: 'choir-media-playback-a',
+      playbackGeneration: 1 });
+    await a.waitForType('playback-registered');
+    a.send({ type: 'room-song-command', commandId: 'media-load-1',
+      expectedRevision: 0, action: 'load', videoId: 'dQw4w9WgXcQ',
+      positionSeconds: 10 });
+    await a.waitFor((m) => m.type === 'room-song-command-apply'
+      && m.commandId === 'media-load-1');
+    const telemetry = (state: number, position: number) => ({
+      type: 'youtube-telemetry', videoId: 'dQw4w9WgXcQ', state,
+      currentTime: position, duration: 200, playbackRate: 1,
+      bufferedFraction: .8, playbackTransportId: 'choir-media-playback-a',
+      playbackGeneration: 1,
+    });
+    a.send(telemetry(5, 10));
+    await a.waitFor((m) => m.type === 'room-song-command-complete'
+      && m.commandId === 'media-load-1');
+    a.send({ type: 'room-song-command', commandId: 'media-play-1',
+      expectedRevision: 1, action: 'play' });
+    await a.waitFor((m) => m.type === 'room-song-command-apply'
+      && m.commandId === 'media-play-1');
+    a.send(telemetry(1, 10.1));
+    await a.waitFor((m) => m.type === 'room-song-command-complete'
+      && m.commandId === 'media-play-1');
+    await sleep(350);
+
+    // An authenticated B without a room can never claim a Media Epoch.
+    b.send({ type: 'choir-secondary-media-claim-request' });
+    assert.equal((await b.waitFor((m) =>
+      m.type === 'choir-media-rejected' && m.reason === 'claim-not-authorized')).reason,
+    'claim-not-authorized');
+
+    a.send({ type: 'choir-secondary-invite', secondaryId: idB });
+    await a.waitForType('choir-secondary-invite-acknowledged');
+    const invitation = await b.waitForType('choir-secondary-invitation');
+    b.send({ type: 'choir-secondary-accept', inviteId: invitation.inviteId });
+    await b.waitFor((m) => m.type === 'choir-secondary-consent-status'
+      && m.status === 'accepted');
+
+    a.send({ type: 'choir-room-begin', secondaryId: idB });
+    const started = await a.waitFor((m) =>
+      m.type === 'choir-room-ready' || m.type === 'choir-media-rejected');
+    assert.equal(started.type, 'choir-room-ready',
+      `room did not accept explicit dual-opt-in: ${JSON.stringify(started)}`);
+    assert.equal(started.secondary, 'join-required');
+
+    b.send({ type: 'choir-secondary-media-claim-request' });
+    const claim = await b.waitForType('choir-secondary-media-claim');
+    assert.match(claim.claimToken, /^[0-9a-f]{64}$/);
+    assert.ok(claim.expiresInMs <= 15_000);
+
+    bMedia.send({ type: 'choir-secondary-media-register',
+      claimToken: claim.claimToken, sampleRate: 48_000,
+      packetVersion: 2, roomEpoch: 9_999, seat: 'primary',
+      mediaEpoch: 9_999 });
+    const registration = await bMedia.waitFor((m) =>
+      m.type === 'choir-secondary-media-registered'
+      || m.type === 'choir-media-rejected');
+    assert.equal(registration.type, 'choir-secondary-media-registered',
+      `B's real authenticated media Socket could not redeem: ${JSON.stringify(registration)}`);
+    assert.ok(registration.mediaEpoch > 0);
+    assert.equal(registration.roomEpoch, started.roomEpoch);
+    assert.equal(registration.awaitingContent, true);
+    assert.equal(bMedia.messages.some(m => m.type === 'registered' && m.role === 'publisher'),
+      false, 'B never claims the production N=1 Mic');
+
+    bMedia.sendBinary(encodeAudioPacket({
+      source: 'mic', generation: 7, firstSampleIndex: 0, sequence: 0,
+      pcm: Buffer.from(new Int16Array(960).fill(4_000).buffer),
+    }));
+    bMedia.send({ type: 'register', role: 'publisher', sampleRate: 48_000 });
+    await sleep(75);
+    assert.equal(bMedia.messages.some(m => m.type === 'registered'),
+      false, 'an admitted B PCM socket cannot take another production role');
+    // B's original consent can still revoke audio admission immediately.
+    b.send({ type: 'choir-secondary-withdraw' });
+    await b.waitFor((m) => m.type === 'choir-secondary-consent-status'
+      && m.status === 'withdrawn');
+    bMedia.sendBinary(encodeAudioPacket({
+      source: 'mic', generation: 7, firstSampleIndex: 960, sequence: 1,
+      pcm: Buffer.from(new Int16Array(960).fill(4_000).buffer),
+    }));
+    await sleep(50);
+    b.send({ type: 'choir-secondary-media-claim-request' });
+    assert.equal((await b.waitFor((m) => m.type === 'choir-media-rejected'
+      && m.reason === 'claim-not-authorized')).reason, 'claim-not-authorized');
+    assert.equal(publisher.errors.length, 0,
+      'the production N=1 publisher remains unaffected by B experimental PCM');
+  } finally {
+    for (const client of clients) client.close();
     await relay.stop();
   }
 });

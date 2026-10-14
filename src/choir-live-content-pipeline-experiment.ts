@@ -76,7 +76,7 @@ export class ChoirLiveContentPipelineExperiment {
       // the buffers to avoid another two copies in the main audio thread.
       worker.postMessage({
         id, sampleRate: 48_000, mic: job.proof.mic, backing: job.proof.backing,
-      }, [job.proof.mic.buffer, job.proof.backing.buffer]);
+      }, [job.proof.mic.buffer as ArrayBuffer, job.proof.backing.buffer as ArrayBuffer]);
       return true;
     } catch {
       this.rejectActive(true);

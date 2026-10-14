@@ -149,9 +149,14 @@ test('double opt-in shows explicit A room creation and B isolated media request 
     }));
   });
   await expect(page.locator('#choir-secondary-connect')).toBeVisible();
-  await page.locator('#choir-secondary-connect').click();
-  expect((await page.evaluate(() => window.__choirSent)).at(-1)).toEqual({
-    type: 'choir-secondary-media-claim-request',
+  await page.evaluate(() => {
+    window.__choirCaptureStarts = 0;
+    window.addEventListener('relay-choir-start-secondary-capture',
+      () => { window.__choirCaptureStarts++; });
   });
+  await page.locator('#choir-secondary-connect').click();
+  expect(await page.evaluate(() => ({
+    starts: window.__choirCaptureStarts, commands: window.__choirSent,
+  }))).toEqual({ starts: 1, commands: [] });
   await expect(page.locator('#choir-consent-note')).toContainText('尚未開放雙人收音');
 });

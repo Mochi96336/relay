@@ -329,7 +329,7 @@
       'choir.responding': '正在送出回覆…',
       'choir.beginRoom': '建立實驗房間',
       'choir.connectMedia': '連接副 Mic 測試',
-      'choir.roomReady': '實驗房間已建立，兩人仍須完成校準。',
+      'choir.roomReady': '實驗房間已建立，兩人仍須完成時間對齊。',
       'choir.connecting': '正在建立隔離的實驗媒體連線…',
       'choir.mediaReady': '副 Mic 連線成功，尚未開始收音。',
       'choir.mediaRejected': '實驗媒體連線遭拒或中斷。',

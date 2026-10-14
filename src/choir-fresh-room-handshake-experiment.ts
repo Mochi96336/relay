@@ -17,6 +17,8 @@ export type FreshChoirRoomSpec = Omit<ChoirDeadlineRoomOptions,
   videoId: string;
   roomEpochMs: number;
   mappingEpoch: number;
+  /** Playback speed confirmed by SongSession, never supplied by Mic packets. */
+  playbackRate?: number;
   primaryId: string;
   secondaryId: string;
 };
@@ -79,7 +81,7 @@ export class ChoirFreshRoomHandshakeExperiment {
       mappingEpoch: spec.mappingEpoch, videoId: spec.videoId,
       songEpoch: spec.songEpoch, backingGeneration: spec.backingGeneration,
       robotCaptureGeneration: spec.backingGeneration,
-      playbackRate: 1, playing: true,
+      playbackRate: spec.playbackRate ?? 1, playing: true,
     }, spec.roomEpochMs)) return false;
     this.lastRoomEpoch = spec.roomEpoch;
     this.lastSongEpoch = spec.songEpoch;

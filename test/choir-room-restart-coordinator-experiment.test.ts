@@ -8,6 +8,7 @@ import { ChoirRoomRestartCoordinatorExperiment } from '../src/choir-room-restart
 import { laggedMultibandMusicPair } from './helpers/music-calibration.js';
 import { ChoirSecondaryPcmIngressExperiment } from '../src/choir-secondary-pcm-ingress-experiment.js';
 import { encodePcmFrame } from '../src/pcm-frame.js';
+import { encodeAudioPacket } from '../src/audio-packet.js';
 
 const VIDEO = 'dQw4w9WgXcQ';
 const RATE = 48_000;
@@ -233,6 +234,47 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
     assert.equal(ingress.isAttached(socket), false);
     assert.equal(ingress.bindVerifiedSecondary(socket, b, RATE, 103), false,
       'revoked old ticket cannot bind again after the Seek');
+  });
+
+  test('real coordinator ingests phone AudioPacket v2 for B, isolates N=1 and retires it on Seek', () => {
+    const f = fixture();
+    const revision = f.startSong(0);
+    f.coordinator.observe(0);
+    assert.equal(f.approve(revision, 0), true);
+    const a = f.admit(1, 1, 'A', 'socket-A', 1)!;
+    const b = f.admit(1, 1, 'B', 'socket-B', 2)!;
+    assert.ok(a && b);
+    type Socket = { participantId: string; role: string; open: boolean };
+    const socket: Socket = { participantId: 'B', role: 'unknown', open: true };
+    const ingress = new ChoirSecondaryPcmIngressExperiment(
+      f.coordinator, candidate => (candidate as Socket).open,
+    );
+    assert.equal(ingress.bindVerifiedSecondary(socket, b, RATE, 3, 2), true);
+    const pcm = Buffer.from(new Int16Array(960).fill(4_000).buffer);
+    const phonePacket = (sequence: number, firstSampleIndex: number) =>
+      encodeAudioPacket({
+        source: 'mic', generation: 8, sequence, firstSampleIndex, pcm,
+      });
+    assert.deepEqual(ingress.interceptBinary(socket, phonePacket(0, 0), 20), {
+      intercepted: true, accepted: true, reason: 'accepted',
+    });
+    assert.deepEqual(ingress.interceptBinary(socket, phonePacket(0, 0), 30), {
+      intercepted: true, accepted: false, reason: 'duplicate-packet',
+    });
+    assert.deepEqual(ingress.interceptBinary(socket, phonePacket(1, 960), 40), {
+      intercepted: true, accepted: true, reason: 'accepted',
+    });
+    assert.equal(f.coordinator.previewForVerifiedSinger('B')?.stage,
+      'calibration-required', 'PCM arrival alone never unmutes B');
+    assert.equal(f.songs.update(playing({ currentTime: 90 }), leader, null, 100).accepted, true);
+    assert.deepEqual(ingress.interceptBinary(socket, phonePacket(2, 1920), 101), {
+      intercepted: true, accepted: false, reason: 'stale-authority',
+    }, 'a fresh v2 sequence is still invalid after the song timeline moved');
+    assert.equal(f.coordinator.preview().monitoring, 'unavailable');
+    assert.equal(ingress.isAttached(socket), true,
+      'old secondary remains quarantined until close');
+    assert.equal(ingress.disconnect(socket, 102), false,
+      'retired B transport cannot affect a later primary publisher');
   });
 
   test('Robot generation swap, expired leader and playback loss invalidate pending room', () => {

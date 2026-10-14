@@ -172,12 +172,15 @@ test('real authenticated A and B complete opt-in and withdrawal without obtainin
     await sleep(350); // One regular server-owned shadow clock observation.
 
     a.send({ type: 'choir-secondary-invite', secondaryId: idB });
+    const decision = await a.waitFor((m) =>
+      m.type === 'choir-secondary-invite-acknowledged'
+      || m.type === 'choir-consent-rejected');
+    assert.equal(decision.type, 'choir-secondary-invite-acknowledged',
+      `server refused a fully authenticated invite: ${JSON.stringify(decision)}`);
     const invitation = await b.waitForType('choir-secondary-invitation');
     assert.equal(invitation.primaryId, idA);
     assert.ok(Number.isSafeInteger(invitation.roomEpoch));
     assert.equal(invitation.videoId, 'dQw4w9WgXcQ');
-    await a.waitForType('choir-secondary-invite-acknowledged');
-
     b.send({ type: 'choir-secondary-accept', inviteId: invitation.inviteId });
     assert.equal((await a.waitFor((m) => m.type === 'choir-secondary-consent-status'
       && m.status === 'accepted')).secondaryId, idB);

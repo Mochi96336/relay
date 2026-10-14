@@ -1,0 +1,204 @@
+import assert from 'node:assert/strict';
+import { describe, test } from 'node:test';
+import { SongSession } from '../src/song-session.js';
+import { SourceRuntime } from '../src/source-runtime.js';
+import { ChoirShadowLifecycleExperiment } from '../src/choir-shadow-lifecycle-experiment.js';
+import { ChoirFreshRoomHandshakeExperiment } from '../src/choir-fresh-room-handshake-experiment.js';
+import { ChoirRoomRestartCoordinatorExperiment } from '../src/choir-room-restart-coordinator-experiment.js';
+import { laggedMultibandMusicPair } from './helpers/music-calibration.js';
+
+const VIDEO = 'dQw4w9WgXcQ';
+const RATE = 48_000;
+const leader = { participantId: 'owner', transportId: 'playback-tab-owner', generation: 1 };
+const playing = (values: Record<string, unknown> = {}) => ({
+  videoId: VIDEO, state: 1, currentTime: 12, duration: 240,
+  playbackRate: 1, bufferedFraction: .8, ...values,
+});
+type RobotSocket = { open: boolean; isRobotSource?: boolean };
+function fixture() {
+  const songs = new SongSession();
+  const robot = new SourceRuntime<RobotSocket>({ isConnected: s => s.open });
+  const robotSocket: RobotSocket = { open: true };
+  robot.attachRobot(robotSocket);
+  let backingGeneration = 9;
+  let takeFrozen = false;
+  let allowOwner = true;
+  const config = {
+    sampleRate: RATE, frameMs: 20, prebufferMs: 400,
+    retentionMs: 3_000, outputHoldbackMs: 200, contentHistoryMs: 7_000,
+  };
+  const shadow = new ChoirShadowLifecycleExperiment(songs, robot, config);
+  const handshake = new ChoirFreshRoomHandshakeExperiment();
+  const coordinator = new ChoirRoomRestartCoordinatorExperiment(
+    shadow, songs, robot, () => backingGeneration,
+    (approval, authority) => allowOwner
+      && approval.actorParticipantId === authority.leaderParticipantId
+      && approval.primaryId === 'A' && approval.secondaryId === 'B',
+    () => takeFrozen, config, handshake,
+  );
+  const startSong = (at = 0) => {
+    assert.equal(songs.update(playing(), leader, null, at).accepted, true);
+    return (songs.statusPayload(at) as { revision: number }).revision;
+  };
+  const approve = (revision: number, at: number, expected = 0, actor = 'owner') =>
+    coordinator.approveTrustedRestart({
+      actorParticipantId: actor, primaryId: 'A', secondaryId: 'B',
+      expectedPlaybackRevision: revision, expectedRetiredRoomEpoch: expected,
+      nowMs: at,
+    });
+  const admit = (roomEpoch: number, songEpoch: number, id: string, transport: string, at: number) =>
+    coordinator.admitVerifiedSinger({
+      roomEpoch, songEpoch, verifiedParticipantId: id, transportId: transport,
+      nowMs: at,
+    });
+  return {
+    songs, robot, robotSocket, shadow, handshake, coordinator,
+    startSong, approve, admit,
+    setTakeFrozen: (v: boolean) => { takeFrozen = v; },
+    setOwnerPermission: (v: boolean) => { allowOwner = v; },
+    setBacking: (v: number) => { backingGeneration = v; },
+  };
+}
+
+describe('offline Choir Room Restart Coordinator uses server owned playback, robot and role authority', () => {
+  test('no playback, spoofed operator, stale SongSession CAS or frozen Take can mint a room', () => {
+    const f = fixture();
+    assert.equal(f.coordinator.observe(0).state, 'awaiting-authority');
+    assert.equal(f.approve(1, 0), false);
+    const revision = f.startSong(1);
+    assert.equal(f.coordinator.observe(1).state, 'awaiting-authority');
+    assert.equal(f.approve(revision - 1, 1), false);
+    assert.equal(f.approve(revision, 1, 0, 'intruder'), false);
+    f.setOwnerPermission(false);
+    assert.equal(f.approve(revision, 1), false);
+    f.setOwnerPermission(true);
+    f.setTakeFrozen(true);
+    assert.equal(f.approve(revision, 1), false);
+    f.setTakeFrozen(false);
+    assert.equal(f.approve(revision, 2), true);
+    assert.equal(f.approve(revision, 3), false,
+      'a normal playing heartbeat cannot replay an already consumed restart approval');
+    assert.deepEqual(f.coordinator.preview(), {
+      state: 'awaiting-primary', roomEpoch: 1, songEpoch: 1,
+      videoId: VIDEO, primaryId: 'A', secondaryId: 'B',
+      primary: 'join-required', secondary: 'join-required',
+      monitoring: 'backing-only',
+    });
+    assert.equal(f.coordinator.previewForVerifiedSinger('intruder'), null);
+    assert.deepEqual(f.coordinator.previewForVerifiedSinger('B'), {
+      roomEpoch: 1, songEpoch: 1, videoId: VIDEO, seat: 'secondary',
+      stage: 'join-required',
+    });
+    assert.equal(f.admit(1, 1, 'B', 'socket-B', 4), null);
+    const a = f.admit(1, 1, 'A', 'socket-A', 5);
+    assert.ok(a);
+    assert.equal(a?.mediaEpoch, 1);
+    assert.equal(f.coordinator.preview().state, 'awaiting-secondary');
+    assert.equal(f.coordinator.previewForVerifiedSinger('A')?.stage, 'calibration-required');
+    const b = f.admit(1, 1, 'B', 'socket-B', 6);
+    assert.ok(b);
+    assert.ok(b!.mediaEpoch > a!.mediaEpoch);
+    assert.equal(f.coordinator.preview().state, 'awaiting-content');
+    assert.equal(f.coordinator.preview().monitoring, 'backing-only');
+  });
+
+  test('accepted Seek retires both tickets; no automatic restart and no B takeover', () => {
+    const f = fixture();
+    const original = f.startSong(0);
+    f.coordinator.observe(0);
+    assert.equal(f.approve(original, 0), true);
+    const a = f.admit(1, 1, 'A', 'socket-A', 1)!;
+    const b = f.admit(1, 1, 'B', 'socket-B', 2)!;
+    assert.equal(f.songs.update(playing({ currentTime: 78 }), leader, null, 100).accepted, true);
+    const newRevision = (f.songs.statusPayload(100) as { revision: number }).revision;
+    assert.ok(newRevision > original);
+    assert.equal(f.coordinator.observe(100).state, 'restart-required');
+    assert.equal(f.coordinator.previewForVerifiedSinger('A'), null);
+    assert.equal(f.coordinator.previewForVerifiedSinger('B'), null);
+    assert.equal(f.coordinator.preview().monitoring, 'unavailable');
+    assert.equal(f.handshake.receiveVerifiedMic(a, {
+      generation: 7, firstSampleIndex: 0,
+      pcm: Buffer.from(new Int16Array(960).buffer),
+    }, RATE, 101), false);
+    assert.equal(f.handshake.commitFreshContent(b, 101, false), false);
+    assert.equal(f.admit(1, 1, 'A', 'socket-old-A', 101), null);
+    assert.equal(f.approve(original, 102, 1), false,
+      'stale revision cannot reopen an expired room');
+    assert.equal(f.approve(newRevision, 102, 0), false,
+      'old room CAS is mandatory even after fresh SongSession update');
+    assert.equal(f.approve(newRevision, 102, 1), true);
+    assert.equal(f.coordinator.preview().roomEpoch, 2);
+    assert.equal(f.admit(2, 2, 'B', 'socket-new-B', 103), null,
+      'B cannot inherit primary ownership');
+    const a2 = f.admit(2, 2, 'A', 'socket-new-A', 104)!;
+    const b2 = f.admit(2, 2, 'B', 'socket-new-B', 105)!;
+    assert.ok(a2.mediaEpoch > b.mediaEpoch);
+    assert.ok(b2.mediaEpoch > a2.mediaEpoch);
+    assert.equal(a2.seat, 'primary');
+    assert.equal(b2.seat, 'secondary');
+    assert.equal(f.coordinator.preview().monitoring, 'backing-only',
+      'the new room must independently recalibrate both Mic streams');
+  });
+
+  test('Robot generation swap, expired leader and playback loss invalidate pending room', () => {
+    for (const reason of ['robot-swap', 'backing-generation', 'leader-expired'] as const) {
+      const f = fixture();
+      const revision = f.startSong(0);
+      f.coordinator.observe(0);
+      assert.equal(f.approve(revision, 0), true);
+      assert.ok(f.admit(1, 1, 'A', 'socket-A', 1));
+      if (reason === 'robot-swap')
+        f.robot.attachRobot({ open: true });
+      if (reason === 'backing-generation') f.setBacking(10);
+      const nowMs = reason === 'leader-expired' ? 2_500 : 100;
+      assert.equal(f.coordinator.observe(nowMs).state, 'restart-required', reason);
+      assert.equal(f.coordinator.observe(nowMs + 1).state, 'restart-required',
+        'later status must not automatically open a room');
+      assert.equal(f.coordinator.previewForVerifiedSinger('A'), null);
+    }
+  });
+
+  test('each singer gets independent offline Content, safe monitoring readiness, and no token leak', () => {
+    const f = fixture();
+    const rev = f.startSong(0);
+    f.coordinator.observe(0);
+    assert.equal(f.approve(rev, 0), true);
+    const a = f.admit(1, 1, 'A', 'socket-A', 1)!;
+    const b = f.admit(1, 1, 'B', 'socket-B', 2)!;
+    const { mic, backing } = laggedMultibandMusicPair(6, RATE, 120, { singerGain: .18 });
+    const chunk = 2 * RATE;
+    for (let at = 20; at <= 6_000; at += 20) {
+      if (at % 2_000 === 0) {
+        const first = (at / 2_000 - 1) * chunk;
+        const end = first + chunk;
+        for (const [ticket, generation] of [[a, 7], [b, 8]] as const) {
+          assert.equal(f.handshake.receiveVerifiedMic(ticket, {
+            generation, firstSampleIndex: first,
+            pcm: mic.subarray(first * 2, end * 2),
+          }, RATE, at), true);
+        }
+        assert.equal(f.handshake.receiveTrustedRobot(1, 1, {
+          generation: 9, firstSampleIndex: first,
+          pcm: backing.subarray(first * 2, end * 2),
+        }, RATE, at), true);
+      }
+      assert.equal(f.handshake.advanceDue(1, at), true);
+      f.coordinator.observe(at);
+    }
+    assert.equal(f.handshake.analyzeFreshContent(a, 0, 6_001).status, 'candidate');
+    assert.equal(f.handshake.analyzeFreshContent(b, 0, 6_002).status, 'candidate');
+    assert.equal(f.handshake.commitFreshContent(a, 6_003, false), true);
+    assert.equal(f.coordinator.preview().state, 'partially-ready');
+    assert.equal(f.coordinator.preview().monitoring, 'one-voice');
+    assert.equal(f.coordinator.previewForVerifiedSinger('A')?.stage, 'ready');
+    assert.equal(f.coordinator.previewForVerifiedSinger('B')?.stage, 'calibration-required');
+    assert.equal(f.handshake.commitFreshContent(b, 6_004, false), true);
+    assert.equal(f.coordinator.preview().state, 'duet-ready');
+    assert.equal(f.coordinator.preview().monitoring, 'two-voices');
+    const notice = f.coordinator.previewForVerifiedSinger('A');
+    assert.ok(notice);
+    assert.equal('transportId' in notice, false);
+    assert.equal('mediaEpoch' in notice, false);
+    assert.equal('PCM' in notice, false);
+  });
+});

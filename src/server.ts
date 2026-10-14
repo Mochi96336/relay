@@ -16,6 +16,7 @@ import { ChoirSecondaryPcmIngressExperiment } from './choir-secondary-pcm-ingres
 import { ChoirSecondaryConsentExperiment } from './choir-secondary-consent-experiment.js';
 import { ChoirSecondaryMediaTicketExperiment } from './choir-secondary-media-ticket-experiment.js';
 import { ChoirTrustedSourceMirrorExperiment } from './choir-trusted-source-mirror-experiment.js';
+import { ChoirLiveContentPipelineExperiment } from './choir-live-content-pipeline-experiment.js';
 import { authorizeChoirRestartWithLiveRoles } from './choir-server-role-policy-experiment.js';
 import { loadAudioTransportConfig } from './audio-transport-config.js';
 import { parseAudioUplinkHealth, type AudioUplinkHealth } from './audio-uplink-health.js';
@@ -337,6 +338,7 @@ const choirShadow = relayConfig.choirShadow
   ) : null;
 let choirConsent: ChoirSecondaryConsentExperiment | null = null;
 let choirSourceMirror: ChoirTrustedSourceMirrorExperiment | null = null;
+let choirContentPipeline: ChoirLiveContentPipelineExperiment | null = null;
 const choirRestartCoordinator = choirShadow
   ? new ChoirRoomRestartCoordinatorExperiment(
     choirShadow, youtubeTimeline, sourceRuntime,
@@ -368,7 +370,10 @@ const choirRestartCoordinator = choirShadow
         primary, id, epoch, performance.now(),
       )),
     }),
-    (retiredRoomEpoch) => { choirSourceMirror?.revokeRoom(retiredRoomEpoch); },
+    (retiredRoomEpoch) => {
+      choirSourceMirror?.revokeRoom(retiredRoomEpoch);
+      choirContentPipeline?.cancelRoom(retiredRoomEpoch);
+    },
   ) : null;
 // B's secondary byte path is only armed after explicit double-flag
 // A/B consent and server-issued Media Epoch registration. Never routes
@@ -453,6 +458,9 @@ choirSourceMirror = choirMediaEnabled && choirRestartCoordinator
       robotIsAuthoritative: backingRuntime.isRobot && sourceRuntime.connected(),
     }),
   ) : null;
+// A single bounded Worker receives isolated PCM windows. Still NO N=2 output.
+choirContentPipeline = choirMediaEnabled && choirRestartCoordinator
+  ? new ChoirLiveContentPipelineExperiment(choirRestartCoordinator) : null;
 function tickChoirShadow(nowMs: number) {
   // Authority observation never grants a singer or outputs Choir PCM.
   choirRestartCoordinator?.observe(nowMs);
@@ -3268,6 +3276,7 @@ function restartManualBootCalibration(nowMs: number) {
 const youtubeTimelineTimer = setInterval(() => {
   const nowMs = performance.now();
   tickChoirShadow(nowMs);
+  choirContentPipeline?.tick(nowMs);
   if (relayConfig.sampleSongFallback !== 'rtt') refreshLiveMicNetworkCompensation();
 
   if (

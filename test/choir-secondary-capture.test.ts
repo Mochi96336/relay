@@ -110,3 +110,38 @@ test('stale PCM never enters a newer capture generation and input-gap fails clos
     Object.assign(globalThis, { WebSocket: previous });
   }
 });
+
+test('a HyperX-style 66% AudioContext capture clock cannot pass as valid secondary PCM', () => {
+  const previous = globalThis.WebSocket;
+  Object.assign(globalThis, { WebSocket: { OPEN: 1 } });
+  try {
+    const failures: string[] = [];
+    const c = new ChoirSecondaryCapture(reason => failures.push(reason));
+    const sent: ArrayBuffer[] = [];
+    const graph = { returnBuffer: () => {}, dispose: () => {} };
+    c.graph = graph;
+    c.context = { currentTime: 6, close: async () => {} };
+    c.socket = { readyState: 1, bufferedAmount: 0,
+      send: (packet: ArrayBuffer) => sent.push(packet) };
+    c.rate = 48_000;
+    c.generation = 10;
+    // The actual wall clock has advanced 6s, but the AudioContext would
+    // produce only 4s of native samples (66.7%). This MUST be detected
+    // before the next packet gets promoted as a fresh Content sample.
+    c.clockWallOriginMs = performance.now() - 6_000;
+    c.clockSampleOrigin = 0;
+    c.cursor = 4 * 48_000;
+    const epoch = c.epoch;
+    c.onCapture({ data: { type: 'pcm', buffer: new Int16Array(960).buffer,
+      capturedAtContextTime: 5.98 } }, graph, epoch);
+    assert.deepEqual(failures, ['capture-clock-diverged']);
+    assert.equal(sent.length, 0);
+    assert.equal(c.context, null);
+    assert.equal(c.rate, null);
+    c.onCapture({ data: { type: 'pcm', buffer: new Int16Array(960).buffer,
+      capturedAtContextTime: 5.98 } }, graph, epoch);
+    assert.equal(sent.length, 0);
+  } finally {
+    Object.assign(globalThis, { WebSocket: previous });
+  }
+});

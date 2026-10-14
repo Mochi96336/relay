@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { encodePcmFrame, FRAME_HEADER_BYTES } from '../src/pcm-frame.js';
+import { encodeAudioPacket } from '../src/audio-packet.js';
 import {
   ChoirSecondaryPcmIngressExperiment,
   type ChoirIngressResult,
@@ -49,6 +50,14 @@ function fixture() {
     },
   }, socket => (socket as Socket).open);
   return { ingress, accepted, disconnected, revoke: () => { roomEpoch++; } };
+}
+
+function v2(sequence: number, firstSampleIndex: number, sampleCount = 960,
+  generation = 7, source: 'mic' | 'backing' = 'mic') {
+  return encodeAudioPacket({
+    source, generation, sequence, firstSampleIndex,
+    pcm: Buffer.from(new Int16Array(sampleCount).fill(2_000).buffer),
+  });
 }
 
 describe('isolated Choir secondary WebSocket PCM admission', () => {
@@ -155,4 +164,82 @@ describe('isolated Choir secondary WebSocket PCM admission', () => {
     assert.equal(boundResult(f.ingress.interceptBinary(socket, bytes(7, 151 * 960), 1_020)).accepted, true);
     assert.equal(f.accepted.length, 151);
   });
+  test('AudioPacket v2 from authenticated secondary never downgrades to v1 or accepts backing/v3', () => {
+    const f = fixture();
+    const socket = socketFor('B');
+    assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 0, 2), true);
+    assert.deepEqual(f.ingress.interceptBinary(socket, v2(0, 0), 10), {
+      intercepted: true, accepted: true, reason: 'accepted',
+    });
+    assert.deepEqual(f.ingress.interceptBinary(socket, bytes(7, 960), 20), {
+      intercepted: true, accepted: false, reason: 'malformed-frame',
+    }, 'a v1 RL header cannot enter a v2 transport');
+    assert.deepEqual(f.ingress.interceptBinary(socket, v2(1, 960, 960, 7, 'backing'), 30), {
+      intercepted: true, accepted: false, reason: 'malformed-frame',
+    }, 'the secondary Mic cannot spoof Robot PCM');
+    const v3 = Buffer.from(v2(1, 960));
+    v3.writeUInt8(3, 2);
+    assert.deepEqual(f.ingress.interceptBinary(socket, v3, 40), {
+      intercepted: true, accepted: false, reason: 'malformed-frame',
+    }, 'Opus v3 must wait for an explicit safe decoder');
+    const mismatchedCount = Buffer.from(v2(1, 960));
+    mismatchedCount.writeUInt32LE(970, 12);
+    assert.deepEqual(f.ingress.interceptBinary(socket, mismatchedCount, 50), {
+      intercepted: true, accepted: false, reason: 'malformed-frame',
+    });
+    assert.deepEqual(f.ingress.interceptBinary(socket, v2(1, 960), 60), {
+      intercepted: true, accepted: true, reason: 'accepted',
+    });
+    assert.equal(f.accepted.length, 2);
+    const legacy = fixture();
+    const legacySocket = socketFor('B');
+    assert.equal(legacy.ingress.bindVerifiedSecondary(legacySocket, B, 48_000, 0), true);
+    assert.equal(boundResult(legacy.ingress.interceptBinary(legacySocket, v2(0, 0), 10))
+      .reason, 'malformed-frame', 'v2 cannot be misdecoded as legacy v1');
+    assert.equal(legacy.accepted.length, 0);
+  });
+
+  test('v2 sequence deduplicates retransmissions, allows bounded reordering and uint32 wrap', () => {
+    const f = fixture();
+    const socket = socketFor('B');
+    assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 0, 2), true);
+    for (const [seq, first] of [
+      [0xffff_fffe, 0], [0, 1920], [0xffff_ffff, 960], [1, 2880],
+    ]) {
+      assert.deepEqual(f.ingress.interceptBinary(socket, v2(seq, first), 10), {
+        intercepted: true, accepted: true, reason: 'accepted',
+      });
+    }
+    assert.deepEqual(f.ingress.interceptBinary(socket, v2(0xffff_ffff, 960), 11), {
+      intercepted: true, accepted: false, reason: 'duplicate-packet',
+    }, 'the same retransmitted sequence cannot be ingested twice');
+    assert.deepEqual(f.ingress.interceptBinary(socket, v2(2, 2880), 12), {
+      intercepted: true, accepted: false, reason: 'sample-overlap',
+    }, 'different packet IDs cannot overwrite an existing acoustic window');
+    assert.deepEqual(f.ingress.interceptBinary(socket, v2(4_000, 3840), 13), {
+      intercepted: true, accepted: false, reason: 'sequence-out-of-window',
+    }, 'a sender cannot jump arbitrarily far into sequence space');
+    assert.deepEqual(f.ingress.interceptBinary(socket, v2(2, 3840), 14), {
+      intercepted: true, accepted: true, reason: 'accepted',
+    }, 'rejected duplicate/overlap must not poison sequence advancement');
+    assert.equal(f.accepted.length, 5);
+  });
+
+  test('v2 bounded recent replay window evicts old sample claims without accepting old sequences', () => {
+    const f = fixture();
+    const socket = socketFor('B');
+    assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 0, 2), true);
+    for (let seq = 0; seq <= 128; seq++) {
+      // Keep packet rate below 150/s while advancing an ordinary sequence.
+      assert.equal(boundResult(f.ingress.interceptBinary(
+        socket, v2(seq, seq * 960), seq * 20 + 1,
+      )).accepted, true);
+    }
+    assert.equal(boundResult(f.ingress.interceptBinary(socket, v2(0, 0), 2_600))
+      .reason, 'sequence-out-of-window');
+    assert.equal(boundResult(f.ingress.interceptBinary(socket, v2(130, 130 * 960), 2_620))
+      .accepted, true);
+    assert.equal(f.accepted.length, 130);
+  });
+
 });

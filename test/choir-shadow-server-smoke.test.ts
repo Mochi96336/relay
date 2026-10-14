@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { startRelay, RelayClient } from './helpers/harness.js';
+import { startRelay, RelayClient, sleep } from './helpers/harness.js';
 import { encodePcmFrame } from '../src/pcm-frame.js';
 import { participantIdForCapability } from '../src/participant-capability.js';
 
@@ -96,6 +96,105 @@ test('Choir invite commands require browser capability and never grant audio wit
     anonymous?.close();
     a?.close();
     b?.close();
+    await relay.stop();
+  }
+});
+
+test('real authenticated A and B complete opt-in and withdrawal without obtaining Choir PCM permission', async () => {
+  const relay = await startRelay({
+    RELAY_CHOIR_SHADOW: '1', RELAY_TEST_LEGACY_PARTICIPANTS: '0',
+    RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000',
+  });
+  const clients: RelayClient[] = [];
+  const connect = async () => {
+    const c = await RelayClient.connect(relay);
+    clients.push(c);
+    return c;
+  };
+  try {
+    const [a, b, publisher, robotBacking, robotControl] = await Promise.all(
+      Array.from({ length: 5 }, () => connect()),
+    );
+    const capA = 'c'.repeat(64);
+    const capB = 'd'.repeat(64);
+    const idA = participantIdForCapability(capA)!;
+    const idB = participantIdForCapability(capB)!;
+    const authenticate = async (client: RelayClient, id: string, cap: string) => {
+      client.send({ type: 'participant-authenticate', participantId: id,
+        capability: cap, nickname: id === idA ? 'A' : 'B' });
+      await client.waitFor((m) =>
+        m.type === 'participant-authenticated' && m.participantId === id);
+    };
+    await Promise.all([
+      authenticate(a, idA, capA),
+      authenticate(b, idB, capB),
+      authenticate(publisher, idA, capA),
+    ]);
+    assert.equal((await a.waitForType('choir-consent-available')).mode,
+      'invitation-only');
+
+    publisher.send({ type: 'register', role: 'publisher',
+      sampleRate: 48_000, captureGeneration: 1 });
+    await publisher.waitFor((m) =>
+      m.type === 'registered' && m.role === 'publisher');
+    robotBacking.send({ type: 'register', role: 'backing', robot: true,
+      sampleRate: 48_000, captureGeneration: 9 });
+    await robotBacking.waitFor((m) =>
+      m.type === 'registered' && m.role === 'backing');
+    robotControl.send({ type: 'robot-source-hello' });
+
+    a.send({ type: 'playback-hello',
+      playbackTransportId: 'choir-invite-playback-a',
+      playbackGeneration: 1 });
+    await a.waitForType('playback-registered');
+    a.send({ type: 'room-song-command', commandId: 'invite-load-1',
+      expectedRevision: 0, action: 'load',
+      videoId: 'dQw4w9WgXcQ', positionSeconds: 10 });
+    await a.waitFor((m) =>
+      m.type === 'room-song-command-apply' && m.commandId === 'invite-load-1');
+    const telemetry = (state: number, position: number) => ({
+      type: 'youtube-telemetry', videoId: 'dQw4w9WgXcQ',
+      state, currentTime: position, duration: 200,
+      playbackRate: 1, bufferedFraction: .8,
+      playbackTransportId: 'choir-invite-playback-a',
+      playbackGeneration: 1,
+    });
+    a.send(telemetry(5, 10));
+    await a.waitFor((m) =>
+      m.type === 'room-song-command-complete' && m.commandId === 'invite-load-1');
+    a.send({ type: 'room-song-command', commandId: 'invite-play-1',
+      expectedRevision: 1, action: 'play' });
+    await a.waitFor((m) =>
+      m.type === 'room-song-command-apply' && m.commandId === 'invite-play-1');
+    a.send(telemetry(1, 10.1));
+    await a.waitFor((m) =>
+      m.type === 'room-song-command-complete' && m.commandId === 'invite-play-1');
+    await sleep(350); // One regular server-owned shadow clock observation.
+
+    a.send({ type: 'choir-secondary-invite', secondaryId: idB });
+    const invitation = await b.waitForType('choir-secondary-invitation');
+    assert.equal(invitation.primaryId, idA);
+    assert.ok(Number.isSafeInteger(invitation.roomEpoch));
+    assert.equal(invitation.videoId, 'dQw4w9WgXcQ');
+    await a.waitForType('choir-secondary-invite-acknowledged');
+
+    b.send({ type: 'choir-secondary-accept', inviteId: invitation.inviteId });
+    assert.equal((await a.waitFor((m) => m.type === 'choir-secondary-consent-status'
+      && m.status === 'accepted')).secondaryId, idB);
+    assert.equal((await b.waitFor((m) => m.type === 'choir-secondary-consent-status'
+      && m.status === 'accepted')).secondaryId, idB);
+    assert.equal(b.messages.some(m => m.type === 'choir-secondary-registered'), false,
+      'B consent must not mint a microphone publisher or Media Epoch');
+
+    b.send({ type: 'choir-secondary-withdraw' });
+    assert.equal((await b.waitFor((m) =>
+      m.type === 'choir-secondary-consent-status'
+      && m.status === 'withdrawn')).secondaryId, idB);
+    assert.equal((await a.waitFor((m) =>
+      m.type === 'choir-secondary-consent-status'
+      && m.status === 'withdrawn')).secondaryId, idB);
+  } finally {
+    for (const c of clients) c.close();
     await relay.stop();
   }
 });

@@ -900,3 +900,44 @@ test authenticates two distinct browser-capability identities and verifies
 that Choir commands cannot manufacture a room when authoritative Robot/
 Mic prerequisites are absent. These prove the control boundary; they
 are not yet a full two-device, permission-granted Choir media session.
+
+## Default-off Choir invitation UI on the actual Relay page (2026-10-14)
+
+The Live page now includes a compact `+ Second Mic / + 副 Mic` action beside
+the normal Take/Release Mic controls. This control is **hidden by default**,
+including during ordinary N=1 relay operation. Only when an already
+authenticated Presence socket receives the private
+`choir-consent-available { mode: 'invitation-only' }` server event under
+`RELAY_CHOIR_SHADOW=1` may it become visible; the client also requires an
+authoritative session snapshot, local primary Mic ownership, an active
+connected Mic, and at least one distinct online participant.
+
+`public/choir-consent-ui.js` provides a small phone-width accessible panel
+to choose B, request the invitation, show the host's reply status, and let B
+accept/decline/withdraw through its authenticated Presence socket. B's
+incoming invitation is displayed even when B does **not** own the primary
+Mic. A server invitation is not an actual Mic authorization, and UI text
+states explicitly that no second-Mic capture starts upon acceptance.
+English and Traditional Chinese strings are shipped together.
+
+The existing Presence socket is the ONLY page-side command path. It relays
+four known consent opcodes, uses the identity already established by
+`participant-authenticate`, and clears UI authorization when the socket
+disconnects or the server no longer advertises the feature. Incoming
+nicknames are inserted as `textContent`, not HTML; the page does not send
+browser capability secrets as a Choir payload. No secondary Media Epoch,
+capture permission, producer registration or monitor/record URL is exposed.
+
+A server ACK for B's withdrawal now includes `secondaryId` so the client
+can distinguish its own withdrawn consent and hide its Withdraw control.
+A separate Chromium phone-DOM test checks the default-hidden state,
+host participant picker/command, B accept/withdraw command and
+disconnect-driven hiding, including horizontal-overflow checks. A
+server-side UI contract test also checks that the production HTML retains
+the hidden default and does not couple this module to `getUserMedia`.
+
+**Not enabled:** production Choir admission, an actual second-phone Mic
+publisher, verified Content calibration in the real runtime, and N=2
+monitor/record. Server restart authorization remains an unconditional
+deny. These UI additions are an intentionally isolated invitation
+experience and must not be described as a deployed duet.

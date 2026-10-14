@@ -93,6 +93,8 @@ export function ingestPcmTimeline(input: PcmIngestInput): PcmIngestResult {
     // from output length. Reject overlapping or partly admitted source PCM.
     let nativeFrameMirroringSafe = positioned
       && frame.generation !== null
+      && frame.firstSampleIndex! >= 0
+      && frame.pcm.byteLength === sourceSampleCount * 2
       && Number.isSafeInteger(frame.firstSampleIndex)
       && Number.isSafeInteger(frame.firstSampleIndex! + sourceSampleCount)
       && (captureClockChanged || timeline.sourceFrontier === null

@@ -85,6 +85,15 @@ export class ChoirRoomRestartCoordinatorExperiment {
     if (!Number.isFinite(nowMs) || nowMs < this.lastObservedMs)
       return this.preview();
     this.lastObservedMs = nowMs;
+    if (this.approved && (this.takeFrozenNow()
+      || !this.roomRolesStillAuthorized(
+        this.approved.primaryId, this.approved.secondaryId, this.approved.roomEpoch,
+      ))) {
+      // Revoked room permission MUST retire the Shadow witness as well.
+      // Merely clearing Choir tickets leaves the old witness re-usable and
+      // mislabels the room as "awaiting authority" instead of restart-required.
+      this.shadow.retireForTrustRevocation(nowMs);
+    }
     const observedBacking = this.backingGenerationNow();
     const witness = this.shadow.observe(nowMs, observedBacking);
     if (witness.state === 'shadow-active' && witness.roomEpoch !== null)

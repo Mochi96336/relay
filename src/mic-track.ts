@@ -198,6 +198,7 @@ export class MicTrack {
     sourceRate: number | null;
     running: boolean;
     roomSampleNow: () => number;
+    auditNativeMirroring?: boolean;
   }): PcmIngestResult {
     const { frame, sourceRate, running, roomSampleNow } = input;
     const previousTotalSamples = this.timeline.totalSamples;
@@ -208,6 +209,7 @@ export class MicTrack {
     const result = ingestPcmTimeline({
       timeline: this.timeline,
       frame, sourceRate, mixRate: this.sampleRate, roomSampleNow,
+      auditNativeMirroring: input.auditNativeMirroring,
       sourceRateDefinesCapture: true,
       onCaptureClockChanged: () => this.onCaptureClockReplaced(),
       trimSourcePacket: (args) => this.trimSourcePacket(args),

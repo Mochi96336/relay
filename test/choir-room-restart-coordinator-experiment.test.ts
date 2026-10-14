@@ -112,6 +112,8 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
     const f = fixture();
     const original = f.startSong(0);
     f.coordinator.observe(0);
+    assert.equal(f.coordinator.proposedRoomEpochForConsent, 1,
+      'B can consent to the first proposed room before it is approved');
     assert.equal(f.approve(original, 0), true);
     const a = f.admit(1, 1, 'A', 'socket-A', 1)!;
     const b = f.admit(1, 1, 'B', 'socket-B', 2)!;
@@ -119,6 +121,8 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
     const newRevision = (f.songs.statusPayload(100) as { revision: number }).revision;
     assert.ok(newRevision > original);
     assert.equal(f.coordinator.observe(100).state, 'restart-required');
+    assert.equal(f.coordinator.proposedRoomEpochForConsent, 2,
+      'B can consent to NEXT Room Epoch while old room remains retired');
     assert.equal(f.coordinator.previewForVerifiedSinger('A'), null);
     assert.equal(f.coordinator.previewForVerifiedSinger('B'), null);
     assert.equal(f.coordinator.preview().monitoring, 'unavailable');

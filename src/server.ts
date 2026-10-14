@@ -381,6 +381,7 @@ choirConsent = choirRestartCoordinator && choirShadow
       // be able to explicitly consent to the NEXT proposed Room Epoch before
       // any restart CAS may grant a room. Proposal alone grants no Mic.
       if (proposedRoomEpoch === null
+        || backingGeneration === null
         || !Number.isSafeInteger(backingGeneration)
         || song.state !== 1
         || song.leaderFresh !== true || song.leaderConnected !== true

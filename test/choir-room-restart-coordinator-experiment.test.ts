@@ -403,6 +403,10 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
       () => source);
     assert.equal(mirror.bindPrimary(a, 3), true);
     assert.equal(mirror.bindPrimary(a, 4), false, 'never silently rebind one Room Epoch');
+    assert.equal(mirror.mirrorPrimary({ generation: 7, firstSampleIndex: 0,
+      pcm: Buffer.alloc(960 * 2) }, false, 5), false,
+      'partially accepted PCM cannot enter Choir history');
+    assert.equal(mirror.roomEpoch, 1, 'a rejected packet alone does not retire the room');
     const { mic, backing } = laggedMultibandMusicPair(
       6, RATE, 120, { singerGain: .18 },
     );
@@ -417,11 +421,11 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
         const end = first + chunk;
         const frame = { generation: 7, firstSampleIndex: first,
           pcm: mic.subarray(first * 2, end * 2) };
-        assert.equal(mirror.mirrorPrimary(frame, chunk, at), true);
+        assert.equal(mirror.mirrorPrimary(frame, true, at), true);
         assert.equal(mirror.mirrorRobot({
           generation: 9, firstSampleIndex: first,
           pcm: backing.subarray(first * 2, end * 2),
-        }, chunk, at), true);
+        }, true, at), true);
         assert.equal(f.coordinator.receiveVerifiedMic(b, {
           generation: 8, firstSampleIndex: first,
           pcm: mic.subarray(first * 2, end * 2),
@@ -505,7 +509,7 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
       assert.equal(mirror.mirrorPrimary({
         generation: 7, firstSampleIndex: 0,
         pcm: Buffer.from(new Int16Array(960).buffer),
-      }, 960, 20), false);
+      }, true, 20), false);
       assert.equal(mirror.roomEpoch, null);
       assert.equal(f.coordinator.preview().state, 'restart-required', change);
       assert.equal(f.coordinator.receiveVerifiedMic(a, {

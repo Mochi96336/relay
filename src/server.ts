@@ -4674,7 +4674,27 @@ function handleChoirConsentMessage(socket: RelaySocket, payload: Record<string, 
   } else if (type === 'choir-secondary-withdraw') {
     accepted = choirConsent.withdraw(socket, nowMs);
   }
-  if (!accepted) sendJson(socket, { type: 'choir-consent-rejected', reason: 'invalid-or-stale' });
+  if (!accepted) {
+    if (process.env.NODE_ENV === 'test' && type === 'choir-secondary-invite') {
+      const ss = youtubeTimeline.statusPayload(nowMs);
+      console.warn('[choir-invite-test-diagnostic]', JSON.stringify({
+        shadow: choirShadow?.snapshot(),
+        proposal: choirRestartCoordinator?.proposedRoomEpochForConsent,
+        backingIsRobot: backingRuntime.isRobot,
+        backingGeneration: session.backingGeneration,
+        robotConnected: sourceRuntime.connected(),
+        playing: ss.state === 1, leaderFresh: ss.leaderFresh,
+        songConnected: ss.connected, handoffState: ss.handoffState,
+        ownerMatch: participants.micOwnerId === socket.participantId,
+        mediaOwnerMatch: micRuntime.mediaOwnerId === socket.participantId,
+        controlConnected: micRuntime.controlConnected(),
+        secondaryConnected: participants.participant(
+          normalizeParticipantId(payload.secondaryId) ?? '',
+        )?.connected,
+      }));
+    }
+    sendJson(socket, { type: 'choir-consent-rejected', reason: 'invalid-or-stale' });
+  }
   else if (type === 'choir-secondary-invite')
     sendJson(socket, { type: 'choir-secondary-invite-acknowledged' });
   else if (type === 'choir-secondary-withdraw')

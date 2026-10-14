@@ -120,6 +120,9 @@ export function loadRelayConfig(env: Env = process.env) {
     // Control-plane shadow ONLY: no Choir media uplink, output, Mic admission,
     // participant UI, monitor/recording or automatic restart is enabled.
     choirShadow: envBoolean(env, 'RELAY_CHOIR_SHADOW', false),
+    // SECOND explicit opt-in. Enables experimental A/B media admission
+    // ONLY together with RELAY_CHOIR_SHADOW; no N=2 monitor/record output.
+    choirMediaExperiment: envBoolean(env, 'RELAY_CHOIR_MEDIA_EXPERIMENT', false),
     micRetentionMs: envNumber(env, 'RELAY_MIC_RETENTION_MS', 3_000, { min: 1 }),
     calibrationTimeoutMs: envNumber(env, 'RELAY_CALIBRATION_TIMEOUT_MS', 20_000, { min: 1 }),
     heartbeatMs: envNumber(env, 'RELAY_HEARTBEAT_MS', 8_000, { min: 100 }),

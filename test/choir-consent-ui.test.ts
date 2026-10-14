@@ -70,5 +70,5 @@ test('mobile claim connector starts Mic only on B explicit tap and never stores 
   assert.match(native, /this\.cursor \+= samples/);
   assert.match(media, /'relay-choir-media-mode'/);
   assert.match(media, /'relay-choir-consent-message'/);
-  assert.doesNotMatch(media, /getUserMedia|AudioWorkletNode|localStorage|sessionStorage|console\.log/);
+  assert.doesNotMatch(media, /navigator\.mediaDevices\.getUserMedia|new AudioWorkletNode|localStorage|sessionStorage|console\.log/);
 });

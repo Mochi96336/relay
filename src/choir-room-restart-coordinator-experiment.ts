@@ -302,6 +302,20 @@ export class ChoirRoomRestartCoordinatorExperiment {
       && this.handshake.advanceDue(roomEpoch, nowMs));
   }
 
+  /**
+   * Read-only proposed Room Epoch. Allows a B invitation to target the NEXT
+   * room after a Seek, before the trusted restart CAS actually creates it.
+   * This is not a grant, ticket, or guarantee that restart will succeed.
+   */
+  get proposedRoomEpochForConsent(): number | null {
+    const state = this.shadow.snapshot();
+    if (state.state === 'shadow-active') return state.roomEpoch;
+    if (state.state !== 'restart-required' || this.lastWitnessRoomEpoch < 1)
+      return null;
+    const next = this.lastWitnessRoomEpoch + 1;
+    return Number.isSafeInteger(next) ? next : null;
+  }
+
   /** Proof-only diagnostic; never grants Media Epoch or acoustic authority. */
   previewForVerifiedSinger(participantId: string): {
     roomEpoch: number; songEpoch: number; videoId: string;

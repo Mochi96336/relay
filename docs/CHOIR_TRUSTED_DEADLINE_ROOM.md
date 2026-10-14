@@ -839,3 +839,64 @@ opt-in/opt-out control-plane workflow that is revocable before and during
 each Room Epoch, with proper per-participant consent and host display.
 Until then the server remains deny-by-default and a second phone cannot
 join Choir using any current client command.
+
+## Explicit B opt-in control plane (2026-10-14)
+
+A new `ChoirSecondaryConsentExperiment` now implements an actual
+**default-off** server WebSocket invitation/consent exchange under
+`RELAY_CHOIR_SHADOW=1`. The new authenticated messages are:
+
+- `choir-secondary-invite` from the live primary-Mic owner's **separately
+  authenticated** control socket, with a target `secondaryId` that must
+  already be a connected participant.
+- `choir-secondary-invitation` delivered ONLY to sockets authenticated as
+  that secondary participant, with a random non-authoritative invitation ID,
+  proposed Room Epoch, video identity and short expiry.
+- `choir-secondary-accept` / `choir-secondary-decline` from B's own
+  authenticated socket referencing that invitation ID.
+- `choir-secondary-withdraw` from the *same physical B socket that consented*
+  to revoke the accepted grant. The host receives a targeted status update.
+  Forged or expired attempts receive `choir-consent-rejected`.
+
+The server derives every participant identity from the existing private
+browser capability; it never accepts a client-submitted primary seat, room
+generation or capture ticket. Invitation IDs alone confer NO authority,
+and an unrelated user possessing an invitation ID cannot accept it for B.
+The host's Mic lease is rechecked against both `ParticipantSession.micOwnerId`
+and `MicRuntime.mediaOwnerId`, live primary transport, B presence and
+current non-recording Take status.
+
+A pending invitation expires after 30 seconds. An **accepted** consent is
+not subject to the pending-invitation timeout: it remains scoped to the
+same (A, B, Room Epoch, SongSession revision/video, Robot backing/control
+generation) until B explicitly withdraws, either consenting control socket
+closes, the role changes, recording begins, or the playback source
+changes. The bounded in-memory state has at most one invitation per host;
+stale entries are swept by the existing server timer. Both A and B
+may have multiple browser tabs, but a retry from an *unrelated physical B
+socket* cannot replace the original accepted consent without a new invite.
+
+The coordinator exposes a **read-only next Room Epoch proposal**. When a
+Seek retires Room 1, the server can ask B to consent to proposed Room 2
+*before* any explicit restart CAS creates Room 2. Neither the invitation
+nor its proposal mints a Media Epoch. This resolves the potential deadlock
+between "B must consent before approving the next room" and "the previous
+Shadow room is already retired".
+
+The live role-continuation predicate now refers to this consent model and
+the existing `authorizeChoirRestartWithLiveRoles` policy. **Production
+still passes an unconditional false restart-approval callback and
+unconditional Take freeze to the Choir experimental coordinator**, so this
+new protocol cannot create an active Choir room, attach a secondary PCM
+socket, output Choir audio or change existing N=1 monitoring/recording.
+The client UI has not yet been updated to show the invitation or accept/
+decline controls; there is no released Choir mode.
+
+The isolated contract tests verify explicit acceptance, decline and
+withdrawal, capability-style socket identity matching, invitation expiry,
+cross-room and cross-song revocation, disconnected B, primary-owner change,
+Take freeze and physical-socket-specific consent. The real-server smoke
+test authenticates two distinct browser-capability identities and verifies
+that Choir commands cannot manufacture a room when authoritative Robot/
+Mic prerequisites are absent. These prove the control boundary; they
+are not yet a full two-device, permission-granted Choir media session.

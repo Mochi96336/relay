@@ -4678,7 +4678,10 @@ function handleChoirConsentMessage(socket: RelaySocket, payload: Record<string, 
   else if (type === 'choir-secondary-invite')
     sendJson(socket, { type: 'choir-secondary-invite-acknowledged' });
   else if (type === 'choir-secondary-withdraw')
-    sendJson(socket, { type: 'choir-secondary-consent-status', status: 'withdrawn' });
+    sendJson(socket, {
+      type: 'choir-secondary-consent-status', status: 'withdrawn',
+      secondaryId: socket.participantId,
+    });
   return true;
 }
 

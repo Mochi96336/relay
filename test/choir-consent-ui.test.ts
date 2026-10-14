@@ -23,7 +23,9 @@ test('invite-only second Mic controls stay hidden and inaccessible in ordinary N
   assert.match(presence, /sessionAuthorityFresh/);
   assert.match(presence, /relay-choir-consent-command/);
   assert.match(server, /if \(choirConsent\) sendJson\(socket, \{\s*type: 'choir-consent-available'/);
-  assert.match(server, /\(\) => false,[\s\S]*?\(\) => true,[\s\S]*?choirShadowConfig/);
+  assert.match(server, /const choirMediaEnabled = relayConfig\.choirShadow && relayConfig\.choirMediaExperiment/);
+  assert.match(server, /\(\) => !choirMediaEnabled \|\| takeController\.lifecycle === 'recording'/);
+  assert.match(server, /if \(!choirMediaEnabled \|\| !choirRestartCoordinator/);
   assert.doesNotMatch(app, /getUserMedia|sendAudioPacket|bindVerifiedSecondary/);
 });
 

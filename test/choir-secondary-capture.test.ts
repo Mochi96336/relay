@@ -118,7 +118,8 @@ test('a HyperX-style 66% AudioContext capture clock cannot pass as valid seconda
     const failures: string[] = [];
     const c = new ChoirSecondaryCapture(reason => failures.push(reason));
     const sent: ArrayBuffer[] = [];
-    const graph = { returnBuffer: () => {}, dispose: () => {} };
+    let returned = 0;
+    const graph = { returnBuffer: () => { returned++; }, dispose: () => {} };
     c.graph = graph;
     c.context = { currentTime: 6, close: async () => {} };
     c.socket = { readyState: 1, bufferedAmount: 0,
@@ -135,6 +136,8 @@ test('a HyperX-style 66% AudioContext capture clock cannot pass as valid seconda
     c.onCapture({ data: { type: 'pcm', buffer: new Int16Array(960).buffer,
       capturedAtContextTime: 5.98 } }, graph, epoch);
     assert.deepEqual(failures, ['capture-clock-diverged']);
+    assert.equal(returned, 1,
+      'clock rejection must execute the Worklet buffer finally before exit');
     assert.equal(sent.length, 0);
     assert.equal(c.context, null);
     assert.equal(c.rate, null);

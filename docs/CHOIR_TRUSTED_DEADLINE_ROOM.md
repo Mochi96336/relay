@@ -1012,3 +1012,68 @@ pre-Content mute and bind-failure room retirement. The next distinct task
 is the server-authorized public media-claim exchange and fresh capture
 registration/Content analysis, **not** silently enabling those paths from
 an accepted invitation.
+
+## Double-gated server media handshake and browser opt-in (2026-10-14)
+
+There are now TWO independent server flags, both default OFF:
+
+- `RELAY_CHOIR_SHADOW=1`: authenticated invitation/consent control plane
+  and room authority observation ONLY. No client may start a Choir room,
+  redeem a Media Epoch or send secondary PCM.
+- `RELAY_CHOIR_MEDIA_EXPERIMENT=1` **in addition** to the Shadow flag:
+  enables deliberately isolated A/B room restart and a private two-step
+  B media registration protocol, with NO connection to production N=1
+  output, monitor, Take recording, or automatic primary succession.
+  Setting the media flag alone has no effect.
+
+In double-opt-in mode the existing authoritative live Mic/participant/Robot/
+SongSession + non-active Take policy is used for both the explicit room CAS
+and the ongoing permission check. The host must be the actual current
+Mic owner with a live, verified production N=1 publisher connection.
+Only after B has separately consented to the proposed Room Epoch may host
+send `choir-room-begin { secondaryId }`. The server, NOT the client,
+derives the exact expected Room Epoch and SongSession revision. It grants
+a **muted, logical primary seat** for A (A's production N=1 Mic PCM is
+NOT copied into this experiment yet) and returns `choir-room-ready`
+only if the room CAS and first admission succeed. If primary admission
+fails, the server retires the whole experimental room.
+
+The original B consent Socket may then send
+`choir-secondary-media-claim-request`, receiving a short-lived
+`choir-secondary-media-claim` with a random one-use 256-bit token.
+The browser creates a DISTINCT uncompressed `/ws` media connection,
+sends its usual `participant-authenticate` message on that connection,
+and only after receiving an identity-matching
+`participant-authenticated` reply submits
+`choir-secondary-media-register { claimToken, packetVersion: 2,
+sampleRate: 48000 }`. Claim identities and room/seat/Media Epoch supplied
+by the browser are NEVER used as authority. On success, the exact media
+Socket is quarantined as Choir secondary and receives
+`choir-secondary-media-registered` with server-owned increasing
+`mediaEpoch` and `awaitingContent: true`. It can feed strictly validated
+mic-only AudioPacket v2 into the experimental canonical room; it cannot
+register as the production primary publisher, Robot backing or monitor.
+
+The invitation UI shows separate "Create experimental room" (A) and
+"Connect second-Mic test" (B) actions ONLY when both flags are on, and
+closes B's separate media connection after consent withdrawal/revocation
+or Presence loss. Claims live only in the browser's event-local memory;
+they are not placed into URLs, persisted or logged.
+
+**Critical scope limit:** the browser-side new media connector deliberately
+does NOT request `getUserMedia` or start automatic audio capture. The
+integration test, however, sends *real binary AudioPacket v2 PCM* through
+the same independently authenticated media registration on a live test
+server, verifies B remains pending Content calibration, confirms that
+failed production publisher registration on that socket is ignored, and
+checks withdrawal/Seek rejection. This proves the **wire-level join and
+isolation**, NOT yet actual phone mic clocks, A's Choir voice, a complete
+trusted six-second Content comparison on production sockets, or any
+audible duet. All production N=1 monitoring and recording behavior must
+remain unchanged.
+
+The first-version canonical seat is non-rebindable after physical
+disconnect. B disconnect therefore retires the experimental room
+(instead of silently allowing a same-epoch replacement); any restart
+requires a new explicit CAS, fresh room-specific B consent and new
+Media Epoch. None of these rules imply automatic primary Mic takeover.

@@ -961,3 +961,54 @@ PCM: a registered Robot *control* source without any PCM has no trusted
 audio rather than permitting a missing-generation Choir room. The temporary
 server diagnostic output used to identify this test fixture problem has
 been removed.
+
+## Exact-control-socket B Media Epoch claim (2026-10-14)
+
+`ChoirSecondaryMediaTicketExperiment` is now the private bridge between an
+already-approved canonical A/B room, **B's actual consent-bearing authenticated
+browser Socket**, and a separately authenticated B audio Socket. It is
+constructed in default-off Shadow server mode but has **NO public issue or
+redeem WebSocket handlers**. The production Choir restart authorizer is
+still hard-deny. This is an experimental, tested ticket *backend*, not a
+second live Mic feature.
+
+The issuance protocol deliberately has two phases:
+
+1. After a trusted server CAS has created a room and A is *already*
+   admitted as primary, `issue(consentSocket, nowMs)` checks that its
+   physical browser socket actually accepted B's room-specific invitation,
+   the original A/B Room Epoch is still valid, and the Take/role/song
+   mapping remain valid. It returns a cryptographically random 256-bit
+   token with a 15-second expiry. The claim is not itself a Media Epoch,
+   producer role or permission to capture; issuing it does not reserve a
+   singer seat. At most one pending claim exists per B.
+2. `redeem(mediaSocket, claimToken, rate, packetVersion, nowMs)` demands a
+   *different* live authenticated B Socket with `role='unknown'`, the
+   same exact live A/B room and consent, supported native PCM sample rate
+   and v1/v2 framing. The token is burned before side effects, including
+   on a mismatched B identity. Only after all proof checks pass does the
+   coordinator mint B's strictly increasing Media Epoch and a
+   server-generated transport ID, then bind the exact socket to the
+   secondary-only PCM ingress. Old token replay or a second claiming
+   socket cannot mint another ticket. PCM remains muted until **B's fresh
+   canonical Content proof**. No automatic primary takeover occurs.
+
+An important physical-bind recovery problem was exposed by an additional
+integration test: the existing first-version canonical Choir session does
+**not** support arbitrary same-room rebind of B after an admitted seat
+disconnects, even when no authorized B PCM was audible. Therefore if
+canonical admission succeeds but the transport bind fails, the coordinator
+now **retires the ENTIRE experimental Room Epoch** and requires a new
+trusted restart CAS, explicit fresh B consent and new Media Epochs. It
+does *not* claim that merely deleting the B ticket allows a same-room retry.
+This is deliberately conservative and cannot change the deployed N=1
+Mic/monitor/record paths.
+
+Contract tests use real SongSession/Robot/Choir coordinator, B consent,
+two distinct B socket identities and the v2 binary PCM ingress. They
+cover a stolen single-use token, sibling B browser tab, repeated token,
+token expiry, superseding issuance, consent withdrawal, Seek, B's
+pre-Content mute and bind-failure room retirement. The next distinct task
+is the server-authorized public media-claim exchange and fresh capture
+registration/Content analysis, **not** silently enabling those paths from
+an accepted invitation.

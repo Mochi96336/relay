@@ -42,6 +42,15 @@ describe('shared canonical PCM ingestion without room or singer coupling', () =>
     });
     assert.equal(trimmed.nativeFrameMirroringSafe, false,
       'a changed PCM span is not an exact native admission');
+
+    const malformed = ingestPcmTimeline({
+      timeline: emptyPcmTimeline(),
+      frame: { generation: 3, firstSampleIndex: 0, pcm: Buffer.alloc(3) },
+      sourceRate: RATE, mixRate: RATE, roomSampleNow: () => 1,
+      auditNativeMirroring: true,
+    });
+    assert.equal(malformed.nativeFrameMirroringSafe, false,
+      'odd trailing source bytes must never be forwarded to Choir');
   });
 
   test('native mirror acceptance handles 44.1 kHz phase without assuming output counts', () => {

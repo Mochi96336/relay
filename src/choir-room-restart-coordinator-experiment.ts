@@ -320,8 +320,17 @@ export class ChoirRoomRestartCoordinatorExperiment {
   }
 
   disconnectVerifiedSinger(ticket: ChoirFreshCaptureTicket, nowMs: number): boolean {
-    return this.currentTicket(ticket, nowMs)
-      && this.handshake.disconnectVerifiedSinger(ticket, nowMs);
+    if (!this.currentTicket(ticket, nowMs)
+      || !this.handshake.hasVerifiedTicket(ticket)) return false;
+    // v1 does not allow same-Room Epoch rebind after B's native capture was
+    // removed. Explicitly retire the whole experimental duet, keeping
+    // production N=1 routes untouched. Never auto-promote B on A loss.
+    if (ticket.seat === 'secondary') {
+      if (!this.shadow.retireForTrustRevocation(nowMs)) return false;
+      this.observe(nowMs);
+      return this.approved === null;
+    }
+    return this.handshake.disconnectVerifiedSinger(ticket, nowMs);
   }
 
   /** Offline scheduler discards PCM; no monitor output is emitted. */

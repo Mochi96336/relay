@@ -90,6 +90,15 @@ test('mobile B explicitly accepts and withdraws; disconnect hides stale authoriz
     type: 'choir-secondary-withdraw',
   });
   await page.evaluate(() => window.dispatchEvent(new CustomEvent(
+    'relay-choir-consent-message', {
+      detail: {
+        type: 'choir-secondary-consent-status', status: 'withdrawn',
+        secondaryId: 'singerB', roomEpoch: 3,
+      },
+    },
+  )));
+  await expect(page.locator('#choir-withdraw')).toBeHidden();
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent(
     'relay-choir-consent-availability', { detail: { available: false } },
   )));
   await expect(page.locator('#choir-consent-panel')).toBeHidden();

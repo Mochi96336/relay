@@ -71,7 +71,8 @@ describe('default-off Choir B secondary consent state machine', () => {
   test('forged actor, identity mismatch, unknown invitation and uninvited B cannot consent', () => {
     const f = fixture();
     assert.equal(f.consent.invite(f.attacker, B, 0), null);
-    assert.equal(f.consent.invite({ open: true }, B, 0), null);
+    const anonymous: Socket = { open: true };
+    assert.equal(f.consent.invite(anonymous, B, 0), null);
     assert.equal(f.consent.invite(f.a, A, 0), null);
     const id = f.invite()!;
     assert.equal(f.consent.respond(f.attacker, id, true, 10), false);

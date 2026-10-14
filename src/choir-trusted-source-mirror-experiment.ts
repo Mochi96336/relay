@@ -99,14 +99,14 @@ export class ChoirTrustedSourceMirrorExperiment {
   }
 
   /** No retained input PCM: only an already-accepted production Mic frame. */
-  mirrorPrimary(frame: PcmFrame, acceptedSamples: number, nowMs: number): boolean {
+  mirrorPrimary(frame: PcmFrame, nativeFrameMirroringSafe: boolean, nowMs: number): boolean {
     const b = this.binding;
     if (!b) return false;
     if (!this.exactSourceNow()
       || !this.room.mayAcceptVerifiedTicket(b.primaryTicket, nowMs)
       || frame.generation !== b.primaryGeneration)
       return this.retire(nowMs);
-    if (!Number.isSafeInteger(acceptedSamples) || acceptedSamples <= 0
+    if (nativeFrameMirroringSafe !== true
       || frame.firstSampleIndex === null
       || !Number.isSafeInteger(frame.firstSampleIndex)
       || !Buffer.isBuffer(frame.pcm)) return false;
@@ -120,14 +120,14 @@ export class ChoirTrustedSourceMirrorExperiment {
    * accepted them. SongSession/Robot authority and exact native generation
    * are re-checked by the coordinator again before canonical ingestion.
    */
-  mirrorRobot(frame: PcmFrame, acceptedSamples: number, nowMs: number): boolean {
+  mirrorRobot(frame: PcmFrame, nativeFrameMirroringSafe: boolean, nowMs: number): boolean {
     const b = this.binding;
     if (!b) return false;
     if (!this.exactSourceNow()
       || !this.room.mayAcceptVerifiedTicket(b.primaryTicket, nowMs)
       || frame.generation !== b.robotBackingGeneration)
       return this.retire(nowMs);
-    if (!Number.isSafeInteger(acceptedSamples) || acceptedSamples <= 0
+    if (nativeFrameMirroringSafe !== true
       || frame.firstSampleIndex === null
       || !Number.isSafeInteger(frame.firstSampleIndex)
       || !Buffer.isBuffer(frame.pcm)) return false;

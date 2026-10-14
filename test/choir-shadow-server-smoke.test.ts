@@ -138,7 +138,7 @@ test('real authenticated A and B complete opt-in and withdrawal without obtainin
     await publisher.waitFor((m) =>
       m.type === 'registered' && m.role === 'publisher');
     robotBacking.send({ type: 'register', role: 'backing', robot: true,
-      sampleRate: 48_000, captureGeneration: 9 });
+      sampleRate: 48_000, captureGeneration: 9, captureSampleCursor: 0 });
     await robotBacking.waitFor((m) =>
       m.type === 'registered' && m.role === 'backing');
     robotControl.send({ type: 'robot-source-hello' });

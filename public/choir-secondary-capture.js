@@ -2,7 +2,12 @@ import { enforceUnprocessedCapture } from './capture-observability.js';
 import { createMicCaptureGraph } from './mic-capture-graph.js';
 
 const HEADER_BYTES = 24;
-const MAX_BUFFERED_BYTES = 256 * 1024;
+// This is only ~0.25s of native 48 kHz Int16 mono PCM, not seconds
+// of stale audio queued behind an unreliable WebSocket.
+const MAX_BUFFERED_BYTES = 24 * 1024;
+const CLOCK_PROOF_WINDOW_MS = 5_000;
+const MIN_CLOCK_RATE_RATIO = 0.75;
+const MAX_CLOCK_RATE_RATIO = 1.25;
 
 /** Relay AudioPacket v2. Sample index belongs to the NATIVE AudioWorklet
  * capture clock; dropped chunks still advance that clock. */
@@ -43,6 +48,8 @@ export class ChoirSecondaryCapture {
     this.cursor = 0;
     this.sequence = 0;
     this.track = null;
+    this.clockWallOriginMs = null;
+    this.clockSampleOrigin = 0;
   }
 
   async prepare() {
@@ -84,6 +91,8 @@ export class ChoirSecondaryCapture {
       this.rate = rate;
       this.cursor = 0;
       this.sequence = 0;
+      this.clockWallOriginMs = null;
+      this.clockSampleOrigin = 0;
       this.track = stream.getAudioTracks()[0] ?? null;
       if (!this.track || this.track.readyState !== 'live'
         || this.track.muted) throw new Error('Microphone track unavailable');
@@ -137,6 +146,27 @@ export class ChoirSecondaryCapture {
     const firstSampleIndex = this.cursor;
     // ALWAYS advance native cursor even if WebSocket is late/disconnected.
     this.cursor += samples;
+    const nowMs = performance.now();
+    if (this.clockWallOriginMs === null) {
+      this.clockWallOriginMs = nowMs;
+      this.clockSampleOrigin = this.cursor;
+    } else {
+      const elapsedMs = nowMs - this.clockWallOriginMs;
+      if (elapsedMs >= CLOCK_PROOF_WINDOW_MS) {
+        const capturedSamples = this.cursor - this.clockSampleOrigin;
+        const clockRateRatio = (capturedSamples / this.rate) / (elapsedMs / 1000);
+        if (!Number.isFinite(clockRateRatio)
+          || clockRateRatio < MIN_CLOCK_RATE_RATIO
+          || clockRateRatio > MAX_CLOCK_RATE_RATIO) {
+          this.fail('capture-clock-diverged');
+          return;
+        }
+        // Periodically re-anchor after healthy evidence; a long singer
+        // session never grows into a lifetime-average hiding a fresh stall.
+        this.clockWallOriginMs = nowMs;
+        this.clockSampleOrigin = this.cursor;
+      }
+    }
     try {
       const age = Number.isFinite(value.capturedAtContextTime)
         ? this.context.currentTime - value.capturedAtContextTime : Infinity;
@@ -175,5 +205,7 @@ export class ChoirSecondaryCapture {
     if (ctx) void ctx.close().catch(() => {});
     this.rate = null;
     this.generation = null;
+    this.clockWallOriginMs = null;
+    this.clockSampleOrigin = 0;
   }
 }

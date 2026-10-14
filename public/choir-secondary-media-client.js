@@ -28,6 +28,13 @@ window.addEventListener('relay-choir-media-mode', (event) => {
   enabled = event.detail?.enabled === true;
   if (!enabled) disconnect();
 });
+window.addEventListener('relay-choir-consent-message', (event) => {
+  const msg = event.detail;
+  if (msg?.type === 'choir-secondary-consent-status'
+    && ['withdrawn', 'revoked'].includes(msg.status)
+    && msg.secondaryId === window.relayParticipantId) disconnect();
+});
+
 window.addEventListener('relay-choir-media-message', (event) => {
   if (!enabled || event.detail?.type !== 'choir-secondary-media-claim') return;
   const { claimToken, roomEpoch } = event.detail;

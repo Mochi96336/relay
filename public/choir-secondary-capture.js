@@ -52,6 +52,10 @@ export class ChoirSecondaryCapture {
     // Establish the AudioContext during the actual click gesture on iOS.
     const context = new AudioContext({ latencyHint: 'interactive' });
     this.context = context;
+    // Invoke resume() in the SAME user gesture, before the asynchronous
+    // permission dialog consumes transient activation (notably on iOS).
+    // Full graph readiness is checked again after the worklet is installed.
+    void context.resume().catch(() => {});
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({

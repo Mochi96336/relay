@@ -4671,6 +4671,103 @@ function backingClosed(socket: RelaySocket) {
   broadcastStatus();
 }
 
+/**
+ * Strictly opt-in N=2 media registration. A separate flag is required even
+ * when the consent-only Shadow is on. This path NEVER subscribes N=2 to the
+ * production monitor, record, output or N=1 Mic/Robot capture routes.
+ */
+function handleChoirMediaMessage(socket: RelaySocket, payload: Record<string, unknown>): boolean {
+  const type = payload.type;
+  if (!['choir-room-begin', 'choir-secondary-media-claim-request',
+    'choir-secondary-media-register'].includes(String(type))) return false;
+  if (!choirMediaEnabled || !choirRestartCoordinator || !choirConsent
+    || !choirSecondaryTickets || !choirSecondaryIngress
+    || !socket.participantId || socket.role !== 'unknown'
+    || infrastructureCapability.authenticated(socket)
+    || !participants.participant(socket.participantId)?.connected) {
+    sendJson(socket, { type: 'choir-media-rejected', reason: 'disabled-or-unverified' });
+    return true;
+  }
+  const nowMs = performance.now();
+  if (type === 'choir-room-begin') {
+    const secondaryId = normalizeParticipantId(payload.secondaryId);
+    const roomEpoch = choirRestartCoordinator.proposedRoomEpochForConsent;
+    const leaderStatus = youtubeTimeline.statusPayload(nowMs);
+    // An active, already-authenticated N=1 publisher must belong to A,
+    // but that existing PCM path remains untouched and is NOT routed into
+    // the Choir mixer here. A's new Choir seat is initially muted.
+    const actualPublisher = [...wss.clients].some(raw =>
+      (raw as RelaySocket).participantId === socket.participantId
+      && micRuntime.isPublisher(raw as RelaySocket));
+    const canStart = Boolean(secondaryId && roomEpoch !== null
+      && actualPublisher
+      && participants.micOwnerId === socket.participantId
+      && choirConsent.hasConsent(socket.participantId, secondaryId!, roomEpoch!, nowMs)
+      && Number.isSafeInteger(leaderStatus.revision)
+      && choirRestartCoordinator.approveTrustedRestart({
+        actorParticipantId: socket.participantId,
+        primaryId: socket.participantId,
+        secondaryId: secondaryId!,
+        expectedRetiredRoomEpoch: roomEpoch! - 1,
+        expectedPlaybackRevision: leaderStatus.revision,
+        nowMs,
+      }));
+    if (!canStart) {
+      sendJson(socket, { type: 'choir-media-rejected', reason: 'room-not-authorized' });
+      return true;
+    }
+    const status = choirRestartCoordinator.preview();
+    const ticket = choirRestartCoordinator.admitVerifiedSinger({
+      roomEpoch: status.roomEpoch!, songEpoch: status.songEpoch!,
+      verifiedParticipantId: socket.participantId,
+      transportId: `choir-primary:${socket.connectionIncarnation}`,
+      nowMs,
+    });
+    if (!ticket) {
+      choirRestartCoordinator.retireFailedPrimaryAdmission(nowMs);
+      sendJson(socket, { type: 'choir-media-rejected', reason: 'primary-join-failed' });
+      return true;
+    }
+    sendJson(socket, {
+      type: 'choir-room-ready', roomEpoch: ticket.roomEpoch,
+      songEpoch: ticket.songEpoch, primary: 'awaiting-content',
+      secondary: 'join-required',
+    });
+    return true;
+  }
+  if (type === 'choir-secondary-media-claim-request') {
+    const claim = choirSecondaryTickets.issue(socket, nowMs);
+    if (!claim) {
+      sendJson(socket, { type: 'choir-media-rejected', reason: 'claim-not-authorized' });
+      return true;
+    }
+    // The opaque claim is delivered to EXACTLY B's consent-bearing socket.
+    sendJson(socket, {
+      type: 'choir-secondary-media-claim', ...claim,
+    });
+    return true;
+  }
+  // Real independent B media Socket. This request is a one-time grant; the
+  // sending browser cannot choose the room, seat or Media Epoch.
+  const token = payload.claimToken;
+  const rate = payload.sampleRate;
+  const version = payload.packetVersion;
+  const ticket = typeof token === 'string'
+    && version === 2 && typeof rate === 'number'
+    ? choirSecondaryTickets.redeem(socket, token, rate, version, nowMs) : null;
+  if (!ticket) {
+    sendJson(socket, { type: 'choir-media-rejected', reason: 'claim-invalid-or-expired' });
+    return true;
+  }
+  sendJson(socket, {
+    type: 'choir-secondary-media-registered',
+    roomEpoch: ticket.roomEpoch, songEpoch: ticket.songEpoch,
+    mediaEpoch: ticket.mediaEpoch, packetVersion: 2, sampleRate: rate,
+    awaitingContent: true,
+  });
+  return true;
+}
+
 function handleChoirConsentMessage(socket: RelaySocket, payload: Record<string, unknown>): boolean {
   const type = payload.type;
   if (!['choir-secondary-invite', 'choir-secondary-accept',
@@ -4746,8 +4843,9 @@ wss.on('connection', (rawSocket, request) => {
     // A socket bound to Choir secondary may carry ONLY its binary PCM. Never
     // allow it to claim the production Mic, issue a Take or change Robot/song.
     if (choirSecondaryIngress?.isAttached(socket)) return;
-    // Default-off authenticated invitation/consent UX is control-plane
-    // only: no client may mint a Choir room, role or media ticket.
+    // Opt-in experimental registration is checked before ordinary Relay
+    // protocols, preventing a B media Socket from claiming an N=1 role.
+    if (handleChoirMediaMessage(socket, payload)) return;
     if (handleChoirConsentMessage(socket, payload)) return;
     if (monitorTransport.acknowledge(socket, payload)) return;
     if (subscribeBroadcasts(socket, payload)) return;

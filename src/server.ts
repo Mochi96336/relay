@@ -15,6 +15,7 @@ import { ChoirRoomRestartCoordinatorExperiment } from './choir-room-restart-coor
 import { ChoirSecondaryPcmIngressExperiment } from './choir-secondary-pcm-ingress-experiment.js';
 import { ChoirSecondaryConsentExperiment } from './choir-secondary-consent-experiment.js';
 import { ChoirSecondaryMediaTicketExperiment } from './choir-secondary-media-ticket-experiment.js';
+import { ChoirTrustedSourceMirrorExperiment } from './choir-trusted-source-mirror-experiment.js';
 import { authorizeChoirRestartWithLiveRoles } from './choir-server-role-policy-experiment.js';
 import { loadAudioTransportConfig } from './audio-transport-config.js';
 import { parseAudioUplinkHealth, type AudioUplinkHealth } from './audio-uplink-health.js';
@@ -435,8 +436,25 @@ const choirSecondaryTickets = choirRestartCoordinator && choirConsent && choirSe
     choirRestartCoordinator, choirConsent, choirSecondaryIngress,
     raw => (raw as RelaySocket).readyState === WebSocket.OPEN,
   ) : null;
+// Explicitly double-opted-in experimental PCM mirror. Reads only server-owned
+// verified publisher and Robot backing frames, *after* ordinary N=1 admission.
+// The mirrored canonical room has no route to output/monitor/record.
+const choirSourceMirror = choirMediaEnabled && choirRestartCoordinator
+  ? new ChoirTrustedSourceMirrorExperiment(
+    choirRestartCoordinator, () => ({
+      primarySocket: micRuntime.publisher,
+      primaryOwnerId: micRuntime.mediaOwnerId,
+      primaryGeneration: micRuntime.mediaGeneration,
+      primaryRate: micRuntime.sampleRate,
+      robotBackingSocket: backingRuntime.socket,
+      robotBackingGeneration: backingRuntime.isRobot ? session.backingGeneration : null,
+      robotControlGeneration: sourceRuntime.generation,
+      robotRate: backingRuntime.sampleRate,
+      robotIsAuthoritative: backingRuntime.isRobot && sourceRuntime.connected(),
+    }),
+  ) : null;
 function tickChoirShadow(nowMs: number) {
-  // No Mic/Backing PCM is copied and no client can call the approval API.
+  // Authority observation never grants a singer or outputs Choir PCM.
   choirRestartCoordinator?.observe(nowMs);
   // Release expired socket ownership without ever allowing an old B frame
   // to fall through the regular Mic/Robot routes.
@@ -2326,6 +2344,10 @@ function processPublisherFrame(frame: PcmFrame) {
     micRuntime.sampleRate,
     nowMs,
   );
+  if (captureRestarted) choirSourceMirror?.sourceDiscontinuity(nowMs);
+  // Do not mirror unaccepted / retransmit / stale media; only real
+  // production-admitted PCM with an authenticated native capture cursor.
+  if (samples.length > 0) choirSourceMirror?.mirrorPrimary(frame, samples.length, nowMs);
   if (samples.length > 0) noteMicFrame(nowMs, frame);
   micAudibility.observeReceived(samples);
   micLevel.observeReceived(samples);
@@ -2389,6 +2411,11 @@ const mixerTimer = setInterval(() => {
     if (levelChanged) reportMicLevel('window');
   });
   reportMicTimelineFolds();
+  // Offline proof scheduler drains bounded canonical frames to numeric
+  // evidence only; NEVER forwards Choir mix buffers to users or Take.
+  const roomEpoch = choirSourceMirror?.roomEpoch;
+  if (roomEpoch !== null && roomEpoch !== undefined)
+    choirRestartCoordinator?.advanceDue(roomEpoch, performance.now());
 }, 5);
 
 function reportMicLevel(reason: 'window' | 'gain') {
@@ -4552,6 +4579,7 @@ const robotLifecycleProtocol = createRelayRobotLifecycleProtocol<RelaySocket>({
  * measuring the old capture is abandoned.
  */
 function backingCaptureRestarted() {
+  choirSourceMirror?.sourceDiscontinuity(performance.now());
   clearRobotContentTransition();
   takeController.noteQualityEvent('backing-capture-restarted');
   abandonProbeRun();
@@ -4605,6 +4633,10 @@ function audioUplinkReceived(socket: RelaySocket, data: Buffer) {
   }
 
   noteRobotTransitionBackingFrame(frame, samples, start, nowMs);
+  // Same *trusted* Robot native capture as production; no second decoder or
+  // arbitrary client-supplied video/sample positions are introduced.
+  if (backingRuntime.isRobot && samples.length > 0)
+    choirSourceMirror?.mirrorRobot(frame, samples.length, nowMs);
   const contentTimingStart = mappedContentBackingStart(start, nowMs);
   if (contentTimingStart !== null) feedContentBackingEvidence(samples, contentTimingStart, nowMs);
 }
@@ -4723,7 +4755,7 @@ function handleChoirMediaMessage(socket: RelaySocket, payload: Record<string, un
       transportId: `choir-primary:${socket.connectionIncarnation}`,
       nowMs,
     });
-    if (!ticket) {
+    if (!ticket || !choirSourceMirror?.bindPrimary(ticket, nowMs)) {
       choirRestartCoordinator.retireFailedPrimaryAdmission(nowMs);
       sendJson(socket, { type: 'choir-media-rejected', reason: 'primary-join-failed' });
       return true;

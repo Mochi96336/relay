@@ -1,0 +1,146 @@
+import {
+  decodePcmFrame, FRAME_HEADER_BYTES, FRAME_MAGIC, FRAME_VERSION,
+} from './pcm-frame.js';
+import type { ChoirFreshCaptureTicket } from './choir-fresh-room-handshake-experiment.js';
+import type { ChoirRoomRestartCoordinatorExperiment } from './choir-room-restart-coordinator-experiment.js';
+
+/**
+ * PRIVATE, experimental, *secondary-only* WebSocket PCM adapter.
+ *
+ * It cannot grant a ticket: an already trusted SERVER authorization flow
+ * must call bindVerifiedSecondary() with a ticket issued by the restart
+ * coordinator. In production the bind entrypoint is intentionally unwired.
+ * No client JSON message can grant media authority.
+ *
+ * Attached sockets are consumed even on malformed/stale input so a choir
+ * packet can NEVER fall through to the existing N=1 Mic/Robot path.
+ */
+type ChoirSecondarySocket = object & {
+  participantId?: string;
+  role: string;
+};
+
+type BoundSecondary = {
+  ticket: ChoirFreshCaptureTicket;
+  sampleRate: number;
+  generation: number | null;
+  packetWindowStartMs: number;
+  packetCount: number;
+};
+
+export type ChoirIngressResult =
+  | { intercepted: false }
+  | { intercepted: true; accepted: boolean; reason:
+      'accepted' | 'malformed-frame' | 'too-large' | 'rate-limited'
+      | 'stale-authority' | 'socket-identity-changed' | 'capture-restarted' };
+
+export class ChoirSecondaryPcmIngressExperiment {
+  private readonly sockets = new WeakMap<ChoirSecondarySocket, BoundSecondary>();
+  private readonly maxFrameBytes: number;
+
+  constructor(
+    private readonly coordinator: Pick<ChoirRoomRestartCoordinatorExperiment,
+      'receiveVerifiedMic' | 'disconnectVerifiedSinger'>,
+    private readonly isSocketOpen: (socket: ChoirSecondarySocket) => boolean,
+    maxPacketMs = 200,
+  ) {
+    if (!Number.isSafeInteger(maxPacketMs) || maxPacketMs <= 0 || maxPacketMs > 1_000)
+      throw new RangeError('Invalid Choir packet duration');
+    // 192kHz * 200ms * 2 bytes + 16 byte header.
+    this.maxFrameBytes = FRAME_HEADER_BYTES + Math.ceil(192_000 * maxPacketMs / 1_000) * 2;
+    this.maxPacketMs = maxPacketMs;
+  }
+  private readonly maxPacketMs: number;
+
+  /**
+   * Ticket must already have been issued by the server's trusted A/B admission.
+   * The authenticated socket identity is checked again on every binary frame.
+   * A production publisher, backing source or monitor socket cannot double as
+   * a Choir secondary transport.
+   */
+  bindVerifiedSecondary(
+    socket: ChoirSecondarySocket,
+    ticket: ChoirFreshCaptureTicket,
+    sourceRate: number,
+    nowMs: number,
+  ): boolean {
+    if (this.sockets.has(socket) || !this.isSocketOpen(socket)
+      || socket.role !== 'unknown'
+      || !socket.participantId || socket.participantId !== ticket.participantId
+      || ticket.seat !== 'secondary'
+      || !Number.isSafeInteger(ticket.roomEpoch) || ticket.roomEpoch < 1
+      || !Number.isSafeInteger(ticket.songEpoch) || ticket.songEpoch < 1
+      || !Number.isSafeInteger(ticket.mediaEpoch) || ticket.mediaEpoch < 1
+      || !ticket.transportId || ticket.transportId !== ticket.transportId.trim()
+      || !Number.isInteger(sourceRate) || sourceRate < 8_000 || sourceRate > 192_000
+      || !Number.isFinite(nowMs) || nowMs < 0) return false;
+
+    this.sockets.set(socket, {
+      ticket, sampleRate: sourceRate, generation: null,
+      packetWindowStartMs: nowMs, packetCount: 0,
+    });
+    return true;
+  }
+
+  /** Called ahead of ALL regular production media routes. */
+  interceptBinary(socket: ChoirSecondarySocket, bytes: Buffer, nowMs: number):
+    ChoirIngressResult {
+    const bound = this.sockets.get(socket);
+    if (!bound) return { intercepted: false };
+    const rejected = (reason: Exclude<ChoirIngressResult, { intercepted: false }>['reason']):
+      ChoirIngressResult => ({ intercepted: true, accepted: false, reason });
+    if (!this.isSocketOpen(socket) || socket.role !== 'unknown'
+      || socket.participantId !== bound.ticket.participantId)
+      return rejected('socket-identity-changed');
+
+    // No unbounded per-socket PCM aggregation, independent of the global
+    // Relay WebSocket's existing 1MB max payload guard.
+    if (!Buffer.isBuffer(bytes) || bytes.length > this.maxFrameBytes
+      || bytes.length < FRAME_HEADER_BYTES + 2)
+      return rejected('too-large');
+    if (bytes.readUInt16LE(0) !== FRAME_MAGIC
+      || bytes.readUInt8(2) !== FRAME_VERSION || bytes.readUInt8(3) !== 0
+      || (bytes.length - FRAME_HEADER_BYTES) % 2 !== 0)
+      return rejected('malformed-frame');
+
+    // A bounded packet-rate budget protects the isolated experiment from a
+    // misbehaving sender without interfering with the N=1 transport.
+    if (!Number.isFinite(nowMs) || nowMs < bound.packetWindowStartMs)
+      return rejected('stale-authority');
+    if (nowMs - bound.packetWindowStartMs >= 1_000) {
+      bound.packetWindowStartMs = nowMs;
+      bound.packetCount = 0;
+    }
+    if (++bound.packetCount > 150) return rejected('rate-limited');
+
+    const frame = decodePcmFrame(bytes);
+    const sampleCount = frame.pcm.length / 2;
+    if (!Number.isSafeInteger(frame.firstSampleIndex)
+      || frame.generation === null
+      || !Number.isSafeInteger(frame.generation) || frame.generation < 0
+      || frame.firstSampleIndex === null || frame.firstSampleIndex < 0
+      || sampleCount < 1 || sampleCount > Math.ceil(bound.sampleRate * this.maxPacketMs / 1_000)
+      || !Number.isSafeInteger(frame.firstSampleIndex + sampleCount))
+      return rejected('malformed-frame');
+    if (bound.generation !== null && frame.generation !== bound.generation)
+      return rejected('capture-restarted');
+    const accepted = this.coordinator.receiveVerifiedMic(
+      bound.ticket, frame, bound.sampleRate, nowMs,
+    );
+    if (!accepted) return rejected('stale-authority');
+    bound.generation = frame.generation;
+    return { intercepted: true, accepted: true, reason: 'accepted' };
+  }
+
+  /** A physical close revokes its exact admitted transport, never another Mic. */
+  disconnect(socket: ChoirSecondarySocket, nowMs: number): boolean {
+    const bound = this.sockets.get(socket);
+    if (!bound) return false;
+    this.sockets.delete(socket);
+    return this.coordinator.disconnectVerifiedSinger(bound.ticket, nowMs);
+  }
+
+  isAttached(socket: ChoirSecondarySocket): boolean {
+    return this.sockets.has(socket);
+  }
+}

@@ -6,6 +6,8 @@ import { ChoirShadowLifecycleExperiment } from '../src/choir-shadow-lifecycle-ex
 import { ChoirFreshRoomHandshakeExperiment } from '../src/choir-fresh-room-handshake-experiment.js';
 import { ChoirRoomRestartCoordinatorExperiment } from '../src/choir-room-restart-coordinator-experiment.js';
 import { laggedMultibandMusicPair } from './helpers/music-calibration.js';
+import { ChoirSecondaryPcmIngressExperiment } from '../src/choir-secondary-pcm-ingress-experiment.js';
+import { encodePcmFrame } from '../src/pcm-frame.js';
 
 const VIDEO = 'dQw4w9WgXcQ';
 const RATE = 48_000;
@@ -197,6 +199,40 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
     assert.equal(f.approve(rev2, 102, 1), false,
       'the new Shadow incarnation is not a substitute for our private CAS');
     assert.equal(f.coordinator.preview().monitoring, 'unavailable');
+  });
+
+  test('real coordinator binds authenticated B-only socket and fences Seek before any Mic leak', () => {
+    const f = fixture();
+    const revision = f.startSong(0);
+    f.coordinator.observe(0);
+    assert.equal(f.approve(revision, 0), true);
+    const a = f.admit(1, 1, 'A', 'socket-A', 1)!;
+    const b = f.admit(1, 1, 'B', 'socket-B', 2)!;
+    type Socket = { participantId: string; role: string; open: boolean };
+    const socket: Socket = { participantId: 'B', role: 'unknown', open: true };
+    const ingress = new ChoirSecondaryPcmIngressExperiment(
+      f.coordinator, s => (s as Socket).open,
+    );
+    const packet = encodePcmFrame(8, 0,
+      Buffer.from(new Int16Array(960).fill(7_000).buffer));
+    assert.equal(ingress.bindVerifiedSecondary(socket, a, RATE, 5), false,
+      'original owner cannot register as B');
+    assert.equal(ingress.bindVerifiedSecondary(socket, b, RATE, 6), true,
+      'B is bound only to the freshly issued, real coordinator ticket');
+    assert.deepEqual(ingress.interceptBinary(socket, packet, 20), {
+      intercepted: true, accepted: true, reason: 'accepted',
+    });
+    assert.equal(f.songs.update(playing({ currentTime: 80 }), leader, null, 100).accepted,
+      true);
+    assert.deepEqual(ingress.interceptBinary(socket,
+      encodePcmFrame(8, 960, Buffer.from(new Int16Array(960).buffer)), 101), {
+      intercepted: true, accepted: false, reason: 'stale-authority',
+    }, 'old B frame is consumed but cannot cross the new room epoch');
+    assert.equal(f.coordinator.preview().monitoring, 'unavailable');
+    assert.equal(ingress.disconnect(socket, 102), false);
+    assert.equal(ingress.isAttached(socket), false);
+    assert.equal(ingress.bindVerifiedSecondary(socket, b, RATE, 103), false,
+      'revoked old ticket cannot bind again after the Seek');
   });
 
   test('Robot generation swap, expired leader and playback loss invalidate pending room', () => {

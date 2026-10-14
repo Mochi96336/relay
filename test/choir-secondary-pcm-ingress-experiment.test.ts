@@ -229,7 +229,7 @@ describe('isolated Choir secondary WebSocket PCM admission', () => {
     const f = fixture();
     const socket = socketFor('B');
     assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 0, 2), true);
-    for (let seq = 0; seq <= 128; seq++) {
+    for (let seq = 0; seq <= 129; seq++) {
       // Keep packet rate below 150/s while advancing an ordinary sequence.
       assert.equal(boundResult(f.ingress.interceptBinary(
         socket, v2(seq, seq * 960), seq * 20 + 1,
@@ -239,7 +239,7 @@ describe('isolated Choir secondary WebSocket PCM admission', () => {
       .reason, 'sequence-out-of-window');
     assert.equal(boundResult(f.ingress.interceptBinary(socket, v2(130, 130 * 960), 2_620))
       .accepted, true);
-    assert.equal(f.accepted.length, 130);
+    assert.equal(f.accepted.length, 131);
   });
 
 });

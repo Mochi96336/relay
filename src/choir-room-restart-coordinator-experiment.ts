@@ -219,6 +219,15 @@ export class ChoirRoomRestartCoordinatorExperiment {
     return true;
   }
 
+  /** Explicit all-or-nothing failure if A's seat could not be admitted. */
+  retireFailedPrimaryAdmission(nowMs: number): boolean {
+    this.observe(nowMs);
+    if (!this.approved || !this.shadow.retireForTrustRevocation(nowMs))
+      return false;
+    this.observe(nowMs);
+    return this.approved === null;
+  }
+
   /** Called only AFTER existing private participant/transport verification. */
   admitVerifiedSinger(request: {
     roomEpoch: number; songEpoch: number;

@@ -142,6 +142,9 @@ export class ChoirSecondaryCapture {
     }
     if (!value) return;
     const pcm = value.buffer;
+    // Own the Worklet buffer before doing any fallible clock or network work.
+    // A capture-clock failure stops the graph, but must still exit this scope.
+    try {
     const samples = pcm.byteLength / 2;
     const firstSampleIndex = this.cursor;
     // ALWAYS advance native cursor even if WebSocket is late/disconnected.
@@ -167,7 +170,6 @@ export class ChoirSecondaryCapture {
         this.clockSampleOrigin = this.cursor;
       }
     }
-    try {
       const age = Number.isFinite(value.capturedAtContextTime)
         ? this.context.currentTime - value.capturedAtContextTime : Infinity;
       const socket = this.socket;
@@ -183,7 +185,9 @@ export class ChoirSecondaryCapture {
     } finally {
       // The audio thread owns its own recycled chunk buffer; return after
       // all packet bytes have been copied, never while encoding it.
-      if (this.epoch === epoch) graph.returnBuffer(pcm);
+      // The original graph is responsible for rejecting returns after dispose.
+      // Do not test this.epoch: fail() increments it before this finally runs.
+      graph.returnBuffer(pcm);
     }
   }
 

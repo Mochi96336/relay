@@ -375,16 +375,26 @@ choirConsent = choirRestartCoordinator && choirShadow
     scopeNow: (nowMs) => {
       const shadow = choirShadow.snapshot();
       const song = youtubeTimeline.statusPayload(nowMs);
-      if (shadow.state !== 'shadow-active'
-        || shadow.roomEpoch === null || shadow.videoId === null
-        || shadow.backingGeneration === null
-        || song.videoId !== shadow.videoId || song.state !== 1
+      const proposedRoomEpoch = choirRestartCoordinator.proposedRoomEpochForConsent;
+      const backingGeneration = backingRuntime.isRobot ? session.backingGeneration : null;
+      // After a Seek the old Shadow is intentionally retired, yet B must
+      // be able to explicitly consent to the NEXT proposed Room Epoch before
+      // any restart CAS may grant a room. Proposal alone grants no Mic.
+      if (proposedRoomEpoch === null
+        || !Number.isSafeInteger(backingGeneration)
+        || song.state !== 1
         || song.leaderFresh !== true || song.leaderConnected !== true
+        || song.handoffState !== 'idle'
+        || typeof song.videoId !== 'string'
+        || !/^[A-Za-z0-9_-]{11}$/.test(song.videoId)
+        || (shadow.state === 'shadow-active'
+          && (shadow.videoId !== song.videoId
+            || shadow.backingGeneration !== backingGeneration))
         || !Number.isSafeInteger(song.revision)
         || !sourceRuntime.connected()) return null;
       return {
-        roomEpoch: shadow.roomEpoch, playbackRevision: song.revision,
-        videoId: shadow.videoId, backingGeneration: shadow.backingGeneration,
+        roomEpoch: proposedRoomEpoch, playbackRevision: song.revision,
+        videoId: song.videoId, backingGeneration,
         robotSourceGeneration: sourceRuntime.generation,
       };
     },

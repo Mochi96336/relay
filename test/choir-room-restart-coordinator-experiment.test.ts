@@ -526,6 +526,16 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
     assert.equal(broker.redeem(media, grant.claimToken, RATE, 2, 6), null);
     assert.equal(broker.issue(b, 7)?.roomEpoch, 1,
       'after physical bind failure B must be able to try a FRESH claim');
+    const nextIngress = new ChoirSecondaryPcmIngressExperiment(f.coordinator,
+      socket => (socket as Socket).open);
+    const retryBroker = new ChoirSecondaryMediaTicketExperiment(
+      f.coordinator, consent, nextIngress, socket => (socket as Socket).open,
+    );
+    const newGrant = retryBroker.issue(b, 8)!;
+    const newTicket = retryBroker.redeem(media, newGrant.claimToken, RATE, 2, 9);
+    assert.ok(newTicket, 'binding rollback must preserve a real fresh B retry');
+    assert.equal(newTicket.seat, 'secondary');
+    assert.equal(f.coordinator.preview().secondary, 'calibration-required');
   });
 
 });

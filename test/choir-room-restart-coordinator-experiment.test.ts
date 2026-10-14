@@ -116,11 +116,11 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
     assert.equal(f.coordinator.previewForVerifiedSinger('A'), null);
     assert.equal(f.coordinator.previewForVerifiedSinger('B'), null);
     assert.equal(f.coordinator.preview().monitoring, 'unavailable');
-    assert.equal(f.handshake.receiveVerifiedMic(a, {
+    assert.equal(f.coordinator.receiveVerifiedMic(a, {
       generation: 7, firstSampleIndex: 0,
       pcm: Buffer.from(new Int16Array(960).buffer),
     }, RATE, 101), false);
-    assert.equal(f.handshake.commitFreshContent(b, 101, false), false);
+    assert.equal(f.coordinator.commitFreshContent(b, 101), false);
     assert.equal(f.admit(1, 1, 'A', 'socket-old-A', 101), null);
     assert.equal(f.approve(original, 102, 1), false,
       'stale revision cannot reopen an expired room');
@@ -138,6 +138,46 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
     assert.equal(b2.seat, 'secondary');
     assert.equal(f.coordinator.preview().monitoring, 'backing-only',
       'the new room must independently recalibrate both Mic streams');
+  });
+
+  test('Seek between timer ticks rejects old PCM and Content even without explicit observe', () => {
+    const f = fixture();
+    const rev = f.startSong(0);
+    f.coordinator.observe(0);
+    assert.equal(f.approve(rev, 0), true);
+    const a = f.admit(1, 1, 'A', 'socket-A', 1)!;
+    assert.ok(a);
+    assert.equal(f.coordinator.receiveVerifiedMic(a, {
+      generation: 7, firstSampleIndex: 0,
+      pcm: Buffer.from(new Int16Array(960).buffer),
+    }, RATE, 20), true);
+    // No coordinator timer call between this accepted seek and next packet.
+    assert.equal(f.songs.update(playing({ currentTime: 80 }), leader, null, 100).accepted, true);
+    assert.equal(f.coordinator.receiveVerifiedMic(a, {
+      generation: 7, firstSampleIndex: 960,
+      pcm: Buffer.from(new Int16Array(960).buffer),
+    }, RATE, 101), false);
+    assert.equal(f.coordinator.analyzeFreshContent(a, 0, 102).status, 'rejected');
+    assert.equal(f.coordinator.commitFreshContent(a, 103), false);
+    assert.equal(f.coordinator.advanceDue(1, 120), false);
+    assert.equal(f.coordinator.preview().state, 'restart-required');
+    assert.equal(f.coordinator.preview().monitoring, 'unavailable');
+  });
+
+  test('a frozen Take cannot promote a pending Content proof through coordinator', () => {
+    const f = fixture();
+    const rev = f.startSong(0);
+    f.coordinator.observe(0);
+    assert.equal(f.approve(rev, 0), true);
+    const a = f.admit(1, 1, 'A', 'socket-A', 1)!;
+    assert.ok(a);
+    f.setTakeFrozen(true);
+    assert.equal(f.coordinator.commitFreshContent(a, 2), false);
+    f.setTakeFrozen(false);
+    assert.equal(f.coordinator.commitFreshContent(a, 3), false,
+      'Take was unfrozen but the actual six-second acoustic proof is absent');
+    assert.equal(f.coordinator.previewForVerifiedSinger('A')?.stage,
+      'calibration-required');
   });
 
   test('Robot generation swap, expired leader and playback loss invalidate pending room', () => {
@@ -178,27 +218,27 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
         const first = (at / 2_000 - 1) * chunk;
         const end = first + chunk;
         for (const [ticket, generation] of [[a, 7], [b, 8]] as const) {
-          assert.equal(f.handshake.receiveVerifiedMic(ticket, {
+          assert.equal(f.coordinator.receiveVerifiedMic(ticket, {
             generation, firstSampleIndex: first,
             pcm: mic.subarray(first * 2, end * 2),
           }, RATE, at), true);
         }
-        assert.equal(f.handshake.receiveTrustedRobot(1, 1, {
+        assert.equal(f.coordinator.receiveTrustedRobot(1, 1, {
           generation: 9, firstSampleIndex: first,
           pcm: backing.subarray(first * 2, end * 2),
         }, RATE, at), true);
       }
-      assert.equal(f.handshake.advanceDue(1, at), true);
+      assert.equal(f.coordinator.advanceDue(1, at), true);
       f.coordinator.observe(at);
     }
-    assert.equal(f.handshake.analyzeFreshContent(a, 0, 6_001).status, 'candidate');
-    assert.equal(f.handshake.analyzeFreshContent(b, 0, 6_002).status, 'candidate');
-    assert.equal(f.handshake.commitFreshContent(a, 6_003, false), true);
+    assert.equal(f.coordinator.analyzeFreshContent(a, 0, 6_001).status, 'candidate');
+    assert.equal(f.coordinator.analyzeFreshContent(b, 0, 6_002).status, 'candidate');
+    assert.equal(f.coordinator.commitFreshContent(a, 6_003), true);
     assert.equal(f.coordinator.preview().state, 'partially-ready');
     assert.equal(f.coordinator.preview().monitoring, 'one-voice');
     assert.equal(f.coordinator.previewForVerifiedSinger('A')?.stage, 'ready');
     assert.equal(f.coordinator.previewForVerifiedSinger('B')?.stage, 'calibration-required');
-    assert.equal(f.handshake.commitFreshContent(b, 6_004, false), true);
+    assert.equal(f.coordinator.commitFreshContent(b, 6_004), true);
     assert.equal(f.coordinator.preview().state, 'duet-ready');
     assert.equal(f.coordinator.preview().monitoring, 'two-voices');
     const notice = f.coordinator.previewForVerifiedSinger('A');

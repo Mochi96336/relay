@@ -104,3 +104,54 @@ test('mobile B explicitly accepts and withdraws; disconnect hides stale authoriz
   await expect(page.locator('#choir-consent-panel')).toBeHidden();
   await expect(page.locator('#choir-withdraw')).toBeHidden();
 });
+
+test('double opt-in shows explicit A room creation and B isolated media request only after consent', async ({ page }) => {
+  await openFixture(page, 'owner', 'owner');
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('relay-choir-consent-availability', {
+      detail: { available: true },
+    }));
+    window.dispatchEvent(new CustomEvent('relay-choir-media-mode', {
+      detail: { enabled: true },
+    }));
+  });
+  await page.locator('#choir-invite-open').click();
+  await expect(page.locator('#choir-room-begin')).toBeHidden();
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent(
+    'relay-choir-consent-message', {
+      detail: { type: 'choir-secondary-consent-status', status: 'accepted',
+        secondaryId: 'singerB', roomEpoch: 1 },
+    },
+  )));
+  await expect(page.locator('#choir-room-begin')).toBeVisible();
+  await page.locator('#choir-room-begin').click();
+  expect((await page.evaluate(() => window.__choirSent)).at(-1)).toEqual({
+    type: 'choir-room-begin', secondaryId: 'singerB',
+  });
+  await expect.poll(() => page.evaluate(() =>
+    document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+  await openFixture(page, 'singerB', 'owner');
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('relay-choir-consent-availability', {
+      detail: { available: true },
+    }));
+    window.dispatchEvent(new CustomEvent('relay-choir-media-mode', {
+      detail: { enabled: true },
+    }));
+    window.dispatchEvent(new CustomEvent('relay-choir-consent-message', {
+      detail: { type: 'choir-secondary-invitation',
+        inviteId: 'test-invite', primaryId: 'owner', roomEpoch: 1 },
+    }));
+    window.dispatchEvent(new CustomEvent('relay-choir-consent-message', {
+      detail: { type: 'choir-secondary-consent-status',
+        status: 'accepted', secondaryId: 'singerB', roomEpoch: 1 },
+    }));
+  });
+  await expect(page.locator('#choir-secondary-connect')).toBeVisible();
+  await page.locator('#choir-secondary-connect').click();
+  expect((await page.evaluate(() => window.__choirSent)).at(-1)).toEqual({
+    type: 'choir-secondary-media-claim-request',
+  });
+  await expect(page.locator('#choir-consent-note')).toContainText('尚未開放雙人收音');
+});

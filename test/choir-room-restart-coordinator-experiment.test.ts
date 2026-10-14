@@ -543,6 +543,10 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
       await until(() => !pipeline.isBusy, 'A worker must settle');
       assert.equal(pipeline.stats.applied, 1, 'A result commits only through coordinator');
       assert.equal(f.coordinator.preview().state, 'partially-ready');
+      // The real server drains the room every 5ms. Do not fake a 340ms
+      // scheduler stall between A and B's worker jobs: that must fail closed.
+      for (let at = 6_020; at <= 6_340; at += 20)
+        assert.equal(f.coordinator.advanceDue(1, at), true);
       approvedClock = 6_350;
       assert.equal(pipeline.tick(6_340), true, 'B uses its own independent ticket and capture');
       await until(() => !pipeline.isBusy, 'B worker must settle');

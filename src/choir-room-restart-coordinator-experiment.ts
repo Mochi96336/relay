@@ -74,6 +74,8 @@ export class ChoirRoomRestartCoordinatorExperiment {
     // Mic-owner / B-consent check, re-evaluated on every media operation.
     private readonly roomRolesStillAuthorized: (primaryId: string, secondaryId: string, roomEpoch: number) => boolean
       = () => false,
+    // Retire every room-scoped source binding synchronously with authority.
+    private readonly onRoomRetired: (roomEpoch: number) => void = () => {},
   ) {}
 
   /**
@@ -107,8 +109,10 @@ export class ChoirRoomRestartCoordinatorExperiment {
       || !this.roomRolesStillAuthorized(
         this.approved.primaryId, this.approved.secondaryId, this.approved.roomEpoch,
       ))) {
-      this.handshake.retireTrustedRoom(this.approved.roomEpoch, nowMs);
+      const retiredRoomEpoch = this.approved.roomEpoch;
+      this.handshake.retireTrustedRoom(retiredRoomEpoch, nowMs);
       this.approved = null;
+      this.onRoomRetired(retiredRoomEpoch);
     }
     return this.preview();
   }

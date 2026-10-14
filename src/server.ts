@@ -2339,15 +2339,16 @@ function processPublisherFrame(frame: PcmFrame) {
     micUplinkBacklog.noteArrived(frame.generation, frame.firstSampleIndex + frame.pcm.byteLength / 2);
   }
   const nowMs = performance.now();
-  const { samples, start, captureRestarted } = session.ingestMic(
+  const { samples, start, captureRestarted, nativeFrameMirroringSafe } = session.ingestMic(
     frame,
     micRuntime.sampleRate,
     nowMs,
+    choirSourceMirror !== null,
   );
   if (captureRestarted) choirSourceMirror?.sourceDiscontinuity(nowMs);
   // Do not mirror unaccepted / retransmit / stale media; only real
   // production-admitted PCM with an authenticated native capture cursor.
-  if (samples.length > 0) choirSourceMirror?.mirrorPrimary(frame, samples.length, nowMs);
+  if (nativeFrameMirroringSafe) choirSourceMirror?.mirrorPrimary(frame, true, nowMs);
   if (samples.length > 0) noteMicFrame(nowMs, frame);
   micAudibility.observeReceived(samples);
   micLevel.observeReceived(samples);
@@ -4616,11 +4617,12 @@ function audioUplinkReceived(socket: RelaySocket, data: Buffer) {
   const frame = decodePcmFrame(data);
   const previousGeneration = session.backingGeneration;
   const nowMs = performance.now();
-  const { samples, start, captureRestarted } = session.ingestBacking(
+  const { samples, start, captureRestarted, nativeFrameMirroringSafe } = session.ingestBacking(
     frame,
     backingRuntime.sampleRate,
     nowMs,
     backingRuntime.isRobot,
+    choirSourceMirror !== null && backingRuntime.isRobot,
   );
   if (samples.length > 0) backingRuntime.noteFrame(socket, nowMs);
   refreshLiveMicNetworkCompensation();
@@ -4635,8 +4637,8 @@ function audioUplinkReceived(socket: RelaySocket, data: Buffer) {
   noteRobotTransitionBackingFrame(frame, samples, start, nowMs);
   // Same *trusted* Robot native capture as production; no second decoder or
   // arbitrary client-supplied video/sample positions are introduced.
-  if (backingRuntime.isRobot && samples.length > 0)
-    choirSourceMirror?.mirrorRobot(frame, samples.length, nowMs);
+  if (backingRuntime.isRobot && nativeFrameMirroringSafe)
+    choirSourceMirror?.mirrorRobot(frame, true, nowMs);
   const contentTimingStart = mappedContentBackingStart(start, nowMs);
   if (contentTimingStart !== null) feedContentBackingEvidence(samples, contentTimingStart, nowMs);
 }

@@ -360,3 +360,33 @@ test('double opt-in A/B room issues real one-use v2 B Media Epoch but no N=1 aud
     await relay.stop();
   }
 });
+
+test('media flag alone never enables Choir without explicit Shadow consent control plane', async () => {
+  const relay = await startRelay({
+    RELAY_CHOIR_MEDIA_EXPERIMENT: '1', RELAY_CHOIR_SHADOW: '0',
+    RELAY_TEST_LEGACY_PARTICIPANTS: '0',
+  });
+  const client = await RelayClient.connect(relay);
+  try {
+    const capability = '9'.repeat(64);
+    const participantId = participantIdForCapability(capability)!;
+    client.send({ type: 'participant-authenticate',
+      participantId, capability, nickname: 'Unapproved A' });
+    await client.waitForType('participant-authenticated');
+    client.send({ type: 'choir-room-begin', secondaryId: participantId });
+    assert.equal((await client.waitFor((m) => m.type === 'choir-media-rejected'
+      && m.reason === 'disabled-or-unverified')).reason, 'disabled-or-unverified');
+    client.send({ type: 'choir-secondary-media-claim-request' });
+    await client.waitFor((m) => m.type === 'choir-media-rejected'
+      && m.reason === 'disabled-or-unverified');
+    client.send({ type: 'choir-secondary-media-register',
+      claimToken: 'a'.repeat(64), packetVersion: 2, sampleRate: 48_000 });
+    await client.waitFor((m) => m.type === 'choir-media-rejected'
+      && m.reason === 'disabled-or-unverified');
+    assert.equal(client.messages.some(m => m.type === 'choir-consent-available'),
+      false, 'shadow disabled must not advertise consent or media features');
+  } finally {
+    client.close();
+    await relay.stop();
+  }
+});

@@ -559,6 +559,55 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
     }
   });
 
+
+  test('Seek cancels a running Content Worker and fences late Room Epoch proof', () => {
+    const f = fixture();
+    const rev = f.startSong(0);
+    f.coordinator.observe(0);
+    assert.equal(f.approve(rev, 0), true);
+    const a = f.admit(1, 1, 'A', 'primary-A', 1)!;
+    const pcm = Buffer.alloc(2 * RATE * 2, 13);
+    for (let at = 20; at <= 6_000; at += 20) {
+      if (at % 1_000 === 0) {
+        assert.equal(f.songs.update(
+          playing({ currentTime: 12 + at / 1_000 }), leader, null, at,
+        ).accepted, true);
+      }
+      if (at % 2_000 === 0) {
+        const first = (at / 2_000 - 1) * RATE * 2;
+        assert.equal(f.coordinator.receiveVerifiedMic(a, {
+          generation: 7, firstSampleIndex: first, pcm,
+        }, RATE, at), true);
+        assert.equal(f.coordinator.receiveTrustedRobot(1, 1, {
+          generation: 9, firstSampleIndex: first, pcm,
+        }, RATE, at), true);
+      }
+      assert.equal(f.coordinator.advanceDue(1, at), true);
+    }
+    const stale = f.coordinator.prepareFreshWorkerContent(6_001);
+    assert.ok(stale, 'exact six-second positioned room history is complete');
+    const pipeline = new ChoirLiveContentPipelineExperiment(f.coordinator, {
+      now: () => 6_003, retryDelayMs: 250,
+    });
+    try {
+      assert.equal(pipeline.tick(6_001), true);
+      assert.equal(pipeline.isBusy, true);
+      assert.equal(f.songs.update(
+        playing({ currentTime: 88 }), leader, null, 6_002,
+      ).accepted, true);
+      assert.equal(f.coordinator.observe(6_002).state, 'restart-required');
+      pipeline.cancelRoom(1);
+      assert.equal(pipeline.isBusy, false);
+      assert.equal(pipeline.stats.applied, 0);
+      assert.equal(f.coordinator.acceptFreshWorkerContent(
+        stale.ticket, stale.proof, { micLagMs: 120, confidence: .9 }, 6_003,
+      ), false, 'old six-second worker proof cannot cross a Seek');
+      assert.equal(f.coordinator.preview().monitoring, 'unavailable');
+    } finally {
+      pipeline.close();
+    }
+  });
+
   test('A capture replacement, Robot control replacement and invalid native generation retire old mirror', () => {
     for (const change of ['primary-socket', 'primary-generation',
       'robot-backing-socket', 'robot-control-generation',

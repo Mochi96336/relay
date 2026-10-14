@@ -258,8 +258,10 @@ test('double opt-in A/B room issues real one-use v2 B Media Epoch but no N=1 aud
     ]);
     assert.equal((await a.waitForType('choir-consent-available')).mode,
       'media-experiment');
+    // Choir A mirroring requires an authenticated v2 native generation,
+    // not a legacy publisher that has no stable capture clock identity.
     publisher.send({ type: 'register', role: 'publisher', sampleRate: 48_000,
-      captureGeneration: 1 });
+      captureGeneration: 1, initialSequence: 0, audioPacketVersion: 2 });
     await publisher.waitFor((m) => m.type === 'registered' && m.role === 'publisher');
     robotBacking.send({ type: 'register', role: 'backing', robot: true,
       sampleRate: 48_000, captureGeneration: 9, captureSampleCursor: 0 });

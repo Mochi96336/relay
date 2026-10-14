@@ -21,7 +21,7 @@ const playing = (values: Record<string, unknown> = {}) => ({
   playbackRate: 1, bufferedFraction: .8, ...values,
 });
 type RobotSocket = { open: boolean; isRobotSource?: boolean };
-function fixture() {
+function fixture(onRoomRetired: (roomEpoch: number) => void = () => {}) {
   const songs = new SongSession();
   const robot = new SourceRuntime<RobotSocket>({ isConnected: s => s.open });
   const robotSocket: RobotSocket = { open: true };
@@ -43,6 +43,7 @@ function fixture() {
       && approval.primaryId === 'A' && approval.secondaryId === 'B',
     () => takeFrozen, config, handshake,
     () => rolesStillValid,
+    onRoomRetired,
   );
   const startSong = (at = 0) => {
     assert.equal(songs.update(playing(), leader, null, at).accepted, true);
@@ -436,6 +437,42 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
     assert.equal(f.coordinator.commitFreshContent(b, 6_004), true);
     assert.equal(f.coordinator.preview().state, 'duet-ready',
       'readiness refers to proof-only canonical room, NOT N=1 monitoring');
+  });
+
+
+  test('Seek synchronously releases old mirror without waiting for a PCM packet', () => {
+    let mirror: ChoirTrustedSourceMirrorExperiment | null = null;
+    const f = fixture((roomEpoch) => { mirror?.revokeRoom(roomEpoch); });
+    const revision = f.startSong(0);
+    f.coordinator.observe(0);
+    assert.equal(f.approve(revision, 0), true);
+    const a1 = f.admit(1, 1, 'A', 'primary-1', 1)!;
+    const primarySocket = { id: 'authenticated-a' };
+    const robotBackingSocket = { id: 'robot-backing' };
+    const state = {
+      primarySocket, primaryOwnerId: 'A', primaryGeneration: 7,
+      primaryRate: RATE, robotBackingSocket, robotBackingGeneration: 9,
+      robotControlGeneration: f.robot.generation, robotRate: RATE,
+      robotIsAuthoritative: true,
+    };
+    mirror = new ChoirTrustedSourceMirrorExperiment(f.coordinator, () => state);
+    assert.equal(mirror.bindPrimary(a1, 2), true);
+    assert.equal(mirror.roomEpoch, 1);
+
+    // SongSession invalidates the room. No Mic or Robot frame is delivered
+    // between retirement and the new Room Epoch's primary admission.
+    assert.equal(f.songs.update(playing({ currentTime: 81 }), leader, null, 100).accepted, true);
+    const nextRevision = (f.songs.statusPayload(100) as { revision: number }).revision;
+    assert.equal(f.coordinator.observe(100).state, 'restart-required');
+    assert.equal(mirror.roomEpoch, null, 'no stale source binding remains after Seek');
+    assert.equal(f.approve(nextRevision, 101, 1), true);
+    const a2 = f.admit(2, 2, 'A', 'primary-2', 102)!;
+    assert.equal(mirror.bindPrimary(a2, 103), true,
+      'new authority binds immediately, without an old PCM clean-up packet');
+    assert.equal(mirror.roomEpoch, 2);
+    assert.equal(mirror.revokeRoom(1), false,
+      'late old-room revocation cannot clear the newly authorized mirror');
+    assert.equal(mirror.roomEpoch, 2);
   });
 
   test('A capture replacement, Robot control replacement and invalid native generation retire old mirror', () => {

@@ -68,6 +68,8 @@ describe('isolated Choir secondary WebSocket PCM admission', () => {
       B, 48_000, 10), false, 'production publisher role cannot double-register as Choir');
     assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 10), true);
     assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 11), false);
+    assert.equal(f.ingress.bindVerifiedSecondary(socketFor('B'), B, 48_000, 12), false,
+      'same B ticket may not be claimed by two physical WebSockets');
     assert.deepEqual(f.ingress.interceptBinary(socket, raw, 20),
       { intercepted: true, accepted: true, reason: 'accepted' });
     assert.equal(f.accepted.length, 1);
@@ -116,6 +118,10 @@ describe('isolated Choir secondary WebSocket PCM admission', () => {
     assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 0), true);
     assert.equal(boundResult(f.ingress.interceptBinary(socket, bytes(), 10)).accepted, true);
     f.revoke();
+    assert.equal(f.ingress.sweepStale(19), 1,
+      'a retired room frees active ownership without touching the old physical socket');
+    assert.equal(f.ingress.isAttached(socket), true,
+      'old socket still must intercept all late binary frames until it closes');
     assert.deepEqual(f.ingress.interceptBinary(socket, bytes(7, 960), 20), {
       intercepted: true, accepted: false, reason: 'stale-authority',
     });

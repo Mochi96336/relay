@@ -329,6 +329,7 @@ const choirShadowConfig = {
   prebufferMs: LIVE_MIX_PREBUFFER_MS, retentionMs: MIC_RETENTION_MS,
   outputHoldbackMs: 200, contentHistoryMs: 7_000,
 };
+const choirMediaEnabled = relayConfig.choirShadow && relayConfig.choirMediaExperiment;
 const choirShadow = relayConfig.choirShadow
   ? new ChoirShadowLifecycleExperiment(
     youtubeTimeline, sourceRuntime, choirShadowConfig,
@@ -339,11 +340,20 @@ const choirRestartCoordinator = choirShadow
     choirShadow, youtubeTimeline, sourceRuntime,
     // This source is trusted only while the actual backing socket is Robot.
     () => backingRuntime.isRobot ? session.backingGeneration : null,
-    // No production authorization integration exists: NEVER grant a new
-    // singer room from an unverified request or a shadow status update.
-    () => false,
-    // No production Take-clearance integration exists: fail closed.
-    () => true,
+    // Explicit SECOND opt-in and current Mic-owner/B-consent check.
+    // This callback is private; only a live authenticated A socket may
+    // request room restart. A normal PLAYING heartbeat never approves one.
+    (approval) => choirMediaEnabled && authorizeChoirRestartWithLiveRoles(
+      approval, {
+        participants, mic: micRuntime, takeLifecycle: takeController.lifecycle,
+        secondaryConsent: (id, epoch) => Boolean(choirConsent?.hasConsent(
+          approval.primaryId, id, epoch, performance.now(),
+        )),
+      },
+    ),
+    // No active Take or finalize, and media admission requires the 2nd opt-in.
+    () => !choirMediaEnabled || takeController.lifecycle === 'recording'
+      || takeController.lifecycle === 'finalizing',
     choirShadowConfig,
     undefined,
     (primary, secondary, roomEpoch) => authorizeChoirRestartWithLiveRoles({
@@ -1223,7 +1233,8 @@ function attachParticipantIdentity(
   // UI opt-in capability for authenticated Presence/control sockets ONLY.
   // "invitation-only" does not enable Choir capture, mixing or playback.
   if (choirConsent) sendJson(socket, {
-    type: 'choir-consent-available', mode: 'invitation-only',
+    type: 'choir-consent-available',
+    mode: choirMediaEnabled ? 'media-experiment' : 'invitation-only',
   });
   return true;
 }

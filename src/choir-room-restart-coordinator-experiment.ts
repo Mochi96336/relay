@@ -1,4 +1,5 @@
 import type { SongSession } from './song-session.js';
+import type { ChoirWorkerContentSnapshot } from './choir-deadline-room-experiment.js';
 import type { SourceRuntime, SourceRuntimeSocket } from './source-runtime.js';
 import { ChoirShadowLifecycleExperiment } from './choir-shadow-lifecycle-experiment.js';
 import {
@@ -307,6 +308,28 @@ export class ChoirRoomRestartCoordinatorExperiment {
       && this.handshake.receiveTrustedRobot(
         roomEpoch, songEpoch, frame, sampleRate, nowMs,
       ));
+  }
+
+
+  /**
+   * Trust is checked at BOTH ends of an asynchronous Worker job.
+   * Captured PCM and ticket never enter the WebSocket control protocol.
+   */
+  prepareFreshWorkerContent(nowMs: number): {
+    ticket: ChoirFreshCaptureTicket;
+    proof: ChoirWorkerContentSnapshot;
+  } | null {
+    this.observe(nowMs);
+    if (!this.approved || this.takeFrozenNow()) return null;
+    return this.handshake.prepareWorkerContent(nowMs);
+  }
+
+  acceptFreshWorkerContent(
+    ticket: ChoirFreshCaptureTicket, proof: ChoirWorkerContentSnapshot,
+    result: { micLagMs: number; confidence: number }, nowMs: number,
+  ): boolean {
+    if (!this.currentTicket(ticket, nowMs) || this.takeFrozenNow()) return false;
+    return this.handshake.acceptWorkerContent(ticket, proof, result, nowMs);
   }
 
   analyzeFreshContent(

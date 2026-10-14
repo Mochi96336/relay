@@ -137,6 +137,11 @@ export class ChoirFreshRoomHandshakeExperiment {
       && issued.seat === t.seat ? c : null;
   }
 
+  /** Private, side-effect-free preflight for a server-issued media ticket. */
+  hasVerifiedTicket(ticket: ChoirFreshCaptureTicket): boolean {
+    return this.matches(ticket) !== null;
+  }
+
   receiveVerifiedMic(
     ticket: ChoirFreshCaptureTicket, frame: PcmFrame,
     sampleRate: number, nowMs: number,

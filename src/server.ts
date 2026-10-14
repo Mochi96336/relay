@@ -381,7 +381,8 @@ const choirConsent = choirRestartCoordinator && choirShadow
       && micRuntime.controlConnected()
       && participants.participant(id)?.connected === true,
     participantConnected: id => participants.participant(id)?.connected === true,
-    takeFrozenNow: () => takeIsActive(),
+    takeFrozenNow: () => takeController.lifecycle === 'recording'
+      || takeController.lifecycle === 'finalizing',
     socketOpen: raw => (raw as RelaySocket).readyState === WebSocket.OPEN,
     notifyParticipant: (id, payload) => {
       for (const raw of wss.clients) {

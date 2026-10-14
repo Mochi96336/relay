@@ -14,6 +14,7 @@ import { ChoirShadowLifecycleExperiment } from './choir-shadow-lifecycle-experim
 import { ChoirRoomRestartCoordinatorExperiment } from './choir-room-restart-coordinator-experiment.js';
 import { ChoirSecondaryPcmIngressExperiment } from './choir-secondary-pcm-ingress-experiment.js';
 import { ChoirSecondaryConsentExperiment } from './choir-secondary-consent-experiment.js';
+import { authorizeChoirRestartWithLiveRoles } from './choir-server-role-policy-experiment.js';
 import { loadAudioTransportConfig } from './audio-transport-config.js';
 import { parseAudioUplinkHealth, type AudioUplinkHealth } from './audio-uplink-health.js';
 import { parseMicPresenceTelemetry } from './mic-presence-telemetry.js';
@@ -331,6 +332,7 @@ const choirShadow = relayConfig.choirShadow
   ? new ChoirShadowLifecycleExperiment(
     youtubeTimeline, sourceRuntime, choirShadowConfig,
   ) : null;
+let choirConsent: ChoirSecondaryConsentExperiment | null = null;
 const choirRestartCoordinator = choirShadow
   ? new ChoirRoomRestartCoordinatorExperiment(
     choirShadow, youtubeTimeline, sourceRuntime,
@@ -342,6 +344,17 @@ const choirRestartCoordinator = choirShadow
     // No production Take-clearance integration exists: fail closed.
     () => true,
     choirShadowConfig,
+    undefined,
+    (primary, secondary, roomEpoch) => authorizeChoirRestartWithLiveRoles({
+      actorParticipantId: primary, primaryId: primary, secondaryId: secondary,
+      expectedRetiredRoomEpoch: roomEpoch - 1,
+      expectedPlaybackRevision: 0, nowMs: performance.now(),
+    }, {
+      participants, mic: micRuntime, takeLifecycle: takeController.lifecycle,
+      secondaryConsent: (id, epoch) => Boolean(choirConsent?.hasConsent(
+        primary, id, epoch, performance.now(),
+      )),
+    }),
   ) : null;
 // The secondary byte path is physically present only under the default-off
 // shadow flag. No production handler calls bindVerifiedSecondary(): the
@@ -357,10 +370,9 @@ const choirSecondaryIngress = choirRestartCoordinator
  * explicit B consent. The room's restart authorizer is STILL hard-deny and
  * consent cannot grant a capture ticket or alter the deployed N=1 Mixer.
  */
-const choirConsent = choirRestartCoordinator && choirShadow
+choirConsent = choirRestartCoordinator && choirShadow
   ? new ChoirSecondaryConsentExperiment({
     scopeNow: (nowMs) => {
-      choirRestartCoordinator.observe(nowMs);
       const shadow = choirShadow.snapshot();
       const song = youtubeTimeline.statusPayload(nowMs);
       if (shadow.state !== 'shadow-active'

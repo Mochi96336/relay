@@ -9,6 +9,7 @@ import { laggedMultibandMusicPair } from './helpers/music-calibration.js';
 import { ChoirSecondaryPcmIngressExperiment } from '../src/choir-secondary-pcm-ingress-experiment.js';
 import { ChoirSecondaryConsentExperiment } from '../src/choir-secondary-consent-experiment.js';
 import { ChoirSecondaryMediaTicketExperiment } from '../src/choir-secondary-media-ticket-experiment.js';
+import { ChoirTrustedSourceMirrorExperiment } from '../src/choir-trusted-source-mirror-experiment.js';
 import { encodePcmFrame } from '../src/pcm-frame.js';
 import { encodeAudioPacket } from '../src/audio-packet.js';
 
@@ -382,6 +383,101 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
     assert.equal('mediaEpoch' in notice, false);
     assert.equal('PCM' in notice, false);
   });
+  test('verified existing N=1 A and Robot PCM mirror into bounded live canonical Content proof', () => {
+    const f = fixture();
+    const revision = f.startSong(0);
+    f.coordinator.observe(0);
+    assert.equal(f.approve(revision, 0), true);
+    const a = f.admit(1, 1, 'A', 'existing-n1-primary', 1)!;
+    const b = f.admit(1, 1, 'B', 'secondary-native-v2', 2)!;
+    const primarySocket = { id: 'authenticated-n1-a' };
+    const robotBackingSocket = { id: 'registered-robot-backing' };
+    const source = {
+      primarySocket, primaryOwnerId: 'A', primaryGeneration: 7,
+      primaryRate: RATE, robotBackingSocket, robotBackingGeneration: 9,
+      robotControlGeneration: f.robot.generation, robotRate: RATE,
+      robotIsAuthoritative: true,
+    };
+    const mirror = new ChoirTrustedSourceMirrorExperiment(f.coordinator,
+      () => source);
+    assert.equal(mirror.bindPrimary(a, 3), true);
+    assert.equal(mirror.bindPrimary(a, 4), false, 'never silently rebind one Room Epoch');
+    const { mic, backing } = laggedMultibandMusicPair(
+      6, RATE, 120, { singerGain: .18 },
+    );
+    const chunk = 2 * RATE;
+    for (let at = 20; at <= 6_000; at += 20) {
+      if (at % 1_000 === 0)
+        assert.equal(f.songs.update(
+          playing({ currentTime: 12 + at / 1_000 }), leader, null, at,
+        ).accepted, true);
+      if (at % 2_000 === 0) {
+        const first = (at / 2_000 - 1) * chunk;
+        const end = first + chunk;
+        const frame = { generation: 7, firstSampleIndex: first,
+          pcm: mic.subarray(first * 2, end * 2) };
+        assert.equal(mirror.mirrorPrimary(frame, chunk, at), true);
+        assert.equal(mirror.mirrorRobot({
+          generation: 9, firstSampleIndex: first,
+          pcm: backing.subarray(first * 2, end * 2),
+        }, chunk, at), true);
+        assert.equal(f.coordinator.receiveVerifiedMic(b, {
+          generation: 8, firstSampleIndex: first,
+          pcm: mic.subarray(first * 2, end * 2),
+        }, RATE, at), true);
+      }
+      assert.equal(f.coordinator.advanceDue(1, at), true);
+    }
+    const analysisA = f.coordinator.analyzeFreshContent(a, 0, 6_001);
+    const analysisB = f.coordinator.analyzeFreshContent(b, 0, 6_002);
+    assert.equal(analysisA.status, 'candidate');
+    assert.equal(analysisB.status, 'candidate');
+    assert.equal(f.coordinator.commitFreshContent(a, 6_003), true);
+    assert.equal(f.coordinator.commitFreshContent(b, 6_004), true);
+    assert.equal(f.coordinator.preview().state, 'duet-ready',
+      'readiness refers to proof-only canonical room, NOT N=1 monitoring');
+  });
+
+  test('A capture replacement, Robot control replacement and invalid native generation retire old mirror', () => {
+    for (const change of ['primary-socket', 'primary-generation',
+      'robot-backing-socket', 'robot-control-generation',
+      'robot-native-generation'] as const) {
+      const f = fixture();
+      const rev = f.startSong(0);
+      f.coordinator.observe(0);
+      assert.equal(f.approve(rev, 0), true);
+      const a = f.admit(1, 1, 'A', 'trusted-A', 1)!;
+      const primarySocket = { id: 'primary' };
+      const robotBackingSocket = { id: 'backing' };
+      const state = {
+        primarySocket, primaryOwnerId: 'A', primaryGeneration: 7,
+        primaryRate: RATE, robotBackingSocket, robotBackingGeneration: 9,
+        robotControlGeneration: f.robot.generation, robotRate: RATE,
+        robotIsAuthoritative: true,
+      };
+      const mirror = new ChoirTrustedSourceMirrorExperiment(
+        f.coordinator, () => state,
+      );
+      assert.equal(mirror.bindPrimary(a, 2), true);
+      if (change === 'primary-socket') state.primarySocket = { id: 'other-primary' };
+      if (change === 'primary-generation') state.primaryGeneration = 8;
+      if (change === 'robot-backing-socket')
+        state.robotBackingSocket = { id: 'other-robot' };
+      if (change === 'robot-control-generation') state.robotControlGeneration = 88;
+      if (change === 'robot-native-generation') state.robotBackingGeneration = 10;
+      assert.equal(mirror.mirrorPrimary({
+        generation: 7, firstSampleIndex: 0,
+        pcm: Buffer.from(new Int16Array(960).buffer),
+      }, 960, 20), false);
+      assert.equal(mirror.roomEpoch, null);
+      assert.equal(f.coordinator.preview().state, 'restart-required', change);
+      assert.equal(f.coordinator.receiveVerifiedMic(a, {
+        generation: 7, firstSampleIndex: 960,
+        pcm: Buffer.from(new Int16Array(960).buffer),
+      }, RATE, 21), false);
+    }
+  });
+
   test('one-time consenting B media grant binds only a distinct authenticated socket after A admission', () => {
     const f = fixture();
     const rev = f.startSong(0);

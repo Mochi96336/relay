@@ -1134,3 +1134,22 @@ production authority. B remains muted within the isolated Choir room,
 and N=2 monitor/record output is intentionally absent. Two physical
 phones have NOT yet been measured or verified for live Content phase
 agreement; production N=1 is unchanged.
+
+### Capture-clock stall protection
+
+Native PCM cursor continuity alone cannot detect an AudioContext whose
+rendering speed falls behind reality. The secondary collector now compares
+native captured sample count against `performance.now()` over rolling
+five-second windows. A clock-speed ratio outside 0.75–1.25 permanently
+stops that B capture; the old Media Epoch and PCM cannot be resumed on
+the same socket. This explicitly guards the previously seen 66%-speed
+AudioContext failure pattern. Actual Worklet sample timestamps are also
+checked against the current AudioContext clock for up-to-200ms age before
+sending; the secondary WebSocket queue is further capped at 24 KiB, not
+256 KiB. Both clock checks are lightweight constant-time operations per
+20ms PCM chunk, never an FFT or Content analysis on the audio thread.
+
+These are conservative *admission* fences, not time-alignment solvers.
+Real-world two-device Content and drift measurements are still required
+before any singer can be made audible. A slow or interrupted capture is
+aborted rather than guessed forward.

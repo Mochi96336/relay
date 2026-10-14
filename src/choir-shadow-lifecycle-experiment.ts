@@ -93,6 +93,18 @@ export class ChoirShadowLifecycleExperiment {
     return this.snapshot();
   }
 
+  /**
+   * Room role/Take authorization was revoked even though the YouTube clock
+   * and Robot may still be healthy. This is just as destructive to Choir
+   * authority as a Seek, and must require a new explicit Room Epoch.
+   */
+  retireForTrustRevocation(nowMs: number): boolean {
+    if (this.state !== 'shadow-active' || !this.active
+      || !Number.isFinite(nowMs)) return false;
+    this.retire(nowMs);
+    return true;
+  }
+
   private retire(nowMs: number) {
     this.active?.room.invalidateTrustedPlaybackAuthority(nowMs);
     this.active = null;

@@ -82,6 +82,11 @@ describe('default-off Choir B secondary consent state machine', () => {
     assert.equal(f.consent.respond(f.b, id, true, 11), true);
     assert.equal(f.consent.respond(f.anotherB, id, true, 12), false,
       'the consent-bearing physical socket must not change on retry');
+    assert.equal(f.consent.respond(f.anotherB, id, false, 12), false,
+      'a stale decline on another B tab cannot withdraw accepted consent');
+    assert.equal(f.consent.hasConsent(A, B, 1, 12), true);
+    assert.equal(f.consent.respond(f.b, id, false, 12), false,
+      'accepted consent must use the explicit withdraw action');
     assert.equal(f.consent.respond(f.b, id, true, 13), true,
       'a duplicate response from the SAME connected B socket is idempotent');
     assert.equal(f.delivered.filter(v => v.payload.type === 'choir-secondary-consent-status'

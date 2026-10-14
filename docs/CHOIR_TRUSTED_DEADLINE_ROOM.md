@@ -717,9 +717,13 @@ unclaimed `unknown` socket role (not an existing production
 publisher/backing/monitor), valid native sample rate, a live socket and
 `coordinator.mayAcceptVerifiedTicket` confirming the ticket is actually
 active in the current room. The ticket is stored in a WeakMap keyed by the
-exact physical socket; no sender-supplied participant ID, room ID, seat or
-lag is parsed from PCM or trusted. Closed sockets revoke only that singer
-and cannot accidentally promote a replacement primary.
+exact physical socket, with a separate single-claim transport registry:
+**one live ticket cannot be bound by two physical sockets at once**.
+A periodic stale-binding sweep releases old strong references after room
+revocation, while the old physical socket remains quarantined by its
+WeakMap entry until close. No sender-supplied participant ID, room ID, seat
+or lag is parsed from PCM or trusted. Closed sockets revoke only that
+singer and cannot accidentally promote a replacement primary.
 
 Binary frames must carry Relay's existing 16-byte `RL` v1 header with
 zero reserved flags, the native capture generation, integer non-negative

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { startRelay, RelayClient } from './helpers/harness.js';
 import { encodePcmFrame } from '../src/pcm-frame.js';
+import { participantIdForCapability } from '../src/participant-capability.js';
 
 /**
  * Real production entrypoint smoke: opt-in Choir observes only.
@@ -51,6 +52,50 @@ test('shadow server rejects unapproved Choir registration while ordinary sockets
   } finally {
     unknown?.close();
     publisher?.close();
+    await relay.stop();
+  }
+});
+
+test('Choir invite commands require browser capability and never grant audio without Robot authority', async () => {
+  const relay = await startRelay({ RELAY_CHOIR_SHADOW: '1',
+    RELAY_TEST_LEGACY_PARTICIPANTS: '0' });
+  let anonymous: RelayClient | null = null;
+  let a: RelayClient | null = null;
+  let b: RelayClient | null = null;
+  try {
+    anonymous = await RelayClient.connect(relay);
+    anonymous.send({ type: 'choir-secondary-invite', secondaryId: 'participant-pretend' });
+    assert.equal((await anonymous.waitForType('choir-consent-rejected')).reason,
+      'unavailable', 'an unidentified WebSocket cannot invite B');
+
+    const capA = 'a'.repeat(64);
+    const capB = 'b'.repeat(64);
+    const idA = participantIdForCapability(capA)!;
+    const idB = participantIdForCapability(capB)!;
+    a = await RelayClient.connect(relay);
+    b = await RelayClient.connect(relay);
+    a.send({ type: 'participant-authenticate', participantId: idA,
+      capability: capA, nickname: 'A' });
+    b.send({ type: 'participant-authenticate', participantId: idB,
+      capability: capB, nickname: 'B' });
+    assert.equal((await a.waitForType('participant-authenticated')).participantId, idA);
+    assert.equal((await b.waitForType('participant-authenticated')).participantId, idB);
+    a.send({ type: 'choir-secondary-invite', secondaryId: idB });
+    assert.equal((await a.waitForType('choir-consent-rejected')).reason,
+      'invalid-or-stale',
+      'even an authenticated browser is not granted a Choir room without the live primary Mic and Robot');
+    b.send({ type: 'choir-secondary-accept',
+      inviteId: '00000000-0000-0000-0000-000000000000' });
+    assert.equal((await b.waitForType('choir-consent-rejected')).reason,
+      'invalid-or-stale');
+    assert.equal(a.messages.some(m => m.type === 'choir-secondary-invite-acknowledged'), false);
+    assert.equal(b.messages.some(m => m.type === 'choir-secondary-invitation'), false);
+    assert.equal(a.messages.some(m => m.type === 'choir-secondary-registered'), false);
+    assert.equal(b.messages.some(m => m.type === 'choir-secondary-registered'), false);
+  } finally {
+    anonymous?.close();
+    a?.close();
+    b?.close();
     await relay.stop();
   }
 });

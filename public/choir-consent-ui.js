@@ -7,6 +7,8 @@ const host = document.querySelector('#choir-host-actions');
 const guest = document.querySelector('#choir-guest-actions');
 const select = document.querySelector('#choir-secondary-person');
 const inviteButton = document.querySelector('#choir-invite-send');
+const beginRoomButton = document.querySelector('#choir-room-begin');
+const connectMediaButton = document.querySelector('#choir-secondary-connect');
 const invitationCopy = document.querySelector('#choir-invitation-copy');
 const acceptButton = document.querySelector('#choir-accept');
 const declineButton = document.querySelector('#choir-decline');
@@ -21,6 +23,8 @@ let authorityFresh = false;
 let panelOpen = false;
 let invitation = null;
 let acceptedAsGuest = false;
+let acceptedSecondaryId = null;
+let mediaEnabled = false;
 let pendingSend = false;
 let statusKey = null;
 let statusVars = null;
@@ -63,6 +67,9 @@ function render() {
   guest.hidden = !hasGuestInvitation;
   withdrawPanel.hidden = !acceptedAsGuest;
   closeButton.hidden = acceptedAsGuest;
+  beginRoomButton.hidden = !mediaEnabled || !hostAllowed
+    || !panelOpen || !acceptedSecondaryId;
+  connectMediaButton.hidden = !mediaEnabled || !acceptedAsGuest;
 
   const selected = select.value;
   select.replaceChildren();
@@ -89,6 +96,8 @@ function resetConnection() {
   panelOpen = false;
   invitation = null;
   acceptedAsGuest = false;
+  acceptedSecondaryId = null;
+  mediaEnabled = false;
   pendingSend = false;
   statusKey = null;
   statusVars = null;
@@ -130,8 +139,11 @@ window.addEventListener('relay-choir-consent-message', (event) => {
       pendingSend = false;
       if (message.status === 'accepted') {
         acceptedAsGuest = message.secondaryId === myId();
+        if (!acceptedAsGuest && isHost()) acceptedSecondaryId = message.secondaryId;
         statusKey = 'choir.accepted';
       } else if (['withdrawn', 'revoked', 'declined'].includes(message.status)) {
+        if (message.secondaryId === acceptedSecondaryId)
+          acceptedSecondaryId = null;
         if (message.secondaryId === myId()) {
           acceptedAsGuest = false;
           invitation = null;
@@ -147,6 +159,27 @@ window.addEventListener('relay-choir-consent-message', (event) => {
     default:
       return;
   }
+  render();
+});
+window.addEventListener('relay-choir-media-mode', (event) => {
+  mediaEnabled = event.detail?.enabled === true;
+  render();
+});
+window.addEventListener('relay-choir-media-message', (event) => {
+  if (!mediaEnabled || !authorityFresh) return;
+  const message = event.detail;
+  if (message?.type === 'choir-room-ready') statusKey = 'choir.roomReady';
+  else if (message?.type === 'choir-secondary-media-claim')
+    statusKey = 'choir.connecting';
+  else if (message?.type === 'choir-media-rejected')
+    statusKey = 'choir.mediaRejected';
+  else return;
+  render();
+});
+window.addEventListener('relay-choir-media-connection', (event) => {
+  if (!mediaEnabled || !authorityFresh) return;
+  statusKey = event.detail?.state === 'registered'
+    ? 'choir.mediaReady' : 'choir.mediaRejected';
   render();
 });
 window.addEventListener('relay-locale-changed', render);
@@ -182,6 +215,18 @@ declineButton?.addEventListener('click', () => {
 withdrawButton?.addEventListener('click', () => {
   if (!acceptedAsGuest) return;
   if (publishCommand('choir-secondary-withdraw')) statusKey = 'choir.responding';
+  render();
+});
+beginRoomButton?.addEventListener('click', () => {
+  if (!mediaEnabled || !isHost() || !acceptedSecondaryId) return;
+  if (publishCommand('choir-room-begin', { secondaryId: acceptedSecondaryId }))
+    statusKey = 'choir.connecting';
+  render();
+});
+connectMediaButton?.addEventListener('click', () => {
+  if (!mediaEnabled || !acceptedAsGuest) return;
+  if (publishCommand('choir-secondary-media-claim-request'))
+    statusKey = 'choir.connecting';
   render();
 });
 closeButton?.addEventListener('click', () => {

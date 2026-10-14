@@ -42,7 +42,7 @@ test('invitation text is generated as textContent, never injecting a nickname as
   assert.equal(i18n.match(/'choir\.invitationFrom':/g)?.length, 2);
 });
 
-test('new mobile claim connector never auto-starts Mic or exposes token to page URL or storage', async () => {
+test('mobile claim connector starts Mic only on B explicit tap and never stores claim tokens', async () => {
   const html = await file('../public/index.html');
   const app = await file('../public/choir-consent-ui.js');
   const media = await file('../public/choir-secondary-media-client.js');
@@ -58,7 +58,16 @@ test('new mobile claim connector never auto-starts Mic or exposes token to page 
   assert.match(media, /sendParticipantAuthentication\(socket\)/);
   assert.match(media, /message\.participantId !== window\.relayParticipantId/);
   assert.match(media, /'choir-secondary-media-register'/);
-  assert.match(media, /packetVersion: 2, sampleRate: 48_000/);
+  assert.match(media, /packetVersion: 2, sampleRate: sourceRate/);
+  assert.match(media, /relay-choir-start-secondary-capture/);
+  assert.match(media, /const sourceRate = await capture\.prepare\(\)/);
+  assert.match(media, /choir-secondary-media-claim-request/);
+  assert.match(media, /capture\.attach\(socket, message\.sampleRate\)/);
+  const native = await file('../public/choir-secondary-capture.js');
+  assert.match(native, /navigator\.mediaDevices\.getUserMedia/);
+  assert.match(native, /createMicCaptureGraph/);
+  assert.match(native, /firstSampleIndex = this\.cursor/);
+  assert.match(native, /this\.cursor \+= samples/);
   assert.match(media, /'relay-choir-media-mode'/);
   assert.match(media, /'relay-choir-consent-message'/);
   assert.doesNotMatch(media, /getUserMedia|AudioWorkletNode|localStorage|sessionStorage|console\.log/);

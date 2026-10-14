@@ -13,6 +13,7 @@ import { SourceRuntime } from './source-runtime.js';
 import { ChoirShadowLifecycleExperiment } from './choir-shadow-lifecycle-experiment.js';
 import { ChoirRoomRestartCoordinatorExperiment } from './choir-room-restart-coordinator-experiment.js';
 import { ChoirSecondaryPcmIngressExperiment } from './choir-secondary-pcm-ingress-experiment.js';
+import { ChoirSecondaryConsentExperiment } from './choir-secondary-consent-experiment.js';
 import { loadAudioTransportConfig } from './audio-transport-config.js';
 import { parseAudioUplinkHealth, type AudioUplinkHealth } from './audio-uplink-health.js';
 import { parseMicPresenceTelemetry } from './mic-presence-telemetry.js';
@@ -351,12 +352,53 @@ const choirSecondaryIngress = choirRestartCoordinator
     choirRestartCoordinator,
     (socket) => (socket as RelaySocket).readyState === WebSocket.OPEN,
   ) : null;
+/**
+ * The ONLY live Choir client control plane in shadow mode: invitation and
+ * explicit B consent. The room's restart authorizer is STILL hard-deny and
+ * consent cannot grant a capture ticket or alter the deployed N=1 Mixer.
+ */
+const choirConsent = choirRestartCoordinator && choirShadow
+  ? new ChoirSecondaryConsentExperiment({
+    scopeNow: (nowMs) => {
+      choirRestartCoordinator.observe(nowMs);
+      const shadow = choirShadow.snapshot();
+      const song = youtubeTimeline.statusPayload(nowMs);
+      if (shadow.state !== 'shadow-active'
+        || shadow.roomEpoch === null || shadow.videoId === null
+        || shadow.backingGeneration === null
+        || song.videoId !== shadow.videoId || song.state !== 1
+        || song.leaderFresh !== true || song.leaderConnected !== true
+        || !Number.isSafeInteger(song.revision)
+        || !sourceRuntime.connected()) return null;
+      return {
+        roomEpoch: shadow.roomEpoch, playbackRevision: song.revision,
+        videoId: shadow.videoId, backingGeneration: shadow.backingGeneration,
+        robotSourceGeneration: sourceRuntime.generation,
+      };
+    },
+    primaryStillOwnsMic: id =>
+      participants.micOwnerId === id && micRuntime.mediaOwnerId === id
+      && micRuntime.controlConnected()
+      && participants.participant(id)?.connected === true,
+    participantConnected: id => participants.participant(id)?.connected === true,
+    takeFrozenNow: () => takeIsActive(),
+    socketOpen: raw => (raw as RelaySocket).readyState === WebSocket.OPEN,
+    notifyParticipant: (id, payload) => {
+      for (const raw of wss.clients) {
+        const target = raw as RelaySocket;
+        if (target.participantId === id && target.readyState === WebSocket.OPEN)
+          sendJson(target, payload);
+      }
+    },
+    notifySocket: (raw, payload) => sendJson(raw as RelaySocket, payload),
+  }) : null;
 function tickChoirShadow(nowMs: number) {
   // No Mic/Backing PCM is copied and no client can call the approval API.
   choirRestartCoordinator?.observe(nowMs);
   // Release expired socket ownership without ever allowing an old B frame
   // to fall through the regular Mic/Robot routes.
   choirSecondaryIngress?.sweepStale(nowMs);
+  choirConsent?.sweep(nowMs);
 }
 if (choirRestartCoordinator) {
   console.log('[choir-shadow] server-owned restart observation only; Choir audio/UI disabled');
@@ -4579,6 +4621,38 @@ function backingClosed(socket: RelaySocket) {
   broadcastStatus();
 }
 
+function handleChoirConsentMessage(socket: RelaySocket, payload: Record<string, unknown>): boolean {
+  const type = payload.type;
+  if (!['choir-secondary-invite', 'choir-secondary-accept',
+    'choir-secondary-decline', 'choir-secondary-withdraw'].includes(String(type))) return false;
+  // No anonymous/legacy/infrastructure, production Mic/backing or attached
+  // Choir PCM-only sockets are eligible to mutate consent state.
+  if (!choirConsent || !socket.participantId || socket.role !== 'unknown'
+    || !participants.participant(socket.participantId)?.connected) {
+    sendJson(socket, { type: 'choir-consent-rejected', reason: 'unavailable' });
+    return true;
+  }
+  const nowMs = performance.now();
+  let accepted = false;
+  if (type === 'choir-secondary-invite') {
+    const secondaryId = normalizeParticipantId(payload.secondaryId);
+    accepted = Boolean(secondaryId && choirConsent.invite(socket, secondaryId, nowMs));
+  } else if (type === 'choir-secondary-accept' || type === 'choir-secondary-decline') {
+    const inviteId = payload.inviteId;
+    accepted = typeof inviteId === 'string'
+      && /^[0-9a-f-]{36}$/.test(inviteId)
+      && choirConsent.respond(socket, inviteId, type === 'choir-secondary-accept', nowMs);
+  } else if (type === 'choir-secondary-withdraw') {
+    accepted = choirConsent.withdraw(socket, nowMs);
+  }
+  if (!accepted) sendJson(socket, { type: 'choir-consent-rejected', reason: 'invalid-or-stale' });
+  else if (type === 'choir-secondary-invite')
+    sendJson(socket, { type: 'choir-secondary-invite-acknowledged' });
+  else if (type === 'choir-secondary-withdraw')
+    sendJson(socket, { type: 'choir-secondary-consent-status', status: 'withdrawn' });
+  return true;
+}
+
 let shuttingDown = false;
 
 wss.on('connection', (rawSocket, request) => {
@@ -4619,6 +4693,9 @@ wss.on('connection', (rawSocket, request) => {
     // A socket bound to Choir secondary may carry ONLY its binary PCM. Never
     // allow it to claim the production Mic, issue a Take or change Robot/song.
     if (choirSecondaryIngress?.isAttached(socket)) return;
+    // Default-off authenticated invitation/consent UX is control-plane
+    // only: no client may mint a Choir room, role or media ticket.
+    if (handleChoirConsentMessage(socket, payload)) return;
     if (monitorTransport.acknowledge(socket, payload)) return;
     if (subscribeBroadcasts(socket, payload)) return;
     if (queryProtocol.dispatch(socket, payload)) return;
@@ -4636,6 +4713,7 @@ wss.on('connection', (rawSocket, request) => {
   });
 
   socket.on('close', () => {
+    choirConsent?.disconnected(socket);
     choirSecondaryIngress?.disconnect(socket, performance.now());
     playbackClosed(socket);
     let micTransportChanged = false;

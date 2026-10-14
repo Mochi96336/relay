@@ -14,6 +14,7 @@ import { ChoirShadowLifecycleExperiment } from './choir-shadow-lifecycle-experim
 import { ChoirRoomRestartCoordinatorExperiment } from './choir-room-restart-coordinator-experiment.js';
 import { ChoirSecondaryPcmIngressExperiment } from './choir-secondary-pcm-ingress-experiment.js';
 import { ChoirSecondaryConsentExperiment } from './choir-secondary-consent-experiment.js';
+import { ChoirSecondaryMediaTicketExperiment } from './choir-secondary-media-ticket-experiment.js';
 import { authorizeChoirRestartWithLiveRoles } from './choir-server-role-policy-experiment.js';
 import { loadAudioTransportConfig } from './audio-transport-config.js';
 import { parseAudioUplinkHealth, type AudioUplinkHealth } from './audio-uplink-health.js';
@@ -416,6 +417,14 @@ choirConsent = choirRestartCoordinator && choirShadow
     },
     notifySocket: (raw, payload) => sendJson(raw as RelaySocket, payload),
   }) : null;
+// A private one-time B-claim broker is ready for a future *explicitly
+// authorized* media route. No current WebSocket JSON handler calls issue()
+// or redeem(): Choir restart stays hard-deny and existing N=1 PCM is untouched.
+const choirSecondaryTickets = choirRestartCoordinator && choirConsent && choirSecondaryIngress
+  ? new ChoirSecondaryMediaTicketExperiment(
+    choirRestartCoordinator, choirConsent, choirSecondaryIngress,
+    raw => (raw as RelaySocket).readyState === WebSocket.OPEN,
+  ) : null;
 function tickChoirShadow(nowMs: number) {
   // No Mic/Backing PCM is copied and no client can call the approval API.
   choirRestartCoordinator?.observe(nowMs);
@@ -423,6 +432,7 @@ function tickChoirShadow(nowMs: number) {
   // to fall through the regular Mic/Robot routes.
   choirSecondaryIngress?.sweepStale(nowMs);
   choirConsent?.sweep(nowMs);
+  choirSecondaryTickets?.sweep(nowMs);
 }
 if (choirRestartCoordinator) {
   console.log('[choir-shadow] server-owned restart observation only; Choir audio/UI disabled');
@@ -4745,6 +4755,7 @@ wss.on('connection', (rawSocket, request) => {
   });
 
   socket.on('close', () => {
+    choirSecondaryTickets?.disconnected(socket);
     choirConsent?.disconnected(socket);
     choirSecondaryIngress?.disconnect(socket, performance.now());
     playbackClosed(socket);

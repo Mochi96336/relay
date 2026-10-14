@@ -170,13 +170,30 @@ test('real authenticated A and B complete opt-in and withdrawal without obtainin
     await a.waitFor((m) =>
       m.type === 'room-song-command-complete' && m.commandId === 'invite-play-1');
     await sleep(350); // One regular server-owned shadow clock observation.
+    a.send({ type: 'youtube-timeline-request' });
+    a.send({ type: 'source-status-request' });
+    a.send({ type: 'session-status-request' });
+    const timeline = await a.waitFor((m) => m.type === 'youtube-timeline-status'
+      && m.playbackLeaderParticipantId === idA && m.state === 1);
+    const source = await a.waitFor((m) => m.type === 'source-status'
+      && m.robotSourceConnected === true);
+    const presence = await a.waitFor((m) => m.type === 'session-status'
+      && m.micOwnerId === idA && m.micConnected === true);
+    assert.ok(timeline && source && presence);
 
     a.send({ type: 'choir-secondary-invite', secondaryId: idB });
     const decision = await a.waitFor((m) =>
       m.type === 'choir-secondary-invite-acknowledged'
       || m.type === 'choir-consent-rejected');
     assert.equal(decision.type, 'choir-secondary-invite-acknowledged',
-      `server refused a fully authenticated invite: ${JSON.stringify(decision)}`);
+      `server refused a fully authenticated invite: ${JSON.stringify({
+        decision, timeline: { state: timeline.state, leaderFresh: timeline.leaderFresh,
+          playbackLeaderParticipantId: timeline.playbackLeaderParticipantId },
+        source: { robotSourceConnected: source.robotSourceConnected,
+          robotBackingConnected: source.robotBackingConnected },
+        presence: { micOwnerId: presence.micOwnerId, micConnected: presence.micConnected },
+        stderr: relay.stderr().slice(-1500),
+      })}`);
     const invitation = await b.waitForType('choir-secondary-invitation');
     assert.equal(invitation.primaryId, idA);
     assert.ok(Number.isSafeInteger(invitation.roomEpoch));

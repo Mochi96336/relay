@@ -49,7 +49,6 @@ export type ChoirRestartPreview = {
 };
 
 export class ChoirRoomRestartCoordinatorExperiment {
-  private readonly handshake = new ChoirFreshRoomHandshakeExperiment();
   private lastWitnessRoomEpoch = 0;
   private lastApprovedRoomEpoch = 0;
   private lastObservedMs = Number.NEGATIVE_INFINITY;
@@ -70,6 +69,7 @@ export class ChoirRoomRestartCoordinatorExperiment {
     private readonly config: Pick<FreshChoirRoomSpec,
       'sampleRate' | 'frameMs' | 'prebufferMs' | 'retentionMs'
       | 'contentHistoryMs' | 'outputHoldbackMs'>,
+    private readonly handshake = new ChoirFreshRoomHandshakeExperiment(),
   ) {}
 
   /**
@@ -256,8 +256,4 @@ export class ChoirRoomRestartCoordinatorExperiment {
     };
   }
 
-  /** Proof fixture only. Real PCM ingress remains separate/unwired. */
-  get offlineHandshakeForTests() {
-    return this.handshake;
-  }
 }

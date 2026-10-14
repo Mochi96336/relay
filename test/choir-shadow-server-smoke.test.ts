@@ -141,6 +141,10 @@ test('real authenticated A and B complete opt-in and withdrawal without obtainin
       sampleRate: 48_000, captureGeneration: 9, captureSampleCursor: 0 });
     await robotBacking.waitFor((m) =>
       m.type === 'registered' && m.role === 'backing');
+    // Registered backing alone is NOT an acoustic clock. The first
+    // positioned native PCM must establish actual backingGeneration=9.
+    robotBacking.resumeCaptureSession(9, 0);
+    robotBacking.sendPcm(Buffer.from(new Int16Array(960).fill(900).buffer));
     robotControl.send({ type: 'robot-source-hello' });
 
     a.send({ type: 'playback-hello',

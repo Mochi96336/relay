@@ -40,7 +40,7 @@ export class ChoirSecondaryPcmIngressExperiment {
 
   constructor(
     private readonly coordinator: Pick<ChoirRoomRestartCoordinatorExperiment,
-      'receiveVerifiedMic' | 'disconnectVerifiedSinger'>,
+      'mayAcceptVerifiedTicket' | 'receiveVerifiedMic' | 'disconnectVerifiedSinger'>,
     private readonly isSocketOpen: (socket: ChoirSecondarySocket) => boolean,
     maxPacketMs = 200,
   ) {
@@ -73,7 +73,8 @@ export class ChoirSecondaryPcmIngressExperiment {
       || !Number.isSafeInteger(ticket.mediaEpoch) || ticket.mediaEpoch < 1
       || !ticket.transportId || ticket.transportId !== ticket.transportId.trim()
       || !Number.isInteger(sourceRate) || sourceRate < 8_000 || sourceRate > 192_000
-      || !Number.isFinite(nowMs) || nowMs < 0) return false;
+      || !Number.isFinite(nowMs) || nowMs < 0
+      || !this.coordinator.mayAcceptVerifiedTicket(ticket, nowMs)) return false;
 
     this.sockets.set(socket, {
       ticket, sampleRate: sourceRate, generation: null,

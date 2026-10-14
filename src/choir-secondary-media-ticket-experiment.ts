@@ -35,7 +35,7 @@ export class ChoirSecondaryMediaTicketExperiment {
   constructor(
     private readonly coordinator: Pick<ChoirRoomRestartCoordinatorExperiment,
       'observe' | 'preview' | 'admitVerifiedSinger'
-      | 'disconnectVerifiedSinger'>,
+      | 'retireFailedSecondaryBind'>,
     private readonly consent: Pick<ChoirSecondaryConsentExperiment, 'hasConsentOnSocket'>,
     private readonly ingress: Pick<ChoirSecondaryPcmIngressExperiment,
       'bindVerifiedSecondary'>,
@@ -137,9 +137,10 @@ export class ChoirSecondaryMediaTicketExperiment {
     if (!this.ingress.bindVerifiedSecondary(
       mediaSocket, ticket, sourceRate, nowMs, packetVersion,
     )) {
-      // Fail closed and release the reservation. Never send an unusable
-      // Media Epoch to B, or permit a stale claim to be retried.
-      this.coordinator.disconnectVerifiedSinger(ticket, nowMs);
+      // The canonical N=2 seat is first-version non-rebindable. Removing
+      // the ticket does NOT make that seat safely re-admittable; retire the
+      // room and require a new explicit restart/CAS with fresh consent.
+      this.coordinator.retireFailedSecondaryBind(ticket, nowMs);
       return null;
     }
     return ticket;

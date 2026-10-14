@@ -89,6 +89,7 @@ window.relayIdentityReady = (async () => {
   let reconnectTimer = null;
   let latestSession = null;
   let sessionAuthorityFresh = false;
+  let choirConsentAvailable = false;
   let takeoverOwnerId = null;
   let startAfterTakeover = false;
   let takeoverFailure = null;
@@ -209,6 +210,32 @@ window.relayIdentityReady = (async () => {
     return true;
   }
 
+  function announceChoirConsentAvailable() {
+    window.dispatchEvent(new CustomEvent('relay-choir-consent-availability', {
+      detail: { available: choirConsentAvailable && sessionAuthorityFresh },
+    }));
+  }
+
+  // Keep the invite-only control path on the established authenticated
+  // Presence socket; never ship a browser capability or Media Epoch as a
+  // Choir message. Server still checks the owner and B's actual identity.
+  window.addEventListener('relay-choir-consent-command', (event) => {
+    const payload = event.detail;
+    if (!choirConsentAvailable || !sessionAuthorityFresh
+      || !payload || ![
+        'choir-secondary-invite', 'choir-secondary-accept',
+        'choir-secondary-decline', 'choir-secondary-withdraw',
+      ].includes(payload.type)) return;
+    if (payload.type === 'choir-secondary-invite') {
+      if (typeof payload.secondaryId !== 'string') return;
+      send({ type: payload.type, secondaryId: payload.secondaryId });
+    } else if (payload.type === 'choir-secondary-withdraw') {
+      send({ type: payload.type });
+    } else if (typeof payload.inviteId === 'string') {
+      send({ type: payload.type, inviteId: payload.inviteId });
+    }
+  });
+
   function sendPendingRename() {
     if (!pendingNickname) return false;
     return send({ type: 'participant-rename', nickname: pendingNickname });
@@ -259,6 +286,20 @@ window.relayIdentityReady = (async () => {
   window.addEventListener('relay-request-session-status', publishSessionStatus);
 
   function handleMessage(message) {
+    if (message.type === 'choir-consent-available') {
+      choirConsentAvailable = message.mode === 'invitation-only';
+      announceChoirConsentAvailable();
+      return;
+    }
+    if ([
+      'choir-secondary-invitation', 'choir-secondary-consent-status',
+      'choir-secondary-invite-acknowledged', 'choir-consent-rejected',
+    ].includes(message.type)) {
+      if (choirConsentAvailable) window.dispatchEvent(
+        new CustomEvent('relay-choir-consent-message', { detail: message }),
+      );
+      return;
+    }
     if (message.type !== 'session-status') return;
     const previousIncarnation = latestSession?.serverIncarnation;
     const nextIncarnation = message.serverIncarnation;
@@ -277,6 +318,7 @@ window.relayIdentityReady = (async () => {
     sessionAuthorityFresh = true;
     reconcileSessionState();
     publishSessionStatus();
+    announceChoirConsentAvailable();
   }
 
   function scheduleReconnect() {
@@ -290,6 +332,8 @@ window.relayIdentityReady = (async () => {
   async function connect() {
     if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return;
     sessionAuthorityFresh = false;
+    choirConsentAvailable = false;
+    announceChoirConsentAvailable();
     publishMicActionState();
     publishPresenceState();
 
@@ -319,6 +363,8 @@ window.relayIdentityReady = (async () => {
       if (socket !== next) return;
       socket = null;
       sessionAuthorityFresh = false;
+      choirConsentAvailable = false;
+      announceChoirConsentAvailable();
       publishMicActionState();
       publishPresenceState();
       scheduleReconnect();

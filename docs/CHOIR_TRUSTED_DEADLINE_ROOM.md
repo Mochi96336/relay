@@ -755,3 +755,46 @@ is intercepted but rejected after a Seek. This is a **transport skeleton**,
 not a functioning client-side second Mic feature; its attach entrypoint is
 unwired until real server role/Take authorization and fresh room approval
 are implemented and audited.
+
+## Phone AudioPacket v2 on secondary-only ingress (2026-10-14)
+
+The isolated secondary transport now understands BOTH Relay's original
+16-byte `RL` v1 positioned-PCM packet and the actual phone/media-plane
+24-byte `AudioPacket v2` container. **The server chooses exactly one
+packetVersion (1 or 2) when privately binding a verified B ticket**.
+Incoming packets are never auto-detected or silently downgraded, even
+though both formats begin with `RL`. A bound v2 socket rejects v1,
+Opus v3, backing-source packets, malformed count/payload pairs, corrupt
+sample cursors and wrong capture generations. An old v1 socket rejects
+v2 rather than misreading its sequence metadata as audio samples.
+
+For v2 the original `decodeAudioPacket` implementation provides the
+source, generation, sequence, PCM length and source-native sample cursor.
+A per-socket bounded sequence window retains at most ~129 recent
+sequence/sample spans (newest plus 128 behind), allows ordinary reordering
+and uint32 wraparound, rejects already-seen packet IDs and overlapping
+PCM positions, and limits forward jumps to four reorder horizons.
+Retries are *not* replayed into the canonical MicTrack; rejected
+duplicates do not advance the accepted sequence or capture generation.
+This is an **experimental bounded anti-replay policy**, not yet the full
+v2 production retransmit scheduler. It deliberately fails closed on very
+long outages: a new, explicitly admitted Media Epoch is required rather
+than assuming a stale capture still shares the room clock.
+
+All existing hard gates still apply: matched live authenticated B socket,
+valid room/song/Media Epoch, one physical socket per ticket, 200 ms
+maximum packet duration, 150 frames/s, current SongSession and Robot
+control authority, fresh Content before first audible Mic, and no
+access to deployed N=1 output/monitor/record. The v2 module has no Opus
+decoder; accepting audio packet version 3 as PCM would have been unsafe.
+
+Tests cover v1/v2 downgrade refusal, backing/Opus packet rejection,
+malformed metadata, v2 duplicate retransmission and sample overlap,
+bounded out-of-order delivery, uint32 sequence rollover and out-of-window
+replay. An integration case instantiates real SongSession/SourceRuntime
+and the Room Restart Coordinator, delivers a true phone-style v2
+secondary packet, confirms B stays awaiting calibration and then
+confirms a SongSession Seek rejects the very next packet. A real
+browser/phone secondary publishing session and role-grant UI remain
+unimplemented. The default-off production Shadow does not grant
+secondary tickets or route any Choir audio.

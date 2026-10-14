@@ -117,8 +117,8 @@ export function loadRelayConfig(env: Env = process.env) {
     })(),
     livePrebufferMs: envNumber(env, 'RELAY_LIVE_PREBUFFER_MS', 400, { min: 1 }),
     micOpusTrial: envBoolean(env, 'RELAY_MIC_OPUS_TRIAL', false),
-    // Control-plane shadow ONLY: no Choir media uplink, output, Mic admission,
-    // participant UI, monitor/recording or automatic restart is enabled.
+    // Default-off Room/Song authority observer and invitation-only UI.
+    // Never grants Choir media admission or N=2 output by itself.
     choirShadow: envBoolean(env, 'RELAY_CHOIR_SHADOW', false),
     // SECOND explicit opt-in. Enables experimental A/B media admission
     // ONLY together with RELAY_CHOIR_SHADOW; no N=2 monitor/record output.

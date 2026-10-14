@@ -179,6 +179,23 @@ export class ChoirSecondaryConsentExperiment {
       && this.validInvite(p, nowMs));
   }
 
+  /**
+   * Exact consent-bearing browser socket. A participant can have several
+   * authenticated tabs; only the one that explicitly accepted can receive
+   * the one-time secondary media claim. A shared nickname or participant
+   * identity on a different socket does not silently opt that tab in.
+   */
+  hasConsentOnSocket(primaryId: string, secondaryId: string,
+    roomEpoch: number, socket: AuthenticatedSocket, nowMs: number): boolean {
+    return this.hasConsent(primaryId, secondaryId, roomEpoch, nowMs)
+      && [...this.pending.values()].some(p => p.accepted
+        && p.primaryId === primaryId && p.secondaryId === secondaryId
+        && p.scope.roomEpoch === roomEpoch
+        && p.consentSocket === socket
+        && socket.participantId === secondaryId
+        && this.validInvite(p, nowMs));
+  }
+
   private notifyRevoked(invite: Invite, reason: string) {
     if (!invite.accepted) return;
     const notice = {

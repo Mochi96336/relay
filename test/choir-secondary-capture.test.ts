@@ -52,7 +52,7 @@ test('secondary capture advances native cursor through WebSocket backlog without
       readyState: 1, bufferedAmount: 0,
       send: (packet: ArrayBuffer) => sent.push(packet),
     };
-    const graph = { returnBuffer: () => { returned++; } };
+    const graph = { returnBuffer: () => { returned++; }, dispose: () => {} };
     let returned = 0;
     c.graph = graph;
     c.context = { currentTime: 1, close: async () => {} };
@@ -88,7 +88,7 @@ test('stale PCM never enters a newer capture generation and input-gap fails clos
     const sent: ArrayBuffer[] = [];
     const socket = { readyState: 1, bufferedAmount: 0,
       send: (p: ArrayBuffer) => sent.push(p) };
-    const graph = { returnBuffer: () => {} };
+    const graph = { returnBuffer: () => {}, dispose: () => {} };
     c.graph = graph;
     c.context = { currentTime: 3, close: async () => {} };
     c.socket = socket;

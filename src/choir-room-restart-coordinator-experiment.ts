@@ -206,6 +206,69 @@ export class ChoirRoomRestartCoordinatorExperiment {
     return this.handshake.admitVerifiedSinger(request);
   }
 
+  /**
+   * These private media/proof gates always re-observe the live server-owned
+   * SongSession and Robot authority BEFORE accepting a packet or proof.
+   * A seek between clock ticks therefore cannot leak into a new room.
+   * They are not connected to any production Mic/Robot transport.
+   */
+  private currentTicket(ticket: ChoirFreshCaptureTicket, nowMs: number): boolean {
+    this.observe(nowMs);
+    return Boolean(this.approved
+      && ticket.roomEpoch === this.approved.roomEpoch
+      && ticket.songEpoch === this.approved.songEpoch
+      && (ticket.participantId === this.approved.primaryId
+        || ticket.participantId === this.approved.secondaryId));
+  }
+
+  receiveVerifiedMic(
+    ticket: ChoirFreshCaptureTicket,
+    frame: import('./pcm-frame.js').PcmFrame,
+    sampleRate: number, nowMs: number,
+  ): boolean {
+    return this.currentTicket(ticket, nowMs)
+      && this.handshake.receiveVerifiedMic(ticket, frame, sampleRate, nowMs);
+  }
+
+  receiveTrustedRobot(
+    roomEpoch: number, songEpoch: number,
+    frame: import('./pcm-frame.js').PcmFrame,
+    sampleRate: number, nowMs: number,
+  ): boolean {
+    this.observe(nowMs);
+    return Boolean(this.approved && this.approved.roomEpoch === roomEpoch
+      && this.approved.songEpoch === songEpoch
+      && this.handshake.receiveTrustedRobot(
+        roomEpoch, songEpoch, frame, sampleRate, nowMs,
+      ));
+  }
+
+  analyzeFreshContent(
+    ticket: ChoirFreshCaptureTicket, startSample: number, nowMs: number,
+  ) {
+    if (!this.currentTicket(ticket, nowMs))
+      return { status: 'rejected' as const, reason: 'retired-room-or-stale-authority' };
+    return this.handshake.analyzeFreshContent(ticket, startSample, nowMs);
+  }
+
+  commitFreshContent(ticket: ChoirFreshCaptureTicket, nowMs: number): boolean {
+    return this.currentTicket(ticket, nowMs)
+      && !this.takeFrozenNow()
+      && this.handshake.commitFreshContent(ticket, nowMs, false);
+  }
+
+  disconnectVerifiedSinger(ticket: ChoirFreshCaptureTicket, nowMs: number): boolean {
+    return this.currentTicket(ticket, nowMs)
+      && this.handshake.disconnectVerifiedSinger(ticket, nowMs);
+  }
+
+  /** Offline scheduler discards PCM; no monitor output is emitted. */
+  advanceDue(roomEpoch: number, nowMs: number): boolean {
+    this.observe(nowMs);
+    return Boolean(this.approved && this.approved.roomEpoch === roomEpoch
+      && this.handshake.advanceDue(roomEpoch, nowMs));
+  }
+
   /** Proof-only diagnostic; never grants Media Epoch or acoustic authority. */
   previewForVerifiedSinger(participantId: string): {
     roomEpoch: number; songEpoch: number; videoId: string;

@@ -139,6 +139,7 @@
             <label for="choir-secondary-person" data-i18n="choir.choose">選擇副 Mic</label>
             <select id="choir-secondary-person" aria-label="Secondary singer"></select>
             <button id="choir-invite-send" type="button" data-i18n="choir.send">送出邀請</button>
+            <button id="choir-room-begin" type="button" hidden data-i18n="choir.beginRoom">建立實驗房間</button>
           </div>
           <div id="choir-guest-actions" class="choir-guest-actions" hidden>
             <p id="choir-invitation-copy"></p>
@@ -149,6 +150,7 @@
           </div>
           <div id="choir-withdraw-actions" class="inline-actions" hidden>
             <button id="choir-withdraw" type="button" class="text-action" data-i18n="choir.withdraw">撤銷同意</button>
+            <button id="choir-secondary-connect" type="button" hidden data-i18n="choir.connectMedia">連接副 Mic 測試</button>
           </div>
           <p id="choir-consent-status" role="status" aria-live="polite"></p>
           <button id="choir-consent-close" class="text-action" type="button" data-i18n="mic.cancel">取消</button>
@@ -410,6 +412,7 @@
     <script type="module" src="/recording-ui.js"></script>
     <script type="module" src="/presence.js"></script>
     <script type="module" src="/choir-consent-ui.js"></script>
+    <script type="module" src="/choir-secondary-media-client.js"></script>
     <script type="module" src="/live-status.js"></script>
     <script type="module" src="/system-details.js"></script>
     <script type="module" src="/app.js"></script>

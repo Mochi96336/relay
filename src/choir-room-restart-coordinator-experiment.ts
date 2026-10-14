@@ -72,7 +72,7 @@ export class ChoirRoomRestartCoordinatorExperiment {
     private readonly handshake = new ChoirFreshRoomHandshakeExperiment(),
     // Fail closed unless the caller provides an explicit server-owned live
     // Mic-owner / B-consent check, re-evaluated on every media operation.
-    private readonly roomRolesStillAuthorized: (primaryId: string, secondaryId: string) => boolean
+    private readonly roomRolesStillAuthorized: (primaryId: string, secondaryId: string, roomEpoch: number) => boolean
       = () => false,
   ) {}
 
@@ -96,7 +96,7 @@ export class ChoirRoomRestartCoordinatorExperiment {
       || witness.backingGeneration === null
       || this.takeFrozenNow()
       || !this.roomRolesStillAuthorized(
-        this.approved.primaryId, this.approved.secondaryId,
+        this.approved.primaryId, this.approved.secondaryId, this.approved.roomEpoch,
       ))) {
       this.handshake.retireTrustedRoom(this.approved.roomEpoch, nowMs);
       this.approved = null;
@@ -151,7 +151,9 @@ export class ChoirRoomRestartCoordinatorExperiment {
       || !request.secondaryId || request.secondaryId !== request.secondaryId.trim()
       || request.primaryId === request.secondaryId
       || this.takeFrozenNow()
-      || !this.roomRolesStillAuthorized(request.primaryId, request.secondaryId)
+      || !this.roomRolesStillAuthorized(
+        request.primaryId, request.secondaryId, request.expectedRetiredRoomEpoch + 1,
+      )
       || this.approved !== null) return false;
 
     this.observe(request.nowMs);

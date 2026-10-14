@@ -1,6 +1,9 @@
 import {
   decodePcmFrame, FRAME_HEADER_BYTES, FRAME_MAGIC, FRAME_VERSION,
 } from './pcm-frame.js';
+import {
+  AUDIO_PACKET_HEADER_BYTES, AUDIO_PACKET_VERSION, decodeAudioPacket,
+} from './audio-packet.js';
 import type { ChoirFreshCaptureTicket } from './choir-fresh-room-handshake-experiment.js';
 import type { ChoirRoomRestartCoordinatorExperiment } from './choir-room-restart-coordinator-experiment.js';
 
@@ -26,19 +29,26 @@ type BoundSecondary = {
   generation: number | null;
   packetWindowStartMs: number;
   packetCount: number;
+  packetVersion: 1 | 2;
+  /** v2 committed sequence identity, bounded to the recent reorder horizon. */
+  latestSequence: number | null;
+  seenSequences: Map<number, { start: number; end: number }>;
 };
 
 export type ChoirIngressResult =
   | { intercepted: false }
   | { intercepted: true; accepted: boolean; reason:
       'accepted' | 'malformed-frame' | 'too-large' | 'rate-limited'
-      | 'stale-authority' | 'socket-identity-changed' | 'capture-restarted' };
+      | 'stale-authority' | 'socket-identity-changed' | 'capture-restarted'
+      | 'duplicate-packet' | 'sequence-out-of-window' | 'sample-overlap' };
 
 export class ChoirSecondaryPcmIngressExperiment {
   private readonly sockets = new WeakMap<ChoirSecondarySocket, BoundSecondary>();
   /** One physical socket per server-issued transport identity at a time. */
   private readonly transportBindings = new Map<string, ChoirSecondarySocket>();
   private readonly maxFrameBytes: number;
+  /** v2 replay/reorder horizon: no unbounded sequence maps. */
+  private static readonly MAX_REORDER_SEQUENCES = 128;
 
   constructor(
     private readonly coordinator: Pick<ChoirRoomRestartCoordinatorExperiment,
@@ -48,8 +58,9 @@ export class ChoirSecondaryPcmIngressExperiment {
   ) {
     if (!Number.isSafeInteger(maxPacketMs) || maxPacketMs <= 0 || maxPacketMs > 1_000)
       throw new RangeError('Invalid Choir packet duration');
-    // 192kHz * 200ms * 2 bytes + 16 byte header.
-    this.maxFrameBytes = FRAME_HEADER_BYTES + Math.ceil(192_000 * maxPacketMs / 1_000) * 2;
+    // 192kHz * maxPacketMs * 2 bytes + largest supported PCM header.
+    this.maxFrameBytes = AUDIO_PACKET_HEADER_BYTES
+      + Math.ceil(192_000 * maxPacketMs / 1_000) * 2;
     this.maxPacketMs = maxPacketMs;
   }
   private readonly maxPacketMs: number;
@@ -65,6 +76,7 @@ export class ChoirSecondaryPcmIngressExperiment {
     ticket: ChoirFreshCaptureTicket,
     sourceRate: number,
     nowMs: number,
+    packetVersion: 1 | 2 = 1,
   ): boolean {
     if (this.sockets.has(socket) || this.transportBindings.has(ticket.transportId)
       || !this.isSocketOpen(socket)
@@ -77,11 +89,13 @@ export class ChoirSecondaryPcmIngressExperiment {
       || !ticket.transportId || ticket.transportId !== ticket.transportId.trim()
       || !Number.isInteger(sourceRate) || sourceRate < 8_000 || sourceRate > 192_000
       || !Number.isFinite(nowMs) || nowMs < 0
+      || (packetVersion !== 1 && packetVersion !== 2)
       || !this.coordinator.mayAcceptVerifiedTicket(ticket, nowMs)) return false;
 
     this.sockets.set(socket, {
       ticket, sampleRate: sourceRate, generation: null,
-      packetWindowStartMs: nowMs, packetCount: 0,
+      packetWindowStartMs: nowMs, packetCount: 0, packetVersion,
+      latestSequence: null, seenSequences: new Map(),
     });
     this.transportBindings.set(ticket.transportId, socket);
     return true;
@@ -103,13 +117,14 @@ export class ChoirSecondaryPcmIngressExperiment {
     if (!Buffer.isBuffer(bytes) || bytes.length > this.maxFrameBytes
       || bytes.length < FRAME_HEADER_BYTES + 2)
       return rejected('too-large');
+    // Never autodetect a packet version. The trusted server binding pins it,
+    // so a v2 publisher cannot silently downgrade to legacy v1 or send Opus
+    // v3, which needs a separate decoder and authenticated PCM proof.
     if (bytes.readUInt16LE(0) !== FRAME_MAGIC
-      || bytes.readUInt8(2) !== FRAME_VERSION || bytes.readUInt8(3) !== 0
-      || (bytes.length - FRAME_HEADER_BYTES) % 2 !== 0)
-      return rejected('malformed-frame');
+      || bytes.readUInt8(2) !== bound.packetVersion) return rejected('malformed-frame');
 
-    // A bounded packet-rate budget protects the isolated experiment from a
-    // misbehaving sender without interfering with the N=1 transport.
+    // Bound ingress traffic even if a future malformed/duplicate sender tries
+    // hundreds of retransmitted frames inside a single wall-clock second.
     if (!Number.isFinite(nowMs) || nowMs < bound.packetWindowStartMs)
       return rejected('stale-authority');
     if (nowMs - bound.packetWindowStartMs >= 1_000) {
@@ -118,7 +133,31 @@ export class ChoirSecondaryPcmIngressExperiment {
     }
     if (++bound.packetCount > 150) return rejected('rate-limited');
 
-    const frame = decodePcmFrame(bytes);
+    let frame;
+    let sequence: number | null = null;
+    if (bound.packetVersion === 2) {
+      if (bytes.length < AUDIO_PACKET_HEADER_BYTES + 2
+        || bytes.readUInt8(2) !== AUDIO_PACKET_VERSION)
+        return rejected('malformed-frame');
+      const decoded = decodeAudioPacket(bytes);
+      if (!decoded.ok || decoded.packet.source !== 'mic')
+        return rejected('malformed-frame');
+      const packet = decoded.packet;
+      if (packet.sampleCount > Math.ceil(bound.sampleRate * this.maxPacketMs / 1_000))
+        return rejected('too-large');
+      sequence = packet.sequence;
+      frame = {
+        generation: packet.generation,
+        firstSampleIndex: packet.firstSampleIndex,
+        pcm: packet.pcm,
+      };
+    } else {
+      if (bytes.readUInt8(3) !== 0
+        || (bytes.length - FRAME_HEADER_BYTES) % 2 !== 0)
+        return rejected('malformed-frame');
+      frame = decodePcmFrame(bytes);
+    }
+
     const sampleCount = frame.pcm.length / 2;
     if (!Number.isSafeInteger(frame.firstSampleIndex)
       || frame.generation === null
@@ -129,6 +168,30 @@ export class ChoirSecondaryPcmIngressExperiment {
       return rejected('malformed-frame');
     if (bound.generation !== null && frame.generation !== bound.generation)
       return rejected('capture-restarted');
+
+    if (sequence !== null) {
+      const latest = bound.latestSequence;
+      if (bound.seenSequences.has(sequence)) return rejected('duplicate-packet');
+      if (latest !== null) {
+        const forward = (sequence - latest) >>> 0;
+        const backward = (latest - sequence) >>> 0;
+        const horizon = ChoirSecondaryPcmIngressExperiment.MAX_REORDER_SEQUENCES;
+        // Modular uint32 ordering: allow bounded retransmission/reorder and
+        // ordinary wraparound, but not arbitrarily old/far-future claims.
+        if (forward === 0) return rejected('duplicate-packet');
+        if (forward < 0x8000_0000) {
+          if (forward > 4 * horizon) return rejected('sequence-out-of-window');
+        } else if (backward > horizon) {
+          return rejected('sequence-out-of-window');
+        }
+      }
+      const start = frame.firstSampleIndex!;
+      const end = start + sampleCount;
+      for (const window of bound.seenSequences.values()) {
+        if (start < window.end && end > window.start)
+          return rejected('sample-overlap');
+      }
+    }
     const accepted = this.coordinator.receiveVerifiedMic(
       bound.ticket, frame, bound.sampleRate, nowMs,
     );
@@ -137,6 +200,20 @@ export class ChoirSecondaryPcmIngressExperiment {
       return rejected('stale-authority');
     }
     bound.generation = frame.generation;
+    if (sequence !== null) {
+      const latest = bound.latestSequence;
+      if (latest === null || ((sequence - latest) >>> 0) < 0x8000_0000)
+        bound.latestSequence = sequence;
+      bound.seenSequences.set(sequence, {
+        start: frame.firstSampleIndex!, end: frame.firstSampleIndex! + sampleCount,
+      });
+      const current = bound.latestSequence!;
+      for (const previous of bound.seenSequences.keys()) {
+        if (((current - previous) >>> 0)
+          > ChoirSecondaryPcmIngressExperiment.MAX_REORDER_SEQUENCES)
+          bound.seenSequences.delete(previous);
+      }
+    }
     return { intercepted: true, accepted: true, reason: 'accepted' };
   }
 

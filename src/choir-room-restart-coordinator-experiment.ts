@@ -156,6 +156,10 @@ export class ChoirRoomRestartCoordinatorExperiment {
 
     let roomEpoch: number, songEpoch: number;
     if (witness.state === 'shadow-active') {
+      // Only the first room can adopt an already-active Shadow witness.
+      // Once an approved room has retired, a new witness must be created
+      // THROUGH this coordinator's explicit CAS, not rearmed out-of-band.
+      if (this.lastApprovedRoomEpoch !== 0) return false;
       if (witness.roomEpoch === null || witness.songEpoch === null
         || witness.videoId !== authority.videoId
         || witness.backingGeneration !== authority.backingGeneration

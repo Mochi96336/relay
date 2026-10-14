@@ -145,31 +145,31 @@ export class ChoirSecondaryCapture {
     // Own the Worklet buffer before doing any fallible clock or network work.
     // A capture-clock failure stops the graph, but must still exit this scope.
     try {
-    const samples = pcm.byteLength / 2;
-    const firstSampleIndex = this.cursor;
-    // ALWAYS advance native cursor even if WebSocket is late/disconnected.
-    this.cursor += samples;
-    const nowMs = performance.now();
-    if (this.clockWallOriginMs === null) {
-      this.clockWallOriginMs = nowMs;
-      this.clockSampleOrigin = this.cursor;
-    } else {
-      const elapsedMs = nowMs - this.clockWallOriginMs;
-      if (elapsedMs >= CLOCK_PROOF_WINDOW_MS) {
-        const capturedSamples = this.cursor - this.clockSampleOrigin;
-        const clockRateRatio = (capturedSamples / this.rate) / (elapsedMs / 1000);
-        if (!Number.isFinite(clockRateRatio)
-          || clockRateRatio < MIN_CLOCK_RATE_RATIO
-          || clockRateRatio > MAX_CLOCK_RATE_RATIO) {
-          this.fail('capture-clock-diverged');
-          return;
-        }
-        // Periodically re-anchor after healthy evidence; a long singer
-        // session never grows into a lifetime-average hiding a fresh stall.
+      const samples = pcm.byteLength / 2;
+      const firstSampleIndex = this.cursor;
+      // ALWAYS advance native cursor even if WebSocket is late/disconnected.
+      this.cursor += samples;
+      const nowMs = performance.now();
+      if (this.clockWallOriginMs === null) {
         this.clockWallOriginMs = nowMs;
         this.clockSampleOrigin = this.cursor;
+      } else {
+        const elapsedMs = nowMs - this.clockWallOriginMs;
+        if (elapsedMs >= CLOCK_PROOF_WINDOW_MS) {
+          const capturedSamples = this.cursor - this.clockSampleOrigin;
+          const clockRateRatio = (capturedSamples / this.rate) / (elapsedMs / 1000);
+          if (!Number.isFinite(clockRateRatio)
+            || clockRateRatio < MIN_CLOCK_RATE_RATIO
+            || clockRateRatio > MAX_CLOCK_RATE_RATIO) {
+            this.fail('capture-clock-diverged');
+            return;
+          }
+          // Periodically re-anchor after healthy evidence; a long singer
+          // session never grows into a lifetime-average hiding a fresh stall.
+          this.clockWallOriginMs = nowMs;
+          this.clockSampleOrigin = this.cursor;
+        }
       }
-    }
       const age = Number.isFinite(value.capturedAtContextTime)
         ? this.context.currentTime - value.capturedAtContextTime : Infinity;
       const socket = this.socket;

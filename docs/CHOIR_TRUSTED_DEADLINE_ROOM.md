@@ -628,3 +628,71 @@ SongSession/SourceRuntime. It deliberately has no API that trusts client
 `beginTrustedRoom` or connects this handshake to actual sockets. A real
 two-singer media path, 2-device physical test, room-restart handshake and
 authorization of the remote user's explicit Mic Take are separate follow-ups.
+
+## Room Restart Coordinator: explicit trusted CAS + A/B status previews (2026-10-14)
+
+`ChoirRoomRestartCoordinatorExperiment` is the *offline* bridge between the
+previously independent `ChoirShadowLifecycleExperiment` (watches authoritative
+`SongSession` and `SourceRuntime`) and
+`ChoirFreshRoomHandshakeExperiment` (new A/B capture admission and acoustic
+proof). The server now constructs it under the existing **default-off**
+`RELAY_CHOIR_SHADOW` flag, in place of directly observing the shadow.
+Crucially, the actual `server.ts` constructor injects an authorization
+policy that ALWAYS RETURNS FALSE and Take-clearance that ALWAYS FAILS
+CLOSED. No production client can approve a restart, join a singer through
+this route, route PCM, or request new monitoring/recording output.
+
+The isolated approval contract is `approveTrustedRestart()`, but it must
+be called by a future private server coordinator, *never* by a new generic
+WebSocket/HTTP handler. It compares the caller's expected last-approved
+Room Epoch and expected server SongSession revision, checks a fresh playing
+SongSession leader and live Robot control/capture generations, refuses Take
+freeze, and delegates role approval to a separately injected
+**server-owned authorization callback**. In particular, an actor name
+or client-supplied primary/secondary names are not authentication. Even a
+correctly formatted request with a stale revision, missing actual Robot
+source or unauthorized actor cannot create or reuse a room.
+
+With a valid *explicit* approval, Shadow's new Room/Song Epoch is matched
+to the private fresh-handshake's Room/Song Epoch and fixed A/B identities.
+After Seek, SourceRuntime replacement, clock discontinuity or stale leader,
+`observe()` retires all previously issued A/B tickets; a renewed PLAYING
+heartbeat by itself does not authorize another room. After fresh private
+approval, separate A and B joins issue their own strictly increasing Media
+Epochs and require **independent newly measured Content evidence**.
+
+The offline private methods for new PCM, Robot backing, Content analysis and
+Content application recheck live `SongSession` and `SourceRuntime`
+authority *on every call*, not just in a periodic observer. A Seek racing
+between timer ticks therefore rejects the previous ticket immediately.
+Take freeze is checked again at the instant of Content application.
+No application can use a retired ticket or a prior song's acoustic proof.
+
+The read-only `previewForVerifiedSinger` and `preview` methods define
+the next possible UI *contract*; they do NOT send client notifications or
+release tickets, transport identifiers, capability keys, PCM or analyzer
+arrays. A future authenticated server handler might show:
+
+- Room invalid or not approved: "重新建立房間中"; no singer authority.
+- Approved, A not rejoined: "等待主 Mic 重新加入".
+- A joined and B not joined: "等待副 Mic 重新加入".
+- Joined but not calibrated: the singer shows "等待 Content 校準".
+- Only one Content verified: that singer is **eligible** to play, the
+  other remains gated.
+- Both verified: both are **eligible**, subject to separate actual PCM
+  frontier/audio-health checks.
+
+The `monitoring` field is only a diagnostic **planned mix eligibility**
+label (`unavailable`, `backing-only`, `one-voice`, `two-voices`), not
+a claim that real speakers are receiving sound. Until the production media
+path is integrated, there is no Choir monitor/record stream and no physical
+participant notification. This remains distinct from the deployed N=1
+audio pipeline and preserves the decision to omit automatic primary-Mic
+succession in v1.
+
+Regression coverage uses real `SongSession`, `SourceRuntime` and PCM
+Content evidence to check initial authorization denial, valid explicit
+CAS, operator rejection, frozen Take, stale revisions, emergency Seek
+without a clock-tick callback, fresh Room/Song/Media Epochs, A/B role
+isolation, and independent Content readiness. Do not confuse this with
+an end-to-end mobile/desktop Choir deployment test.

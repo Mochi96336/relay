@@ -70,10 +70,10 @@ export class ChoirRoomRestartCoordinatorExperiment {
       'sampleRate' | 'frameMs' | 'prebufferMs' | 'retentionMs'
       | 'contentHistoryMs' | 'outputHoldbackMs'>,
     private readonly handshake = new ChoirFreshRoomHandshakeExperiment(),
-    // The production adapter MUST inject its live mic-owner / B-consent
-    // authority. Default is for the isolated offline protocol fixtures only.
+    // Fail closed unless the caller provides an explicit server-owned live
+    // Mic-owner / B-consent check, re-evaluated on every media operation.
     private readonly roomRolesStillAuthorized: (primaryId: string, secondaryId: string) => boolean
-      = () => true,
+      = () => false,
   ) {}
 
   /**

@@ -32,6 +32,7 @@ export class ChoirLiveContentPipelineExperiment {
   private inFlight: InFlight | null = null;
   private nextJobId = 1;
   private nextAttemptAtMs = 0;
+  private failureStreak = 0;
   private closed = false;
   private readonly workTimeoutMs: number;
   private readonly retryDelayMs: number;
@@ -87,7 +88,9 @@ export class ChoirLiveContentPipelineExperiment {
   /** Room retirement immediately frees the obsolete worker, even without PCM. */
   cancelRoom(roomEpoch: number) {
     if (this.inFlight?.ticket.roomEpoch !== roomEpoch) return;
-    this.rejectActive(true);
+    this.rejectActive(true, false);
+    this.failureStreak = 0;
+    this.nextAttemptAtMs = this.now() + 250;
   }
 
   private getWorker(): Worker | null {
@@ -109,14 +112,27 @@ export class ChoirLiveContentPipelineExperiment {
         if (!active || !reply || reply.id !== active.id) return;
         clearTimeout(active.timeout);
         this.inFlight = null;
-        if (reply.ok && Number.isFinite(reply.micLagMs)
-          && Number.isFinite(reply.confidence)
-          && this.coordinator.acceptFreshWorkerContent(
-            active.ticket, active.proof,
-            { micLagMs: reply.micLagMs, confidence: reply.confidence },
-            this.now(),
-          )) this.stats.applied++;
-        else this.stats.rejected++;
+        let applied = false;
+        try {
+          applied = reply.ok && Number.isFinite(reply.micLagMs)
+            && Number.isFinite(reply.confidence)
+            && this.coordinator.acceptFreshWorkerContent(
+              active.ticket, active.proof,
+              { micLagMs: reply.micLagMs, confidence: reply.confidence },
+              this.now(),
+            );
+        } catch {
+          // A callback failure cannot escape the worker event handler into
+          // the Relay N=1 process. Fail closed and retry with backoff.
+        }
+        if (applied) {
+          this.stats.applied++;
+          this.failureStreak = 0;
+          this.nextAttemptAtMs = this.now() + 250;
+        } else {
+          this.stats.rejected++;
+          this.delayAfterFailure();
+        }
       });
       worker.on('error', () => { if (this.worker === worker) this.rejectActive(true); });
       worker.on('exit', () => { if (this.worker === worker) this.rejectActive(true); });
@@ -134,12 +150,20 @@ export class ChoirLiveContentPipelineExperiment {
     this.rejectActive(true);
   }
 
-  private rejectActive(restartWorker: boolean) {
+  private delayAfterFailure() {
+    this.failureStreak = Math.min(5, this.failureStreak + 1);
+    const delay = Math.min(30_000,
+      this.retryDelayMs * (2 ** (this.failureStreak - 1)));
+    this.nextAttemptAtMs = this.now() + delay;
+  }
+
+  private rejectActive(restartWorker: boolean, penalize = true) {
     const active = this.inFlight;
     if (active) {
       clearTimeout(active.timeout);
       this.inFlight = null;
       this.stats.rejected++;
+      if (penalize) this.delayAfterFailure();
     }
     if (restartWorker && this.worker) {
       const previous = this.worker;
@@ -150,7 +174,7 @@ export class ChoirLiveContentPipelineExperiment {
 
   close() {
     this.closed = true;
-    this.rejectActive(true);
+    this.rejectActive(true, false);
   }
 
   get isBusy() { return this.inFlight !== null; }

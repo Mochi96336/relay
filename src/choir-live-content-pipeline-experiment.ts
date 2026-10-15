@@ -38,6 +38,8 @@ export class ChoirLiveContentPipelineExperiment {
   private readonly retryDelayMs: number;
   private readonly now: () => number;
   readonly stats = { submitted: 0, applied: 0, rejected: 0, timedOut: 0 };
+  /** Bounded diagnostic of the last worker failure; never contains PCM. */
+  lastFailureReason: string | null = null;
 
   constructor(
     private readonly coordinator: Coordinator,
@@ -79,7 +81,8 @@ export class ChoirLiveContentPipelineExperiment {
         id, sampleRate: 48_000, mic: job.proof.mic, backing: job.proof.backing,
       }, [job.proof.mic.buffer as ArrayBuffer, job.proof.backing.buffer as ArrayBuffer]);
       return true;
-    } catch {
+    } catch (error) {
+      this.lastFailureReason = `post-message: ${error instanceof Error ? error.message : String(error)}`;
       this.rejectActive(true);
       return false;
     }
@@ -113,6 +116,7 @@ export class ChoirLiveContentPipelineExperiment {
         clearTimeout(active.timeout);
         this.inFlight = null;
         let applied = false;
+        let acceptanceFailed = false;
         try {
           applied = reply.ok && Number.isFinite(reply.micLagMs)
             && Number.isFinite(reply.confidence)
@@ -121,24 +125,40 @@ export class ChoirLiveContentPipelineExperiment {
               { micLagMs: reply.micLagMs, confidence: reply.confidence },
               this.now(),
             );
-        } catch {
+        } catch (error) {
           // A callback failure cannot escape the worker event handler into
           // the Relay N=1 process. Fail closed and retry with backoff.
+          this.lastFailureReason = `commit-exception: ${error instanceof Error ? error.message : String(error)}`;
+          acceptanceFailed = true;
         }
         if (applied) {
           this.stats.applied++;
+          this.lastFailureReason = null;
           this.failureStreak = 0;
           this.nextAttemptAtMs = this.now() + 250;
         } else {
+          if (!acceptanceFailed)
+            this.lastFailureReason = reply.ok
+              ? 'stale-or-denied-commit'
+              : `analyzer: ${reply.reason}`;
           this.stats.rejected++;
           this.delayAfterFailure();
         }
       });
-      worker.on('error', () => { if (this.worker === worker) this.rejectActive(true); });
-      worker.on('exit', () => { if (this.worker === worker) this.rejectActive(true); });
+      worker.on('error', (error) => {
+        if (this.worker !== worker) return;
+        this.lastFailureReason = `worker-error: ${error.message}`;
+        this.rejectActive(true);
+      });
+      worker.on('exit', (code) => {
+        if (this.worker !== worker) return;
+        this.lastFailureReason = `worker-exit: ${code}`;
+        this.rejectActive(true);
+      });
       this.worker = worker;
       return worker;
-    } catch {
+    } catch (error) {
+      this.lastFailureReason = `worker-create: ${error instanceof Error ? error.message : String(error)}`;
       this.stats.rejected++;
       return null;
     }
@@ -147,6 +167,7 @@ export class ChoirLiveContentPipelineExperiment {
   private expire(id: number) {
     if (this.inFlight?.id !== id) return;
     this.stats.timedOut++;
+    this.lastFailureReason = 'worker-timeout';
     this.rejectActive(true);
   }
 

@@ -3281,7 +3281,7 @@ const youtubeTimelineTimer = setInterval(() => {
   const nowMs = performance.now();
   tickChoirShadow(nowMs);
   choirContentPipeline?.tick(nowMs);
-  if (process.env.NODE_ENV === 'test' && choirMediaEnabled && choirRestartCoordinator) {
+  if (relayConfig.choirProofCiDiagnostics && choirRestartCoordinator) {
     const view = choirRestartCoordinator.preview();
     const identity = `${view.roomEpoch ?? 0}/${view.state}`;
     if (view.roomEpoch !== null && identity !== lastChoirProofTestState

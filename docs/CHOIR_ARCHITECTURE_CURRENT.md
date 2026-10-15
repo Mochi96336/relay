@@ -63,10 +63,11 @@ as archived history, not executable documentation.
 - `ChoirDeadlineRoomExperiment.analyzeTrustedCanonicalContent` is an
   offline synchronous testing oracle. **Live analysis must remain off-thread**
   through `ChoirLiveContentPipelineExperiment`.
-- B's `ChoirSecondaryPcmIngressExperiment` accepts a *legacy v1* format in
-  private direct tests, even though the real WebSocket media-register handler
-  only allows AudioPacket v2. This is a remaining simplification candidate;
-  migrate rejection/replay tests before deleting the v1 branch.
+- B's `ChoirSecondaryPcmIngressExperiment` is now strictly AudioPacket
+  **v2 only**, both when called privately and from the actual server. The
+  retired v1 decoder no longer exists on the B path; tests still send v1
+  bytes to verify explicit downgrade rejection, and preserve capture,
+  replay/reorder, rate-limit, stale-room, and Seek quarantine cases.
 - Shadow's own witness room and FreshRoom's duet output room are separate
   objects on purpose at present. Consider consolidation only after a
   stronger equivalence proof, not simply due to duplicated nouns.

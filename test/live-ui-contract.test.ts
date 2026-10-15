@@ -89,9 +89,9 @@ test('Song composition preserves playback authority while Mic owner recovers los
   assert.match(songSurface, /isMicOwner: detail\.isMicOwner === true/);
   assert.match(songSurface, /isMicFree: detail\.isMicFree === true/);
   assert.match(songSurface, /changeButton\.hidden = !canChange \|\| !videoId;/);
-  assert.match(songSurface, /headingTitle\.hidden = !holderWithSong;/);
-  assert.match(songSurface, /observer\.hidden = !observerMode;/);
-  assert.match(songSurface, /playerShell\.hidden = observerMode;/);
+  assert.match(songSurface, /headingTitle\.hidden = !\(holderWithSong \|\| choirLocalFollower\);/);
+  assert.match(songSurface, /observer\.hidden = !observerMode \|\| choirLocalFollower;/);
+  assert.match(songSurface, /playerShell\.hidden = observerMode && !choirLocalFollower;/);
   assert.match(songSurface, /form\.hidden = role === 'preparing'/);
   assert.match(songCss, /data-playback-role="observer"/);
   assert.doesNotMatch(songSurface, /participantCount/);

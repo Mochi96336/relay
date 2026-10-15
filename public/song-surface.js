@@ -205,7 +205,7 @@ if (
     const metadataMode = observerMode || holderWithSong;
     observer.hidden = !observerMode || choirLocalFollower;
     playerShell.hidden = observerMode && !choirLocalFollower;
-    localReadout.hidden = observerMode;
+    localReadout.hidden = observerMode && !choirLocalFollower;
     localNote.hidden = observerMode;
 
     if (metadataMode) renderObserver(room, recoverable);

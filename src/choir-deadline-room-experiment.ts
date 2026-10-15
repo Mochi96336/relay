@@ -2,7 +2,7 @@ import { CanonicalChoirMixExperiment, type CanonicalChoirFrame } from './choir-c
 import { ChoirPublisherRegistry } from './choir-publisher-registry.js';
 import { ChoirSession, type ChoirSeat } from './choir-session.js';
 import type { PcmFrame } from './pcm-frame.js';
-import type { ChoirAlignmentDecision } from './choir-calibration-experiment.js';
+import type { ChoirAlignmentDecision } from './choir-alignment-decision.js';
 import { analyzeTimingCalibration } from './timing-calibration.js';
 
 /**

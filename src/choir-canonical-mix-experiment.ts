@@ -1,7 +1,7 @@
 import { MixBus } from './mix-bus.js';
 import { MicTrack } from './mic-track.js';
 import { ChoirContentPcmBuffer } from './choir-content-pcm-buffer.js';
-import type { ChoirAlignmentDecision } from './choir-calibration-experiment.js';
+import type { ChoirAlignmentDecision } from './choir-alignment-decision.js';
 import { ingestPcmTimeline } from './pcm-ingest.js';
 import type { PcmFrame } from './pcm-frame.js';
 import {

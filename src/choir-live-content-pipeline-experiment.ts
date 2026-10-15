@@ -102,9 +102,9 @@ export class ChoirLiveContentPipelineExperiment {
       const worker = new Worker(
         new URL('./choir-content-analysis-worker.mjs', import.meta.url),
         {
-          // Relay normally runs under tsx; also enable it for this new thread
-          // so .js specifiers resolve the canonical TypeScript implementation.
-          execArgv: ['--import', 'tsx'],
+          // The worker explicitly registers its own TS loader before
+          // importing the analyzer; no inherited test-runner flags are needed.
+          execArgv: [],
           resourceLimits: { maxOldGenerationSizeMb: 192, maxYoungGenerationSizeMb: 24 },
         },
       );

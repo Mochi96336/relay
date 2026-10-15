@@ -30,8 +30,8 @@ test('observer Song is a compact room snapshot because it does not host YouTube 
 test('playback holder compresses song identity into the heading row above the real YouTube controls', () => {
   assert.match(song, /\.song-heading-title \{[\s\S]*?flex: 1;[\s\S]*?text-overflow: ellipsis;[\s\S]*?white-space: nowrap;[\s\S]*?font-size: 12px;/);
   assert.match(songSurface, /const metadataMode = observerMode \|\| holderWithSong;/);
-  assert.match(songSurface, /headingTitle\.hidden = !holderWithSong;/);
-  assert.match(songSurface, /observer\.hidden = !observerMode;/);
+  assert.match(songSurface, /headingTitle\.hidden = !\(holderWithSong \|\| choirLocalFollower\);/);
+  assert.match(songSurface, /observer\.hidden = !observerMode \|\| choirLocalFollower;/);
   assert.doesNotMatch(song, /data-playback-role="holder"\] \.song-observer/);
 });
 

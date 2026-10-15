@@ -1,5 +1,11 @@
 # Choir: trusted transport, fixed-deadline N=2 server experiment
 
+> **Chronological engineering log, not a statement that every past
+> phase is still in use.** The current live experimental architecture,
+> retired prototypes and unresolved release gates are summarized in
+> [CHOIR_ARCHITECTURE_CURRENT.md](CHOIR_ARCHITECTURE_CURRENT.md).
+>
+
 **Status: experimental Draft #576 only. Not connected to the deployed Relay
 WebSocket/WebTransport handlers or Listen/Take. Do not merge while N=1 is
 unstable; no automatic main-Mic succession.**

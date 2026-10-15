@@ -291,6 +291,7 @@ test('double opt-in A/B room issues real one-use v2 B Media Epoch but no N=1 aud
       expectedRevision: 1, action: 'play' });
     await a.waitFor((m) => m.type === 'room-song-command-apply'
       && m.commandId === 'media-play-1');
+    const playbackBeganAt = Date.now();
     a.send(telemetry(1, 10.1));
     await a.waitFor((m) => m.type === 'room-song-command-complete'
       && m.commandId === 'media-play-1');
@@ -353,7 +354,6 @@ test('double opt-in A/B room issues real one-use v2 B Media Epoch but no N=1 aud
     const { mic, backing } = laggedMultibandMusicPair(
       7.5, 48_000, 120, { singerGain: .18 },
     );
-    const capturedAt = Date.now();
     const frameSamples = 960;
     const frameBytes = frameSamples * 2;
     for (let i = 0; i < mic.byteLength / frameBytes; i++) {
@@ -368,7 +368,7 @@ test('double opt-in A/B room issues real one-use v2 B Media Epoch but no N=1 aud
       }));
       if (i % 25 === 0) {
         // Playback owner authority must remain fresh for both singer jobs.
-        a.send(telemetry(1, 10.1 + (Date.now() - capturedAt) / 1_000));
+        a.send(telemetry(1, 10.1 + (Date.now() - playbackBeganAt) / 1_000));
       }
       await sleep(20);
     }

@@ -18,6 +18,32 @@ function frame(generation: number | null, firstSampleIndex: number | null,
 
 describe('shared canonical PCM ingestion without room or singer coupling', () => {
 
+  test('Robot clock stretch does not reject completely accepted native PCM', () => {
+    const backing = emptyPcmTimeline();
+    const ingestRobot = (first: number, now: number) => ingestPcmTimeline({
+      timeline: backing,
+      frame: frame(9, first, 960, 5_000),
+      sourceRate: RATE, mixRate: RATE,
+      roomSampleNow: () => now,
+      trackSourceClock: true,
+      auditNativeMirroring: true,
+      sourceRateDefinesCapture: true,
+    });
+    assert.equal(ingestRobot(0, 960).nativeFrameMirroringSafe, true);
+    // The real Robot may have one second of output-clock catch-up despite
+    // a perfectly continuous native source. Its SOURCE PCM stays complete.
+    for (let i = 1; i <= 120; i++) {
+      const accepted = ingestRobot(i * 960, (i + 1) * 960 + RATE);
+      assert.equal(accepted.nativeFrameMirroringSafe, true,
+        'output stretch must not erase a full native source interval');
+    }
+    assert.ok(backing.clockCorrectionSamples > 0,
+      'the test must have exercised actual playback correction');
+    const overlap = ingestRobot(120 * 960, 122 * 960 + RATE);
+    assert.equal(overlap.nativeFrameMirroringSafe, undefined,
+      'old source PCM remains rejected despite output correction');
+  });
+
   test('experimental mirror excludes partially clipped and clock-trimmed native PCM', () => {
     const timeline = emptyPcmTimeline();
     const ingest = (packet: PcmFrame) => ingestPcmTimeline({

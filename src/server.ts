@@ -3273,10 +3273,26 @@ function restartManualBootCalibration(nowMs: number) {
   broadcastJson(sourceStatusPayload());
 }
 
+// No public diagnostic API: only the spawned test server writes proof-only
+// authority transitions. Never logs transport identities, PCM or calibration
+// offsets; production mode does not execute this observer.
+let lastChoirProofTestState = '';
 const youtubeTimelineTimer = setInterval(() => {
   const nowMs = performance.now();
   tickChoirShadow(nowMs);
   choirContentPipeline?.tick(nowMs);
+  if (process.env.NODE_ENV === 'test' && choirMediaEnabled && choirRestartCoordinator) {
+    const view = choirRestartCoordinator.preview();
+    const identity = `${view.roomEpoch ?? 0}/${view.state}`;
+    if (view.roomEpoch !== null && identity !== lastChoirProofTestState
+      && (view.state === 'partially-ready' || view.state === 'duet-ready')) {
+      lastChoirProofTestState = identity;
+      console.error('[choir-proof-ci]', JSON.stringify({
+        roomEpoch: view.roomEpoch, state: view.state,
+        primary: view.primary, secondary: view.secondary,
+      }));
+    }
+  }
   if (relayConfig.sampleSongFallback !== 'rtt') refreshLiveMicNetworkCompensation();
 
   if (

@@ -56,6 +56,7 @@ function renderAvailability() {
     return;
   }
   startButton.hidden = userEnabled;
+  startButton.disabled = !currentRoom();
   if (micNode) micNode.textContent = t(micConnected
     ? 'choir.followerMicConnected' : 'choir.followerMicPending');
   if (!userEnabled) setStatus('choir.followerPrompt');
@@ -167,7 +168,11 @@ function tick() {
     setStatus('choir.followerVideoError');
   }
   if (action.type !== 'cue' && action.type !== 'pause') {
-    setStatus(room.playing ? 'choir.followerFollowing' : 'choir.followerPaused');
+    // A successful playVideo() call is NOT evidence that mobile autoplay worked.
+    setStatus(!room.playing ? 'choir.followerPaused'
+      : local.playerState === 1 ? 'choir.followerFollowing'
+      : local.playerState === 3 ? 'choir.followerLoading'
+      : 'choir.followerTapPlay');
   }
   if (positionNode) {
     positionNode.textContent = formatTime(local.positionSeconds)

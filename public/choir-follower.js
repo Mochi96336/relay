@@ -234,8 +234,10 @@ function tick() {
     setStatus('choir.followerLoading');
   }
   if (positionNode) {
+    // Main Song UI shows current / duration, exactly like the N=1 player.
+    // Room-versus-local drift belongs in diagnostics, not the singer's Song row.
     positionNode.textContent = formatTime(local.positionSeconds)
-      + ' / ' + formatTime(room.positionSeconds);
+      + ' / ' + formatTime(room.durationSeconds);
   }
 }
 

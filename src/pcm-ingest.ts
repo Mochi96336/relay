@@ -181,7 +181,12 @@ export function ingestPcmTimeline(input: PcmIngestInput): PcmIngestResult {
           stretched.set(prefix, 0);
           stretched.set(stretchedCurrentFrame, sourceAlignedSampleOffset);
           samples = stretched;
-          nativeFrameMirroringSafe = false;
+          // The room OUTPUT clock adds one synthesized presentation sample,
+          // but ALL original Robot source samples were still admitted.
+          // Choir's Content history consumes native-source PCM, not the
+          // stretched playback representation. Only source overlap/clipping
+          // or an actual packet trim invalidates native mirroring.
+          // Do not confuse this output correction with rejected source PCM.
 
           timeline.originOffset += 1;
           timeline.clockErrorSamples -= 1;

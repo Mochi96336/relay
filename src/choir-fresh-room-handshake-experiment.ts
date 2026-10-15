@@ -275,6 +275,20 @@ export class ChoirFreshRoomHandshakeExperiment {
     return true;
   }
 
+  /** In-process numeric Content history diagnostics; no PCM or public API. */
+  diagnosticContentSampleCounts() {
+    const c = this.current;
+    if (!c) return null;
+    const sizes = c.room.contentBufferSampleCounts;
+    const primary = sizes[c.spec.primaryId];
+    const secondary = sizes[c.spec.secondaryId];
+    return {
+      primaryMic: primary?.mic ?? 0,
+      secondaryMic: secondary?.mic ?? 0,
+      backing: primary?.backing ?? secondary?.backing ?? 0,
+    };
+  }
+
   snapshot(): ChoirFreshRoomSnapshot {
     const c = this.current;
     const admittedIds = c ? [...c.tickets.keys()] : [];

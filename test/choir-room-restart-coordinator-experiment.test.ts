@@ -562,6 +562,70 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
   });
 
 
+  test('failed Content worker is serialized, backs off, and never promotes silence', {
+    timeout: 12_000,
+  }, async () => {
+    let at = 7_000;
+    let snapshotRequests = 0;
+    let commitCalls = 0;
+    const pipeline = new ChoirLiveContentPipelineExperiment({
+      prepareFreshWorkerContent: (nowMs) => {
+        snapshotRequests++;
+        const ticket = {
+          roomEpoch: 1, songEpoch: 7, participantId: 'A',
+          transportId: 'verified-A', seat: 'primary' as const, mediaEpoch: 11,
+        };
+        return {
+          ticket,
+          proof: {
+            participantId: 'A', transportId: 'verified-A',
+            mediaEpoch: 11, songEpoch: 7, backingGeneration: 9,
+            videoId: VIDEO, mappingEpoch: 2, captureGeneration: 4,
+            sourceRate: RATE, startSample: 0, endSample: 6 * RATE,
+            attempt: snapshotRequests, preparedAtMs: nowMs,
+            // Silence must fail the *real* analyzer, not be promoted by a
+            // fake success callback or a zero-filled "Content" window.
+            mic: new Int16Array(6 * RATE),
+            backing: new Int16Array(6 * RATE),
+          },
+        };
+      },
+      acceptFreshWorkerContent: () => {
+        commitCalls++;
+        return false;
+      },
+    }, {
+      now: () => at, workTimeoutMs: 2_400, retryDelayMs: 2_500,
+    });
+    try {
+      assert.equal(pipeline.tick(at), true);
+      assert.equal(pipeline.isBusy, true);
+      assert.equal(pipeline.tick(at), false, 'one Worker, never a queue');
+      assert.equal(pipeline.tick(at + 10_000), false, 'even future tick cannot enqueue while busy');
+      assert.equal(snapshotRequests, 1);
+      const deadline = Date.now() + 8_000;
+      while (pipeline.isBusy && Date.now() < deadline)
+        await new Promise(resolve => setTimeout(resolve, 20));
+      assert.equal(pipeline.isBusy, false, 'bounded Worker must settle');
+      assert.match(pipeline.lastFailureReason ?? '', /^analyzer:/,
+        'a silent backing is rejected by the real off-thread analyzer');
+      assert.equal(pipeline.stats.submitted, 1);
+      assert.equal(pipeline.stats.applied, 0);
+      assert.equal(commitCalls, 0, 'invalid analysis must never reach authoritative commit');
+      // Retry deadline is based on the monotonic host clock at settlement,
+      // not on incoming client sample timestamps.
+      at = 9_499;
+      assert.equal(pipeline.tick(at), false, 'failure cannot immediately hot-loop');
+      at = 9_600;
+      assert.equal(pipeline.tick(at), true, 'bounded retry eventually resumes');
+      assert.equal(snapshotRequests, 2);
+    } finally {
+      pipeline.close();
+    }
+    assert.equal(pipeline.isBusy, false);
+    assert.equal(pipeline.stats.applied, 0);
+  });
+
   test('Seek cancels a running Content Worker and fences late Room Epoch proof', () => {
     const f = fixture();
     const rev = f.startSong(0);

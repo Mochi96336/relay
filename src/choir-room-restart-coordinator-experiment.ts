@@ -360,11 +360,6 @@ export class ChoirRoomRestartCoordinatorExperiment {
     return this.handshake.disconnectVerifiedSinger(ticket, nowMs);
   }
 
-  /** In-process numeric-only Content history inspection for CI. */
-  diagnosticContentSampleCounts() {
-    return this.handshake.diagnosticContentSampleCounts();
-  }
-
   /** Offline scheduler discards PCM; no monitor output is emitted. */
   advanceDue(roomEpoch: number, nowMs: number): boolean {
     this.observe(nowMs);

@@ -36,6 +36,17 @@ test('B follows by cue/play/pause/seek, never by Mic read-head changes', () => {
   assert.equal(decideFollowerAction({ ...room, playing: false }, local, 1000, -Infinity).type, 'pause');
   assert.equal(decideFollowerAction(room, { ...local, positionSeconds: 79.1 }, 5000, -Infinity).type, 'seek');
   assert.equal(decideFollowerAction(room, { ...local, positionSeconds: 79.1 }, 6000, 5000).type, 'none');
+  // A newly cued B player is half a second behind while waiting to start.
+  // Seek cooldown must never prevent it from actually playing.
+  assert.equal(decideFollowerAction(room, {
+    ...local, positionSeconds: 79.5, playerState: 5,
+  }, 6000, 5000).type, 'play');
+  assert.equal(decideFollowerAction(room, {
+    ...local, positionSeconds: 70, playerState: 2,
+  }, 6000, 5000).type, 'play');
+  assert.equal(decideFollowerAction({ ...room, playing: false }, {
+    ...local, positionSeconds: 79.5, playerState: 5,
+  }, 6000, 5000).type, 'none');
   assert.equal(decideFollowerAction(room, { ...local, positionSeconds: 80.1 }, 6000, 5000).type, 'none');
   assert.equal(decideFollowerAction(room, { ...local, playerState: 3 }, 6000, -Infinity).type, 'none');
   assert.equal(decideFollowerAction(room, { ...local, playbackRate: 1.5 }, 6000, -Infinity).type, 'rate');

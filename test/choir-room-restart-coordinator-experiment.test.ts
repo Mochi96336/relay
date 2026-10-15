@@ -541,7 +541,8 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
       assert.equal(pipeline.tick(6_001), true,
         'A is eligible from real source-mirrored PCM, without direct analyzer invocation');
       await until(() => !pipeline.isBusy, 'A worker must settle');
-      assert.equal(pipeline.stats.applied, 1, 'A result commits only through coordinator');
+      assert.equal(pipeline.stats.applied, 1,
+        `A commit failed (${pipeline.lastFailureReason ?? 'none'}; ${JSON.stringify(pipeline.stats)})`);
       assert.equal(f.coordinator.preview().state, 'partially-ready');
       // The real server drains the room every 5ms. Do not fake a 340ms
       // scheduler stall between A and B's worker jobs: that must fail closed.
@@ -550,7 +551,8 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
       approvedClock = 6_350;
       assert.equal(pipeline.tick(6_340), true, 'B uses its own independent ticket and capture');
       await until(() => !pipeline.isBusy, 'B worker must settle');
-      assert.equal(pipeline.stats.applied, 2);
+      assert.equal(pipeline.stats.applied, 2,
+        `B commit failed (${pipeline.lastFailureReason ?? 'none'}; ${JSON.stringify(pipeline.stats)})`);
       assert.equal(f.coordinator.preview().state, 'duet-ready');
       assert.equal(f.coordinator.preview().monitoring, 'two-voices',
         'proof-only readiness is not a deployed duet monitor');

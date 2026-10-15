@@ -3296,6 +3296,7 @@ const youtubeTimelineTimer = setInterval(() => {
         applied: choirContentPipeline?.stats.applied ?? 0,
         rejected: choirContentPipeline?.stats.rejected ?? 0,
         workerFailure: choirContentPipeline?.lastFailureReason ?? null,
+        history: choirRestartCoordinator.diagnosticContentSampleCounts(),
       }));
     }
     const identity = `${view.roomEpoch ?? 0}/${view.state}`;

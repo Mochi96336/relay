@@ -105,7 +105,7 @@ export class ChoirSecondaryMediaTicketExperiment {
       || !this.socketOpen(mediaSocket) || mediaSocket.role !== 'unknown'
       || !mediaSocket.participantId
       || !Number.isInteger(sourceRate) || sourceRate < 8_000 || sourceRate > 192_000
-      || (packetVersion !== 1 && packetVersion !== 2)) return null;
+      || packetVersion !== 2) return null;
     this.sweep(nowMs);
     const claim = this.pending.get(claimToken);
     if (!claim) return null;
@@ -135,7 +135,7 @@ export class ChoirSecondaryMediaTicketExperiment {
     });
     if (!ticket) return null;
     if (!this.ingress.bindVerifiedSecondary(
-      mediaSocket, ticket, sourceRate, nowMs, packetVersion,
+      mediaSocket, ticket, sourceRate, nowMs,
     )) {
       // The canonical N=2 seat is first-version non-rebindable. Removing
       // the ticket does NOT make that seat safely re-admittable; retire the

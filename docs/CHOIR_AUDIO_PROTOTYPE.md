@@ -1,5 +1,12 @@
 # Choir PCM prototype — playable two-singer timeline (stacked Draft)
 
+> **Archived first-generation design (not current executable code).** The
+> synthetic `ChoirAudioPrototype`, `choir-read-plan.ts` and
+> `choir-alignment-bridge.ts` were retired during #576 cleanup. For the
+> current implementation and release gates, see
+> [CHOIR_ARCHITECTURE_CURRENT.md](CHOIR_ARCHITECTURE_CURRENT.md).
+>
+
 **Depends on Draft PR #573, which depends on Draft PR #571. Not on main.**
 The user's single-Mic Relay remains the stable interface; DO NOT merge the
 experimental stack before the single-Mic runtime is trustworthy.

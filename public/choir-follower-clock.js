@@ -23,6 +23,7 @@ export function projectFollowerRoom(room, receivedAtMs, nowMs) {
     positionSeconds: Math.max(0, Number.isFinite(duration) && duration > 0
       ? Math.min(duration, projected) : projected),
     playbackRate: room.playbackRate,
+    durationSeconds: Number.isFinite(duration) && duration > 0 ? duration : null,
     playing: room.state === 1,
     ageMs,
   };

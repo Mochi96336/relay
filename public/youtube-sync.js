@@ -15,6 +15,7 @@ let roomCommandServerIncarnation = null;
 let roomCommandRevisionReady = false;
 let latestRoomCommandId = null;
 let latestRoomSongStatus = null;
+let latestRoomReceivedAtMs = null;
 let latestTimelineStatus = null;
 let latestMicOwnerId = null;
 let latestMicOwnerKnown = false;
@@ -244,6 +245,8 @@ function dispatchPlaybackView() {
     detail: {
       role,
       room: latestRoomSongStatus,
+      // A re-render is not a fresh room packet. Keep original receipt time.
+      roomReceivedAtMs: latestRoomReceivedAtMs,
       timeline: latestTimelineStatus,
       transportId,
       playbackGeneration,
@@ -306,6 +309,7 @@ function handleServerMessage(message) {
 
   if (message.type === 'room-song-status') {
     latestRoomSongStatus = message;
+    latestRoomReceivedAtMs = performance.now();
     dispatchPlaybackView();
     return;
   }

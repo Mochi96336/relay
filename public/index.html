@@ -9,7 +9,6 @@
     <link rel="stylesheet" href="/live-state.css" />
     <link rel="stylesheet" href="/adjust.css" />
     <link rel="stylesheet" href="/song-surface.css" />
-    <link rel="stylesheet" href="/choir-follower.css" />
     <link rel="stylesheet" href="/system-details.css" />
     <link rel="stylesheet" href="/live-ia.css" />
   </head>
@@ -82,19 +81,6 @@
           </div>
         </div>
 
-        <section id="choir-follower-panel" class="choir-follower-panel" hidden aria-label="Secondary singer local playback">
-          <strong data-i18n="choir.followerTitle">副 Mic · 本地伴奏</strong>
-          <p class="microcopy" data-i18n="choir.followerExplanation">你在這台裝置聽房間歌曲，不能控制全房播放。</p>
-          <button id="choir-follower-start" type="button" data-i18n="choir.followerEnable">在這台裝置啟用伴奏</button>
-          <div id="choir-follower-player" class="choir-follower-player"></div>
-          <div class="choir-follower-readout">
-            <span data-i18n="choir.followerTimeline">B 本地進度 / 房間進度</span>
-            <output id="choir-follower-position">--:-- / --:--</output>
-          </div>
-          <p id="choir-follower-status" role="status" aria-live="polite"></p>
-          <p id="choir-follower-mic" class="microcopy"></p>
-          <p class="microcopy" data-i18n="choir.followerCalibration">YouTube 跟隨不等於 Mic 校準。尚未獨立驗證前，副 Mic 不進入雙人監聽。</p>
-        </section>
         <div class="youtube-form">
           <input id="youtube-url" type="text" inputmode="url" autocomplete="off" placeholder="Paste a YouTube link" data-i18n-placeholder="song.pastePlaceholder" aria-label="YouTube URL or video ID" data-i18n-aria-label="song.inputLabel" />
           <button id="load-youtube" type="button" data-i18n="song.load">Load</button>
@@ -102,6 +88,7 @@
 
         <div class="youtube-player-shell">
           <div id="youtube-player"></div>
+          <div id="choir-follower-player" hidden></div>
         </div>
 
         <div class="youtube-readout" aria-live="polite">
@@ -109,6 +96,7 @@
           <span id="youtube-timeline">--:-- / --:--</span>
         </div>
         <p id="youtube-note" class="microcopy" data-i18n="song.noteInitial">Paste a song, then use the YouTube player normally.</p>
+        <p id="choir-follower-status" class="microcopy" role="status" aria-live="polite" hidden></p>
       </section>
 
       <section class="performance-stage">

@@ -80,6 +80,8 @@ if (
   // The Robot said it cannot play this video. Only product status carries it.
   let robotCannotPlay = false;
   let canEditCurrentSong = false;
+  let choirGuestEnabled = false;
+  let lastPlaybackView = null;
 
   function roomSnapshot(detail) {
     const timeline = detail?.timeline && typeof detail.timeline === 'object' ? detail.timeline : {};
@@ -150,6 +152,7 @@ if (
 
   function render(event) {
     const detail = event?.detail ?? {};
+    lastPlaybackView = detail;
     const nextRole = ROLES.has(detail.role) ? detail.role : 'empty';
     const room = roomSnapshot(detail);
     const videoId = typeof room.videoId === 'string' ? room.videoId : null;
@@ -186,7 +189,9 @@ if (
     renderDeviceNote(recoverable);
 
     const holderWithSong = role === 'holder' && Boolean(videoId);
-    headingTitle.hidden = !holderWithSong;
+    const choirLocalFollower = choirGuestEnabled && role === 'observer' && Boolean(videoId);
+    stage.dataset.choirFollower = choirLocalFollower ? 'active' : 'off';
+    headingTitle.hidden = !(holderWithSong || choirLocalFollower);
     form.hidden = role === 'preparing' || !canChange || (Boolean(videoId) && !editing);
     changeButton.hidden = !canChange || !videoId;
     setText(changeButton, editing ? t('song.done') : t('song.change'));
@@ -198,8 +203,8 @@ if (
     // with an empty iframe/form. Mic state decides who receives the edit action.
     const observerMode = role === 'observer' || (role === 'empty' && Boolean(videoId));
     const metadataMode = observerMode || holderWithSong;
-    observer.hidden = !observerMode;
-    playerShell.hidden = observerMode;
+    observer.hidden = !observerMode || choirLocalFollower;
+    playerShell.hidden = observerMode && !choirLocalFollower;
     localReadout.hidden = observerMode;
     localNote.hidden = observerMode;
 
@@ -219,6 +224,12 @@ if (
     if (editing) input.focus();
   });
 
+  window.addEventListener('relay-choir-guest-state', (event) => {
+    const next = event.detail?.enabled === true;
+    if (next === choirGuestEnabled) return;
+    choirGuestEnabled = next;
+    if (lastPlaybackView) render({ detail: lastPlaybackView });
+  });
   window.addEventListener('relay:playback-view', render);
   window.addEventListener('relay-product-status', (event) => {
     const issues = Array.isArray(event?.detail?.issues) ? event.detail.issues : [];

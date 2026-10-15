@@ -3,6 +3,7 @@ export type ProjectedFollowerRoom = {
   revision: number;
   positionSeconds: number;
   playbackRate: number;
+  durationSeconds: number | null;
   playing: boolean;
   ageMs: number;
 };

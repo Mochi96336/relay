@@ -17,6 +17,7 @@ const local = {
 
 test('room song projects only from an actually fresh server room packet', () => {
   assert.equal(projectFollowerRoom(base, 1000, 1500)?.positionSeconds, 80.5);
+  assert.equal(projectFollowerRoom(base, 1000, 1500)?.durationSeconds, 220);
   assert.equal(projectFollowerRoom({ ...base, state: 2 }, 1000, 1500)?.positionSeconds, 80);
   assert.equal(projectFollowerRoom(base, 1000, 1000 + FOLLOWER_ROOM_MAX_AGE_MS + 1), null);
   assert.equal(projectFollowerRoom(base, null, 1000), null);

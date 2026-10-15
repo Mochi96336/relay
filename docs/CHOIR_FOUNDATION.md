@@ -1,5 +1,11 @@
 # Choir / secondary Mic — experimental foundation (Draft only)
 
+> **Historical foundation; not an accurate current integration status.**
+> This branch now has gated A/B/Robot WebSocket Content calibration, but
+> still has **no** N=2 Monitor/Take output. See
+> [CHOIR_ARCHITECTURE_CURRENT.md](CHOIR_ARCHITECTURE_CURRENT.md).
+>
+
 This is **not** a production-ready feature. All new code is deliberately
 unreferenced by `src/server.ts` and the browser. The normal single-Mic path
 must keep working and need not merge this branch while it remains unstable.

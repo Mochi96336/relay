@@ -147,7 +147,7 @@ export class ChoirLiveContentPipelineExperiment {
       });
       worker.on('error', (error) => {
         if (this.worker !== worker) return;
-        this.lastFailureReason = `worker-error: ${error.message}`;
+        this.lastFailureReason = `worker-error: ${error instanceof Error ? error.message : String(error)}`;
         this.rejectActive(true);
       });
       worker.on('exit', (code) => {

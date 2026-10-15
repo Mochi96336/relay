@@ -90,6 +90,9 @@ function render() {
     invitationCopy.textContent = '';
   }
   statusCopy.textContent = statusKey ? t(statusKey, statusVars ?? {}) : '';
+  window.dispatchEvent(new CustomEvent('relay-choir-guest-state', {
+    detail: { enabled: available && authorityFresh && acceptedAsGuest && mediaEnabled },
+  }));
 }
 function resetConnection() {
   available = false;
@@ -183,6 +186,7 @@ window.addEventListener('relay-choir-media-connection', (event) => {
   render();
 });
 window.addEventListener('relay-locale-changed', render);
+window.addEventListener('relay-request-choir-guest-state', render);
 
 trigger?.addEventListener('click', () => {
   if (!isHost()) return;

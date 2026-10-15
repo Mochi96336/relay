@@ -46,6 +46,10 @@ export function decideFollowerAction(room, local, nowMs, lastSeekAtMs) {
     if (sinceSeekMs >= FOLLOWER_SEEK_COOLDOWN_MS) {
       return { type: 'seek', positionSeconds: room.positionSeconds, driftMs };
     }
+    // Seeking is rate-limited, but starting playback must NOT be rate-limited
+    // by that same seek: a freshly cued B player would otherwise remain
+    // paused for the entire cooldown and never catch the live room song.
+    if (room.playing && local.playerState !== 1) return { type: 'play', driftMs };
     return { type: 'none', driftMs };
   }
   if (room.playing && local.playerState !== 1) return { type: 'play', driftMs };

@@ -867,6 +867,46 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
       'a capture generation change invalidates all old calibration PCM');
   });
 
+  test('three minutes of irregular ingress preserves bounded source-only Content evidence', () => {
+    const cache = new ChoirContentPcmBuffer(RATE, 7_000);
+    const source = emptyPcmTimeline();
+    source.generation = 9;
+    source.sourceRate = RATE;
+    // 180 simulated seconds at 20ms. The source playback ring keeps only
+    // ~3 seconds; its independent Content proof retains up to 7 seconds.
+    // Gaps represent packet loss under jitter; advancing the source cursor
+    // never authorizes fabricated silence as genuine acoustic evidence.
+    const missing = new Set([1_500, 1_501, 3_000, 4_500, 4_501, 4_502]);
+    for (let i = 0; i < 9_000; i++) {
+      const prior = source.chunks.length;
+      if (!missing.has(i)) {
+        source.chunks.push({
+          start: i * FRAME,
+          samples: new Int16Array(FRAME).fill((i % 41) + 1),
+          positioned: true,
+        });
+        source.totalSamples = (i + 1) * FRAME;
+        cache.captureAccepted(source, prior);
+      } else {
+        source.totalSamples = (i + 1) * FRAME;
+      }
+      while (source.chunks.length > 150) source.chunks.shift();
+      assert.ok(cache.sampleCount <= 7 * RATE,
+        'history cannot grow with stream lifetime');
+      if (i % 50 !== 49 || i < 299) continue;
+      const firstFrame = i - 299;
+      const hasGap = [...missing].some(index => index >= firstFrame && index <= i);
+      assert.equal(
+        cache.hasFullPositionedWindow(9, RATE, firstFrame * FRAME, 300 * FRAME),
+        !hasGap,
+        `six-second Content proof at stream second ${(i + 1) / 50}`,
+      );
+    }
+    assert.equal(cache.hasFullPositionedWindow(9, RATE, 0, 6 * RATE), false,
+      'evicted old audio can never be relabelled as fresh song Content');
+    assert.equal(cache.sampleCount, 7 * RATE);
+  });
+
   test('independent Content buffer rejects captured gaps, concealment and unheadered PCM', () => {
     for (const second of [
       { start: 2 * RATE, positioned: true, concealed: false },

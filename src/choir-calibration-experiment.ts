@@ -1,6 +1,8 @@
 import { combineBootCalibration, mediaToWallMs, type BootCalibrationInput } from './boot-calibration.js';
 import { SampleSongFallback, type SongSampleAnchor } from './sample-song-fallback.js';
 import { analyzeTimingCalibration, type TimingCalibrationResult } from './timing-calibration.js';
+import type { ChoirAlignmentDecision } from './choir-alignment-decision.js';
+export type { ChoirCalibrationSource, ChoirAlignmentDecision } from './choir-alignment-decision.js';
 
 /**
  * Isolated Choir calibration experiment. NOT used by server.ts or AudioSession.
@@ -29,17 +31,6 @@ export type ChoirContentCandidate = {
 
 export type ChoirFallbackPreference = 'sample-song' | 'boot-probe';
 export type ChoirContentApplicability = 'apply' | 'hold' | 'revoke';
-export type ChoirCalibrationSource = 'content' | 'content-held' | 'sample-song-estimate' | 'boot-probe-estimate' | 'unavailable';
-
-export type ChoirAlignmentDecision = {
-  source: ChoirCalibrationSource;
-  advanceMs: number | null;
-  /** Relative to the confirmed Content value, only when Content is applicable. */
-  sampleResidualMs: number | null;
-  bootResidualMs: number | null;
-  sampleCandidateMs: number | null;
-  bootCandidateMs: number | null;
-};
 
 type BootPath = {
   pathDifferenceMs: number;

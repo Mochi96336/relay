@@ -1,64 +1,47 @@
-# B local YouTube follower — experimental contract
+# B local YouTube follower — one Song surface (Draft #588)
 
-This is a stacked Draft based on #576, not a production rollout. It adds a
-**separate, opt-in B local YouTube iframe**, controlled by the existing
-authoritative room-song snapshot. It does NOT enable N=2 Monitor, Take, or
-Mic sample alignment, and never promotes B to room song controller.
+Scope: stacked on #576, **default-off**, no N=2 Monitor/Take, no auto primary
+succession and no claim of physical A/B song alignment.
 
-## B screen
+## B interaction
 
-After B accepts the authenticated second-Mic invitation and both experimental
-flags are enabled, B sees a **local backing** card beneath the normal room-song
-observer. Only B has the Enable local backing button. Neither consent nor
-microphone registration autoplays YouTube. A phone may still require a direct
-Play tap inside its visible YouTube iframe.
+Keep exactly Relay's existing **Song** area. A sees and controls the normal
+YouTube player. After authenticated B consent in the double-gated Choir
+experiment, B's observer Song switches from the artwork to a separate local
+YouTube iframe **in that same player shell**, with the same song title and
+time row. B never gets an extra card or mandatory "enable backing" button.
 
-The card shows B local player time / reported room song time. This is an
-**approximate playback difference**, not a Content/Sample/Boot Mic calibration
-or a physical ear-to-Mic latency measurement. The card separately says whether
-the experimental B PCM socket is linked. Its audio is not a live duet Monitor.
+The B iframe prepares/loads automatically and attempts to follow the room.
+On mobile Safari/Chrome the browser may refuse scripted audible playback;
+only when the YouTube API reports autoplay blocked, or the local player stays
+paused after an actual attempt, a minimal note says to tap Play **on the same
+existing player**. Such a tap is a fallback, not an additional Relay join step.
 
-## Four distinct time axes
+The primary room player's iframe stays separate and hidden in B's observer
+role; its production ownership and telemetry code remain untouched.
+The B iframe never dispatches room commands or authoritative telemetry.
+Withdrawal/role change retires it; stale room clock pauses local B playback.
 
-1. Room song media position: video ID, playback rate, play/pause/Seek, as held by
-   the single authorized controller and exposed by `room-song-status`.
-2. B local iframe media position: own `getCurrentTime()`, possibly buffering,
-   device-specific speaker delay and blocked mobile autoplay. B cannot publish
-   this as an authoritative room timeline.
-3. B native PCM capture time: independent generation/sample cursor/AudioContext.
-   Its packet arrival and native sample index are NOT the local YouTube timestamp.
-4. Server room output sample clock: the only place MicTrack A/B and Robot Backing
-   are eventually combined. Content aligns *each native Mic* against the same
-   Robot reference; fallback methods are not yet wired to live N=2.
+## Time coordinates, kept separate
 
-The follower projects `room-song-status.serverTime` at reception time using the
-browser monotonic clock. This projection **does not include a calibrated
-server-browser clock offset or measured one-way transmission delay**. It is a
-coarse follower, not a timing proof. Never use it to set B's Mic read-head offset.
+1. The single room SongSession media position is controlled by A and comes
+   from `room-song-status`.
+2. B's own YouTube `getCurrentTime()` and local buffering are displayed in the
+   same Song time readout. The estimated room position is **not** calibrated
+   against device speaker latency or measured one-way network delay.
+3. B's independent PCM native capture generation and sample cursor are
+   separate from the iframe clock.
+4. The Server output clock is shared by A, B and Robot; each singer requires
+   independently accepted Content or an explicitly safe backup calibration.
 
-## Local follower decisions
+Follower policy currently tolerates <450ms local media drift, avoids
+repeated Seek for 3s, and rejects stale/invalid room snapshots. **Do not**
+treat this as sub-50ms singing accuracy or use the displayed difference as
+`MicTrack.advanceMs`.
 
-- Separate B click instantiates its local YouTube iframe, showing real controls.
-- Only a valid live room status, with an idle handoff, may drive the follower.
-- A paused room pauses B. A song change cues the new video in B.
-- Local drift below 450ms is tolerated. Larger differences may Seek, no more
-  than once in 3 seconds; do not continuously change playback rate to chase
-  drift. Follow the room's actual playback rate when changed.
-- A stale room (>1500ms without a fresh room-status packet), missing room
-  authority or handoff pauses B, not A. Authorization revocation or B becoming
-  the room holder destroys the separate iframe.
-- No forwarding B `relay:youtube-telemetry`, song commands, session mutations,
-  player controls or user credentials to the server.
-- Double flags default off; production N=1 unchanged.
+## Before physical duet testing
 
-## Release gates, not completed here
-
-- Actual iOS Safari/Android autoplay and headphone behavior.
-- Repeated SongSession Seek, pause/resume and room-controller transition tests
-  with source-authentic song reference.
-- B Sample and Boot fallback adapter, independently bounded and verified.
-- Real dual phone A/B Content correlation and clock drift measurements.
-- A separate authorized N=2 Monitor and a byte-exact default-off N=1 check.
-
-Do not merge to main or claim full live choir compatibility based on these UI
-contracts alone.
+Real Android/iOS YouTube playback and autoplay, headphone/route-change
+measurements, real B Content evidence, verified Sample/Boot transitions and
+explicit N=2 Monitor remain outstanding. Existing N=1 behavior stays behind
+both flags being off. Do not merge this stacked PR to main.

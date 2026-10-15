@@ -2,23 +2,21 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { AudioSession } from '../src/audio-session.js';
-import { ChoirAudioPrototype } from '../src/choir-audio-prototype.js';
+import { CanonicalChoirMixExperiment } from '../src/choir-canonical-mix-experiment.js';
 
 /**
- * This is a limited single-source REFERENCE comparison, not N=1 bit-exact
- * parity. AudioSession has capture concealment, limiter, trim, frontier
- * correction, gain, and source-edge behavior that the Choir prototype
- * deliberately does not yet implement. Only source event positioning is
- * compared here. Golden PCM parity is still a release blocker.
+ * Coordinate comparison using the CURRENT canonical MicTrack-derived Choir
+ * mix. This is not a byte-exact N=1 check; the separate Golden PCM CI owns
+ * that invariant. It verifies the real one-singer event is at the same
+ * room sample as the AudioSession reference.
  */
 const RATE = 48_000;
 const FRAME = 960;
 const SINGER = {
   participantId: 'single-singer',
   songEpoch: 1,
-  captureGeneration: 1,
   backingGeneration: 1,
-  micSampleRate: RATE,
+  mediaEpoch: 1,
 };
 
 function peakIndex(samples: Int16Array): number {
@@ -56,36 +54,20 @@ test('N=1 room event coordinate matches the existing AudioSession reference', ()
   assert.ok(Math.abs(oldSamples[trueEvent]) > 200);
   const oldPeak = peakIndex(oldSamples);
 
-  const choir = new ChoirAudioPrototype({
-    sampleRate: RATE, frameSamples: FRAME,
-    outputHoldbackMs: 100, retentionMs: 4_000, maxSingers: 2,
+  const choir = new CanonicalChoirMixExperiment({
+    sampleRate: RATE, frameMs: 20, prebufferMs: 0,
+    retentionMs: 4_000, songEpoch: SINGER.songEpoch,
+    backingGeneration: SINGER.backingGeneration,
   });
   assert.equal(choir.addSinger(SINGER), true);
-  assert.equal(choir.installAnchor({
-    participantId: SINGER.participantId,
-    songEpoch: SINGER.songEpoch,
-    captureGeneration: SINGER.captureGeneration,
-    backingGeneration: SINGER.backingGeneration,
-    roomSampleAtAnchor: 0, micSampleAtAnchor: 0,
-    micSampleRate: RATE, roomSampleRate: RATE,
-  }, 'content'), true);
-  assert.equal(choir.receiveMic({
-    participantId: SINGER.participantId,
-    songEpoch: SINGER.songEpoch,
-    captureGeneration: SINGER.captureGeneration,
-    backingGeneration: SINGER.backingGeneration,
-    firstSampleIndex: 0, pcm: signal,
-  }), 'accepted');
+  assert.equal(choir.setConfirmedLag(SINGER, 0), true);
+  assert.equal(choir.ingestMic(SINGER, {
+    generation: 1, firstSampleIndex: 0,
+    pcm: Buffer.from(signal.buffer, signal.byteOffset, signal.byteLength),
+  }, RATE, 0), true);
   const emitted = new Int16Array(FRAME * 12);
   for (let i = 0; i < 12; i++) {
-    const frame = choir.render({
-      roomStartSample: i * FRAME,
-      nowRoomSample: (i + 1) * FRAME + 4800,
-      songEpoch: SINGER.songEpoch, backingGeneration: SINGER.backingGeneration,
-      backing: new Int16Array(FRAME),
-    });
-    assert.equal(frame.state, 'ready');
-    if (frame.state !== 'ready') return;
+    const frame = choir.render(i * FRAME);
     emitted.set(frame.pcm, i * FRAME);
   }
   const choirPeak = peakIndex(emitted);

@@ -123,6 +123,11 @@ export function loadRelayConfig(env: Env = process.env) {
     // SECOND explicit opt-in. Enables experimental A/B media admission
     // ONLY together with RELAY_CHOIR_SHADOW; no N=2 monitor/record output.
     choirMediaExperiment: envBoolean(env, 'RELAY_CHOIR_MEDIA_EXPERIMENT', false),
+    // Only the spawned CI server emits a proof-only private readiness line.
+    // Never expose this diagnostic for a deployment or a normal browser.
+    choirProofCiDiagnostics: env.NODE_ENV === 'test'
+      && envBoolean(env, 'RELAY_CHOIR_SHADOW', false)
+      && envBoolean(env, 'RELAY_CHOIR_MEDIA_EXPERIMENT', false),
     micRetentionMs: envNumber(env, 'RELAY_MIC_RETENTION_MS', 3_000, { min: 1 }),
     calibrationTimeoutMs: envNumber(env, 'RELAY_CALIBRATION_TIMEOUT_MS', 20_000, { min: 1 }),
     heartbeatMs: envNumber(env, 'RELAY_HEARTBEAT_MS', 8_000, { min: 100 }),

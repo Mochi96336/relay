@@ -1,5 +1,12 @@
 # Choir Content + fallback calibration experiment (stacked Draft)
 
+> **Offline calibration research, not current live fallback behavior.**
+> The live duet path uses independent Worker-based Content analysis.
+> Sample/YouTube and Boot fallback are preserved here for migration but
+> are not activated for the duet. See
+> [CHOIR_ARCHITECTURE_CURRENT.md](CHOIR_ARCHITECTURE_CURRENT.md).
+>
+
 This experiment is isolated from `server.ts` / production mix / UI.
 Depends on the seating and timeline foundation in Draft PR #571.
 **No primary-Mic automatic succession**, and no second production publisher.

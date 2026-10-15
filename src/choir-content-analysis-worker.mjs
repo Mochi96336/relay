@@ -1,5 +1,13 @@
 import { parentPort } from 'node:worker_threads';
-import { analyzeTimingCalibration } from './timing-calibration.ts';
+import { register } from 'node:module';
+
+// The full node --test suite and the focused Choir runner do not always
+// propagate the parent's tsx loader to a new Worker in the same way.
+// Register explicitly in THIS thread before dynamically importing .ts.
+// Static imports are resolved before module body execution, so they cannot
+// safely be used for the analyzer here.
+register('tsx/esm', import.meta.url);
+const { analyzeTimingCalibration } = await import('./timing-calibration.ts');
 
 // Runs outside the Relay event loop. No sockets, participants, epochs or
 // authorization exist in this worker: it only calculates from trusted copies.

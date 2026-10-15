@@ -44,7 +44,7 @@ async function openFollowerFixture(page, { blocked = false } = {}) {
           roomReceivedAtMs: performance.now() - (options.ageMs ?? 0),
           room: options.role === 'holder' ? null : {
             connected: true, videoId: 'abcdefghijk', revision: 5,
-            state: 1, serverTime: 80, playbackRate: 1, handoffState: 'idle',
+            state: 1, serverTime: 80, duration: 220, playbackRate: 1, handoffState: 'idle',
             ...options.room,
           },
         },
@@ -66,6 +66,7 @@ test('B keeps ordinary Song layout and follows automatically after consent', asy
   await expect(page.locator('.youtube-player-shell')).toBeVisible();
   await expect(page.locator('#youtube-player')).toBeHidden();
   await expect(page.locator('#choir-follower-position')).toBeVisible();
+  await expect(page.locator('#choir-follower-position')).toContainText(' / 3:40');
   await expect(page.locator('#choir-follower-start')).toHaveCount(0);
   await expect(page.locator('#choir-follower-panel')).toHaveCount(0);
   await expect.poll(async () => (await page.evaluate(() => window.__followerCalls))

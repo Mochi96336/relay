@@ -1,5 +1,5 @@
 import { parentPort } from 'node:worker_threads';
-import { analyzeTimingCalibration } from './timing-calibration.js';
+import { analyzeTimingCalibration } from './timing-calibration.ts';
 
 // Runs outside the Relay event loop. No sockets, participants, epochs or
 // authorization exist in this worker: it only calculates from trusted copies.

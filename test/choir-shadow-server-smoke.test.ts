@@ -4,6 +4,7 @@ import { startRelay, RelayClient, sleep } from './helpers/harness.js';
 import { encodePcmFrame } from '../src/pcm-frame.js';
 import { encodeAudioPacket } from '../src/audio-packet.js';
 import { participantIdForCapability } from '../src/participant-capability.js';
+import { laggedMultibandMusicPair } from './helpers/music-calibration.js';
 
 /**
  * Real production entrypoint smoke: opt-in Choir observes only.
@@ -343,6 +344,43 @@ test('double opt-in A/B room issues real one-use v2 B Media Epoch but no N=1 aud
     await sleep(75);
     assert.equal(bMedia.messages.some(m => m.type === 'registered'),
       false, 'an admitted B PCM socket cannot take another production role');
+
+    // Real WebSocket end-to-end six-second Content proof, NOT a direct
+    // coordinator call. A uses the production v2 Mic receiver, Robot the
+    // actual backing receiver, and B its isolated one-use v2 transport.
+    // Pace the real network clock; sending 7s at once would fabricate an
+    // unrepresentative future capture timeline.
+    const { mic, backing } = laggedMultibandMusicPair(
+      7.5, 48_000, 120, { singerGain: .18 },
+    );
+    const capturedAt = Date.now();
+    const frameSamples = 960;
+    const frameBytes = frameSamples * 2;
+    for (let i = 0; i < mic.byteLength / frameBytes; i++) {
+      const start = i * frameBytes;
+      const end = start + frameBytes;
+      publisher.sendAudioPacket(mic.subarray(start, end));
+      robotBacking.sendPcm(backing.subarray(start, end));
+      bMedia.sendBinary(encodeAudioPacket({
+        source: 'mic', generation: 7,
+        firstSampleIndex: frameSamples * (i + 1), sequence: i + 1,
+        pcm: mic.subarray(start, end),
+      }));
+      if (i % 25 === 0) {
+        // Playback owner authority must remain fresh for both singer jobs.
+        a.send(telemetry(1, 10.1 + (Date.now() - capturedAt) / 1_000));
+      }
+      await sleep(20);
+    }
+    const proofDeadline = Date.now() + 4_500;
+    while (!relay.stderr().includes('"state":"duet-ready"')
+      && Date.now() < proofDeadline) await sleep(30);
+    assert.match(relay.stderr(), /\[choir-proof-ci\].*"state":"duet-ready"/,
+      'both singers must independently complete the real server-owned '
+      + 'A/B/Robot Content Worker pipeline from WebSocket PCM; '
+      + relay.stderr().slice(-2_500));
+    assert.equal(bMedia.messages.some(m => m.type === 'registered'),
+      false, 'B must remain outside the N=1 publisher path after calibration');
     // B's original consent can still revoke audio admission immediately.
     b.send({ type: 'choir-secondary-withdraw' });
     await b.waitFor((m) => m.type === 'choir-secondary-consent-status'

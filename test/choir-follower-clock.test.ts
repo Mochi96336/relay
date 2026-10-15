@@ -46,9 +46,12 @@ test('B playback remains separate from production room song commands and monitor
   const ui = await readFile(new URL('../public/choir-follower.js', import.meta.url), 'utf8');
   const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
   const bridge = await readFile(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
-  assert.match(html, /id="choir-follower-panel"[^>]*hidden/);
+  assert.match(html, /id="choir-follower-player" hidden/);
+  assert.match(html, /id="choir-follower-position" hidden/);
+  assert.doesNotMatch(html, /choir-follower-panel|choir-follower-start|啟用伴奏/);
+  assert.match(ui, /if \(!player && !starting && currentRoom\(\)\) void startPlayer\(\)/);
   assert.match(ui, /relay-choir-guest-state/);
-  assert.match(ui, /startButton\?\.addEventListener\('click'/);
+  assert.doesNotMatch(ui, /startButton|userEnabled|relay:room-song-command-intent/);
   assert.match(ui, /role !== 'observer'/);
   assert.match(bridge, /roomReceivedAtMs: latestRoomReceivedAtMs/);
   assert.doesNotMatch(ui, /relay:room-song-command-intent|relay:youtube-telemetry|room-song-command|micCalibration|sendAudioPacket/);

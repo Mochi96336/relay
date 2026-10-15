@@ -762,6 +762,10 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
     assert.equal(broker.redeem(cMedia, first.claimToken, RATE, 2, 6), null,
       'a claim stolen by an unrelated participant is burned');
     assert.equal(broker.redeem(bMedia, first.claimToken, RATE, 2, 7), null);
+    const unsupportedV1 = broker.issue(bControl, 7.5)!;
+    assert.equal(broker.redeem(bMedia, unsupportedV1.claimToken, RATE, 1, 7.5), null,
+      'legacy v1 may never redeem a valid Choir media claim');
+    assert.equal(ingress.isAttached(bMedia), false);
     const old = broker.issue(bControl, 8)!;
     const latest = broker.issue(bControl, 9)!;
     assert.notEqual(old.claimToken, latest.claimToken);

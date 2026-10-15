@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { encodePcmFrame, FRAME_HEADER_BYTES } from '../src/pcm-frame.js';
+import { encodePcmFrame } from '../src/pcm-frame.js';
+import { AUDIO_PACKET_HEADER_BYTES } from '../src/audio-packet.js';
 import { encodeAudioPacket } from '../src/audio-packet.js';
 import {
   ChoirSecondaryPcmIngressExperiment,
@@ -18,8 +19,7 @@ const B: ChoirFreshCaptureTicket = Object.freeze({
   participantId: 'B', seat: 'secondary', transportId: 'socket-B',
 });
 function bytes(generation = 7, start = 0, samples = 960): Buffer {
-  return encodePcmFrame(generation, start,
-    Buffer.from(new Int16Array(samples).fill(2_000).buffer));
+  return v2(Math.floor(start / 960) >>> 0, start, samples, generation);
 }
 function boundResult(result: ChoirIngressResult) {
   if (!result.intercepted) throw new Error('Expected a Choir-bound socket');
@@ -96,16 +96,20 @@ describe('isolated Choir secondary WebSocket PCM admission', () => {
     assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 0), true);
     const accepted = bytes();
     assert.equal(boundResult(f.ingress.interceptBinary(socket, accepted, 10)).accepted, true);
+    const emptyCount = Buffer.from(bytes());
+    emptyCount.writeUInt32LE(0, 12);
+    const invalidCursor = Buffer.from(bytes());
+    invalidCursor.writeDoubleLE(Number.NaN, 16);
     const malformed: Buffer[] = [
       Buffer.from(new Int16Array(960).buffer), // no RL metadata
-      bytes(7, 0, 0), // empty capture
+      emptyCount, // zero source samples
       bytes(7, 0, 9_601), // >200ms at 48k
-      bytes(7, Number.NaN), // invalid time position
-      bytes(7, 0, 960).subarray(0, FRAME_HEADER_BYTES + 3), // uneven PCM
+      invalidCursor, // invalid native time position
+      bytes(7, 0, 960).subarray(0, AUDIO_PACKET_HEADER_BYTES + 3), // uneven PCM
     ];
-    const wrongFlags = Buffer.from(accepted);
-    wrongFlags.writeUInt8(1, 3);
-    malformed.push(wrongFlags);
+    const wrongSource = Buffer.from(accepted);
+    wrongSource.writeUInt8(3, 3);
+    malformed.push(wrongSource);
     const wrongMagic = Buffer.from(accepted);
     wrongMagic.writeUInt16LE(0x9876, 0);
     malformed.push(wrongMagic);
@@ -167,13 +171,15 @@ describe('isolated Choir secondary WebSocket PCM admission', () => {
   test('AudioPacket v2 from authenticated secondary never downgrades to v1 or accepts backing/v3', () => {
     const f = fixture();
     const socket = socketFor('B');
-    assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 0, 2), true);
+    assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 0), true);
     assert.deepEqual(f.ingress.interceptBinary(socket, v2(0, 0), 10), {
       intercepted: true, accepted: true, reason: 'accepted',
     });
-    assert.deepEqual(f.ingress.interceptBinary(socket, bytes(7, 960), 20), {
+    assert.deepEqual(f.ingress.interceptBinary(socket, encodePcmFrame(
+      7, 960, Buffer.from(new Int16Array(960).buffer),
+    ), 20), {
       intercepted: true, accepted: false, reason: 'malformed-frame',
-    }, 'a v1 RL header cannot enter a v2 transport');
+    }, 'a legacy v1 RL header cannot enter the v2-only transport');
     assert.deepEqual(f.ingress.interceptBinary(socket, v2(1, 960, 960, 7, 'backing'), 30), {
       intercepted: true, accepted: false, reason: 'malformed-frame',
     }, 'the secondary Mic cannot spoof Robot PCM');
@@ -191,18 +197,12 @@ describe('isolated Choir secondary WebSocket PCM admission', () => {
       intercepted: true, accepted: true, reason: 'accepted',
     });
     assert.equal(f.accepted.length, 2);
-    const legacy = fixture();
-    const legacySocket = socketFor('B');
-    assert.equal(legacy.ingress.bindVerifiedSecondary(legacySocket, B, 48_000, 0), true);
-    assert.equal(boundResult(legacy.ingress.interceptBinary(legacySocket, v2(0, 0), 10))
-      .reason, 'malformed-frame', 'v2 cannot be misdecoded as legacy v1');
-    assert.equal(legacy.accepted.length, 0);
   });
 
   test('v2 sequence deduplicates retransmissions, allows bounded reordering and uint32 wrap', () => {
     const f = fixture();
     const socket = socketFor('B');
-    assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 0, 2), true);
+    assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 0), true);
     for (const [seq, first] of [
       [0xffff_fffe, 0], [0, 1920], [0xffff_ffff, 960], [1, 2880],
     ]) {
@@ -228,7 +228,7 @@ describe('isolated Choir secondary WebSocket PCM admission', () => {
   test('v2 bounded recent replay window evicts old sample claims without accepting old sequences', () => {
     const f = fixture();
     const socket = socketFor('B');
-    assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 0, 2), true);
+    assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 0), true);
     for (let seq = 0; seq <= 129; seq++) {
       // Keep packet rate below 150/s while advancing an ordinary sequence.
       assert.equal(boundResult(f.ingress.interceptBinary(

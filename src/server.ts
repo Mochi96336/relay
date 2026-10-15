@@ -3277,30 +3277,12 @@ function restartManualBootCalibration(nowMs: number) {
 // authority transitions. Never logs transport identities, PCM or calibration
 // offsets; production mode does not execute this observer.
 let lastChoirProofTestState = '';
-let lastChoirProofTestReportAtMs = 0;
-let choirTestRoomEverSeen = false;
-const choirRobotIngestTestCounts = { received: 0, proven: 0, mirrored: 0 };
 const youtubeTimelineTimer = setInterval(() => {
   const nowMs = performance.now();
   tickChoirShadow(nowMs);
   choirContentPipeline?.tick(nowMs);
   if (process.env.NODE_ENV === 'test' && choirMediaEnabled && choirRestartCoordinator) {
     const view = choirRestartCoordinator.preview();
-    if (view.roomEpoch !== null) choirTestRoomEverSeen = true;
-    if (choirTestRoomEverSeen
-      && nowMs - lastChoirProofTestReportAtMs >= 1_000) {
-      lastChoirProofTestReportAtMs = nowMs;
-      console.error('[choir-proof-ci-progress]', JSON.stringify({
-        roomEpoch: view.roomEpoch, state: view.state,
-        primary: view.primary, secondary: view.secondary,
-        submitted: choirContentPipeline?.stats.submitted ?? 0,
-        applied: choirContentPipeline?.stats.applied ?? 0,
-        rejected: choirContentPipeline?.stats.rejected ?? 0,
-        workerFailure: choirContentPipeline?.lastFailureReason ?? null,
-        history: choirRestartCoordinator.diagnosticContentSampleCounts(),
-        robotIngress: choirRobotIngestTestCounts,
-      }));
-    }
     const identity = `${view.roomEpoch ?? 0}/${view.state}`;
     if (view.roomEpoch !== null && identity !== lastChoirProofTestState
       && (view.state === 'partially-ready' || view.state === 'duet-ready')) {
@@ -4680,15 +4662,8 @@ function audioUplinkReceived(socket: RelaySocket, data: Buffer) {
   noteRobotTransitionBackingFrame(frame, samples, start, nowMs);
   // Same *trusted* Robot native capture as production; no second decoder or
   // arbitrary client-supplied video/sample positions are introduced.
-  if (backingRuntime.isRobot && choirSourceMirror?.roomEpoch !== null
-    && choirSourceMirror?.roomEpoch !== undefined
-    && process.env.NODE_ENV === 'test') choirRobotIngestTestCounts.received++;
-  if (backingRuntime.isRobot && nativeFrameMirroringSafe) {
-    if (process.env.NODE_ENV === 'test') choirRobotIngestTestCounts.proven++;
-    const mirrored = choirSourceMirror?.mirrorRobot(frame, true, nowMs);
-    if (mirrored && process.env.NODE_ENV === 'test')
-      choirRobotIngestTestCounts.mirrored++;
-  }
+  if (backingRuntime.isRobot && nativeFrameMirroringSafe)
+    choirSourceMirror?.mirrorRobot(frame, true, nowMs);
   const contentTimingStart = mappedContentBackingStart(start, nowMs);
   if (contentTimingStart !== null) feedContentBackingEvidence(samples, contentTimingStart, nowMs);
 }

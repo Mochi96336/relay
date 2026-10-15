@@ -3277,12 +3277,27 @@ function restartManualBootCalibration(nowMs: number) {
 // authority transitions. Never logs transport identities, PCM or calibration
 // offsets; production mode does not execute this observer.
 let lastChoirProofTestState = '';
+let lastChoirProofTestReportAtMs = 0;
+let choirTestRoomEverSeen = false;
 const youtubeTimelineTimer = setInterval(() => {
   const nowMs = performance.now();
   tickChoirShadow(nowMs);
   choirContentPipeline?.tick(nowMs);
   if (process.env.NODE_ENV === 'test' && choirMediaEnabled && choirRestartCoordinator) {
     const view = choirRestartCoordinator.preview();
+    if (view.roomEpoch !== null) choirTestRoomEverSeen = true;
+    if (choirTestRoomEverSeen
+      && nowMs - lastChoirProofTestReportAtMs >= 1_000) {
+      lastChoirProofTestReportAtMs = nowMs;
+      console.error('[choir-proof-ci-progress]', JSON.stringify({
+        roomEpoch: view.roomEpoch, state: view.state,
+        primary: view.primary, secondary: view.secondary,
+        submitted: choirContentPipeline?.stats.submitted ?? 0,
+        applied: choirContentPipeline?.stats.applied ?? 0,
+        rejected: choirContentPipeline?.stats.rejected ?? 0,
+        workerFailure: choirContentPipeline?.lastFailureReason ?? null,
+      }));
+    }
     const identity = `${view.roomEpoch ?? 0}/${view.state}`;
     if (view.roomEpoch !== null && identity !== lastChoirProofTestState
       && (view.state === 'partially-ready' || view.state === 'duet-ready')) {

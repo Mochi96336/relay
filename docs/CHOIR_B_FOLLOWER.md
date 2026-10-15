@@ -26,8 +26,9 @@ Withdrawal/role change retires it; stale room clock pauses local B playback.
 
 1. The single room SongSession media position is controlled by A and comes
    from `room-song-status`.
-2. B's own YouTube `getCurrentTime()` and local buffering are displayed in the
-   same Song time readout. The estimated room position is **not** calibrated
+2. B's own YouTube `getCurrentTime()` appears as **current / total** in the
+   same Song time readout (like A), not an extra B-versus-room clock on-screen.
+   The estimated room position is **not** calibrated
    against device speaker latency or measured one-way network delay.
 3. B's independent PCM native capture generation and sample cursor are
    separate from the iframe clock.

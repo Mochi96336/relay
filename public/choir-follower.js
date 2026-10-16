@@ -197,8 +197,9 @@ async function startPlayer() {
             try { player?.pauseVideo(); } catch {}
             return;
           }
-          setLocalPlayback(event.data === 1 && eligible && role === 'observer'
-            && Boolean(currentRoom()));
+          // Only ever turns Listen off here; tick() decides when it returns,
+          // so a buffering or paused moment does not flip Listen back on.
+          if (event.data === 1 && eligible && role === 'observer' && currentRoom()) setLocalPlayback(true);
           if (event.data === 1) {
             videoErrors = 0;
             autoplayBlocked = false;
@@ -307,7 +308,10 @@ function tick() {
     setStatus('choir.followerLoading');
     return;
   }
-  setLocalPlayback(local.playerState === 1);
+  // Listen yields while the local song is starting, not only once it plays:
+  // on iOS, Listen sounding again on every buffering or paused moment
+  // interrupts the video that is trying to start. It returns on failure.
+  setLocalPlayback((room.playing && !autoplayBlocked) || local.playerState === 1);
   reconcileSound(local.playerState);
   if (local.playerState === 1 && localVideoId === room.videoId) {
     // Where B's local YouTube is, for B's YouTube-time alignment.

@@ -27,6 +27,9 @@ type InFlight = {
  * and resource limits, plus a per-attempt cooldown. All worker results are
  * untrusted until coordinator rechecks the complete live authority witness.
  */
+/** The longest wait between Content attempts after repeated failures. */
+const MAX_RETRY_DELAY_MS = 6_000;
+
 export class ChoirLiveContentPipelineExperiment {
   private worker: Worker | null = null;
   private inFlight: InFlight | null = null;
@@ -171,9 +174,15 @@ export class ChoirLiveContentPipelineExperiment {
     this.rejectActive(true);
   }
 
+  /**
+   * Backs off after a failed analysis, but not for long. The usual failure
+   * is a stretch of music the analyzer cannot time (a repetitive chorus), and
+   * the next six seconds are often fine; a 30 s cap left a second singer
+   * silent for half a song. One job takes about a second on the Pi.
+   */
   private delayAfterFailure() {
     this.failureStreak = Math.min(5, this.failureStreak + 1);
-    const delay = Math.min(30_000,
+    const delay = Math.min(MAX_RETRY_DELAY_MS,
       this.retryDelayMs * (2 ** (this.failureStreak - 1)));
     this.nextAttemptAtMs = this.now() + delay;
   }

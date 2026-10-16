@@ -1876,6 +1876,9 @@ function remoteStatusPayload() {
         duetSecondary: session.secondaryMic,
         duetIngress: choirSecondaryIngress?.counts ?? null,
         duetRoom: choirRestartCoordinator.preview(),
+        duetContent: choirContentPipeline
+          ? { ...choirContentPipeline.stats, lastFailureReason: choirContentPipeline.lastFailureReason }
+          : null,
       } : {}),
     },
   };

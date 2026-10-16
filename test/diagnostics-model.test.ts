@@ -402,7 +402,8 @@ describe('locales', () => {
 it('Timing keeps reported YT positions and calibration coordinates distinct without RTT/2', () => {
   const timing = {
     activeCalibrationKind: 'content', robotRoute: true, robotDeltaFresh: true,
-    calibratedMicLagTargetMs: -160, desiredCalibratedMicLagMs: -184,
+    calibratedMicLagTargetMs: -160, desiredCalibratedMicLagMs: -184, micLagMs: -70,
+    mixerCalibrationAuthority: { kind: 'content' },
     robotPlayerOffsetMs: -300, robotOffsetTimingEvidence: { playerSeconds: 90.1 },
     bootCalibration: { advanceMs: -180, micLatencyMs: 225, backingLatencyMs: 100 },
     sampleSongFallback: { candidateMs: -286, active: false },
@@ -416,7 +417,7 @@ it('Timing keeps reported YT positions and calibration coordinates distinct with
   assert.match(rows.youtubeRobot.note, /not projected/);
   assert.equal(rows.bootLive.value, '-475 ms');
   assert.equal(rows.bootStored.value, '-180 ms');
-  assert.equal(rows.contentTarget.value, '-184 ms');
+  assert.equal(rows.contentTarget.value, '-70 ms + player offset -114 ms = -184 ms');
   assert.equal(rows.mixerTarget.value, '-160 ms');
   assert.equal(rows.shadow.value, '-286 ms');
   assert.equal(rows.rttHalf, undefined);
@@ -425,6 +426,17 @@ it('Timing keeps reported YT positions and calibration coordinates distinct with
   }, zh));
   assert.equal(stale.youtubeRobot.value, '—');
   assert.equal(stale.bootLive.value, '—');
+  // The Robot went quiet: the mixer holds its last converted value, and says so.
+  const held = byKey(describeTiming({ source: source(),
+    timing: { ...timing, robotDeltaFresh: false, desiredCalibratedMicLagMs: null },
+    timeline: { connected: true, playbackRate: 1 },
+  }, zh));
+  assert.equal(held.contentTarget.value, '-70 ms + 播放器偏移 -90 ms = -160 ms · Robot 暫停回報，沿用');
+  const noAuthority = byKey(describeTiming({ source: source(),
+    timing: { ...timing, desiredCalibratedMicLagMs: null, mixerCalibrationAuthority: { kind: 'boot-probe' } },
+    timeline: { connected: true, playbackRate: 1 },
+  }, en));
+  assert.equal(noAuthority.contentTarget.value, '—', 'a target owned by another method is not shown as content');
 });
 
 it('Timing names sample/song when it actually controls fallback', () => {

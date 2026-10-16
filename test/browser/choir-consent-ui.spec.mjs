@@ -71,7 +71,7 @@ test('mobile B explicitly accepts and withdraws; disconnect hides stale authoriz
   await expect(page.locator('#choir-invite-open')).toBeHidden();
   await expect(page.locator('#choir-consent-panel')).toBeVisible();
   await expect(page.locator('#choir-invitation-copy')).toContainText('Lead Singer');
-  await expect(page.locator('#choir-invitation-copy')).toContainText('不會開啟你的麥克風');
+  await expect(page.locator('#choir-invitation-copy')).toContainText('按下連接後才會開啟你的麥克風');
   await page.locator('#choir-accept').click();
   expect((await page.evaluate(() => window.__choirSent)).at(-1)).toEqual({
     type: 'choir-secondary-accept', inviteId: 'sample-id',

@@ -15,6 +15,12 @@ async function openFixture(page, participantId, micOwnerId = null) {
     window.addEventListener('relay-choir-consent-command', event => {
       window.__choirSent.push(event.detail);
     });
+    // The fixture keeps answering product-status without a duet; as the real
+    // server does, every product-status carries the duet the test set.
+    window.__fixtureDuet = null;
+    window.addEventListener('relay-product-status', event => {
+      if (event.detail?.room) event.detail.room.duet = window.__fixtureDuet;
+    });
     await import('/choir-consent-ui.js');
     window.dispatchEvent(new CustomEvent('relay-presence-state', {
       detail: {
@@ -37,10 +43,12 @@ const enable = page => page.evaluate(() => {
 });
 const consent = (page, detail) => page.evaluate(detail => window.dispatchEvent(
   new CustomEvent('relay-choir-consent-message', { detail })), detail);
-const duet = (page, secondaryId) => page.evaluate(secondaryId => window.dispatchEvent(
-  new CustomEvent('relay-product-status', {
-    detail: { type: 'product-status', room: { duet: secondaryId ? { secondaryId, state: 'singing' } : null } },
-  })), secondaryId);
+const duet = (page, secondaryId) => page.evaluate(secondaryId => {
+  window.__fixtureDuet = secondaryId ? { secondaryId, state: 'singing' } : null;
+  window.dispatchEvent(new CustomEvent('relay-product-status', {
+    detail: { type: 'product-status', room: {} },
+  }));
+}, secondaryId);
 const accepted = { type: 'choir-secondary-consent-status', status: 'accepted', secondaryId: 'singerB', joined: true };
 
 test('normal N=1 shows no second Mic controls without explicit server availability', async ({ page }) => {

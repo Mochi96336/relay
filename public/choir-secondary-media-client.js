@@ -128,6 +128,9 @@ window.addEventListener('relay-choir-media-message', (event) => {
     // A repeated announcement while connecting must not close B's media and
     // retire the very room it is trying to join. A real disconnect can retry.
     if (epoch === announcedRoomEpoch && (awaitingClaim || mediaSocket)) return;
+    // A newer room supersedes a claim still in flight. Otherwise an old
+    // reply is ignored while its 20 s timer blocks admission to the new room.
+    if (epoch !== announcedRoomEpoch) closeMedia();
     announcedRoomEpoch = epoch;
     roomReady = true;
     requestClaim();

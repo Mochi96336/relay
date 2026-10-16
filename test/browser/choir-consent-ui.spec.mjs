@@ -355,3 +355,29 @@ test('a cancelled permission request cannot block or cancel a newer capture atte
   });
   expect(result).toEqual({ attempts: 2, failures: 0 });
 });
+
+test('a newer room supersedes an outstanding old claim immediately', async ({ page }) => {
+  await openFixture(page, 'singerB', 'owner');
+  await enable(page);
+  const result = await page.evaluate(async () => {
+    const { ChoirSecondaryCapture } = await import('/choir-secondary-capture.js');
+    ChoirSecondaryCapture.prototype.prepare = async function () { this.rate = 48000; return this.rate; };
+    let connections = 0;
+    class MediaSocket extends EventTarget {
+      static CLOSED = 3;
+      readyState = 0;
+      constructor() { super(); connections++; }
+      close() { this.readyState = 3; }
+    }
+    window.WebSocket = MediaSocket;
+    window.dispatchEvent(new Event('relay-choir-start-secondary-capture'));
+    await Promise.resolve();
+    const message = detail => window.dispatchEvent(new CustomEvent('relay-choir-media-message', { detail }));
+    message({ type: 'choir-room-ready', roomEpoch: 1 });
+    message({ type: 'choir-room-ready', roomEpoch: 2 });
+    message({ type: 'choir-secondary-media-claim', roomEpoch: 1, claimToken: 'a'.repeat(64) });
+    return { connections,
+      claims: window.__choirSent.filter(m => m.type === 'choir-secondary-media-claim-request').length };
+  });
+  expect(result).toEqual({ connections: 0, claims: 2 });
+});

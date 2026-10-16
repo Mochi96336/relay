@@ -155,56 +155,65 @@ export class ChoirRoomRestartCoordinatorExperiment {
    * supplies the authorizer. An actor name or a stale approval request from
    * a client is not authorization. No production handler calls this method.
    */
+  /** Why the last approveTrustedRestart() refused, for the server log. */
+  lastRefusal: string | null = null;
+
   approveTrustedRestart(request: ChoirRestartApproval): boolean {
+    this.lastRefusal = null;
+    const refuse = (reason: string) => { this.lastRefusal = reason; return false; };
     if (!Number.isFinite(request.nowMs)
-      || request.nowMs < this.lastObservedMs
-      || !Number.isSafeInteger(request.expectedRetiredRoomEpoch)
-      || request.expectedRetiredRoomEpoch !== this.lastApprovedRoomEpoch
-      || !request.actorParticipantId
+      || request.nowMs < this.lastObservedMs) return refuse('clock');
+    // The room before the proposed one, which B's join was scoped to. Not
+    // necessarily the last APPROVED room: a song sought or changed before
+    // anyone joined retires a witness that never became a room.
+    if (!Number.isSafeInteger(request.expectedRetiredRoomEpoch)
+      || request.expectedRetiredRoomEpoch + 1 !== this.proposedRoomEpochForConsent
+      || request.expectedRetiredRoomEpoch < this.lastApprovedRoomEpoch) return refuse('room-epoch');
+    if (!request.actorParticipantId
       || !request.primaryId || request.primaryId !== request.primaryId.trim()
       || !request.secondaryId || request.secondaryId !== request.secondaryId.trim()
-      || request.primaryId === request.secondaryId
-      || this.takeFrozenNow()
-      || !this.roomRolesStillAuthorized(
-        request.primaryId, request.secondaryId, request.expectedRetiredRoomEpoch + 1,
-      )
-      || this.approved !== null) return false;
+      || request.primaryId === request.secondaryId) return refuse('singers');
+    if (this.takeFrozenNow()) return refuse('take-recording');
+    if (!this.roomRolesStillAuthorized(
+      request.primaryId, request.secondaryId, request.expectedRetiredRoomEpoch + 1,
+    )) return refuse('roles');
+    if (this.approved !== null) return refuse('room-already-approved');
 
     this.observe(request.nowMs);
     const witness = this.shadow.snapshot();
     if (witness.state !== 'shadow-active' && witness.state !== 'restart-required')
-      return false;
+      return refuse(`shadow-${witness.state}`);
     const authority = this.currentAuthority(request.nowMs);
-    if (!authority
-      || authority.revision !== request.expectedPlaybackRevision
-      || !this.serverAuthorizesRestart(request, authority)) return false;
+    if (!authority) return refuse('song-authority');
+    if (authority.revision !== request.expectedPlaybackRevision) return refuse('playback-revision');
+    if (!this.serverAuthorizesRestart(request, authority)) return refuse('server-policy');
 
     let roomEpoch: number, songEpoch: number;
     if (witness.state === 'shadow-active') {
       // Only the first room can adopt an already-active Shadow witness.
       // Once an approved room has retired, a new witness must be created
       // THROUGH this coordinator's explicit CAS, not rearmed out-of-band.
-      if (this.lastApprovedRoomEpoch !== 0) return false;
+      if (this.lastApprovedRoomEpoch !== 0) return refuse('active-witness-after-first-room');
       if (witness.roomEpoch === null || witness.songEpoch === null
         || witness.videoId !== authority.videoId
         || witness.backingGeneration !== authority.backingGeneration
-        || witness.roomEpoch <= this.lastApprovedRoomEpoch) return false;
+        || witness.roomEpoch <= this.lastApprovedRoomEpoch) return refuse('witness-mismatch');
       roomEpoch = witness.roomEpoch;
       songEpoch = witness.songEpoch;
     } else {
-      if (this.lastWitnessRoomEpoch <= 0) return false;
+      if (this.lastWitnessRoomEpoch <= 0) return refuse('no-witness');
       roomEpoch = this.lastWitnessRoomEpoch + 1;
       songEpoch = roomEpoch;
       if (!Number.isSafeInteger(roomEpoch)
         || !this.shadow.authorizeExplicitFreshRoom(
           this.lastWitnessRoomEpoch, roomEpoch, songEpoch,
-        )) return false;
+        )) return refuse('fresh-room-refused');
       const refreshed = this.shadow.observe(request.nowMs, authority.backingGeneration);
       if (refreshed.state !== 'shadow-active'
         || refreshed.roomEpoch !== roomEpoch
         || refreshed.songEpoch !== songEpoch
         || refreshed.backingGeneration !== authority.backingGeneration
-        || refreshed.videoId !== authority.videoId) return false;
+        || refreshed.videoId !== authority.videoId) return refuse('fresh-witness-mismatch');
       this.lastWitnessRoomEpoch = roomEpoch;
     }
 
@@ -215,7 +224,7 @@ export class ChoirRoomRestartCoordinatorExperiment {
       playbackRate: authority.playbackRate,
       primaryId: request.primaryId, secondaryId: request.secondaryId,
     };
-    if (!this.handshake.beginTrustedRoom(spec)) return false;
+    if (!this.handshake.beginTrustedRoom(spec)) return refuse('handshake');
     this.lastApprovedRoomEpoch = roomEpoch;
     this.approved = {
       roomEpoch, songEpoch, videoId: authority.videoId,

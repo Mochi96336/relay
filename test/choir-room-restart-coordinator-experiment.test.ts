@@ -155,6 +155,22 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
       'the new room must independently recalibrate both Mic streams');
   });
 
+  test('a Seek before any room was approved still lets the next room start', () => {
+    // The song plays and is sought before B joins: its witness retires with
+    // no room ever approved. The next proposed room must still be approvable.
+    const f = fixture();
+    f.startSong(0);
+    f.coordinator.observe(0);
+    assert.equal(f.songs.update(playing({ currentTime: 78 }), leader, null, 100).accepted, true);
+    assert.equal(f.coordinator.observe(100).state, 'restart-required');
+    const proposed = f.coordinator.proposedRoomEpochForConsent;
+    assert.equal(proposed, 2);
+    const revision = (f.songs.statusPayload(101) as { revision: number }).revision;
+    assert.equal(f.approve(revision, 101, proposed! - 1), true, String(f.coordinator.lastRefusal));
+    assert.equal(f.coordinator.preview().roomEpoch, 2);
+    assert.equal(f.approve(revision, 102, proposed! - 1), false, 'the approval is not replayable');
+  });
+
   test('Seek between timer ticks rejects old PCM and Content even without explicit observe', () => {
     const f = fixture();
     const rev = f.startSong(0);

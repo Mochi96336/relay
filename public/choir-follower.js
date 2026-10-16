@@ -35,6 +35,10 @@ let attemptedRate = null;
  * asked to tap the player. muted → unmuting → audible | tap-for-sound.
  */
 let soundState = 'muted';
+/** YouTube's last error code, and when a failed video is tried again. */
+let lastErrorCode = null;
+let videoErrors = 0;
+let videoRetryAtMs = 0;
 let unmuteTimer = null;
 
 function setLocalPlayback(active) {
@@ -196,15 +200,22 @@ async function startPlayer() {
           setLocalPlayback(event.data === 1 && eligible && role === 'observer'
             && Boolean(currentRoom()));
           if (event.data === 1) {
+            videoErrors = 0;
             autoplayBlocked = false;
             setStatus(soundState === 'tap-for-sound' ? 'choir.followerTapSound' : null);
           }
         },
-        onError: () => {
+        onError: (event) => {
           if (ownGeneration !== generation) return;
+          lastErrorCode = Number.isFinite(Number(event?.data)) ? Number(event.data) : null;
           if (!playerReady) { failInitialization(); return; }
           setLocalPlayback(false);
           failedVideoId = localVideoId;
+          // Often passing on a phone (5: the player broke, e.g. when the Mic
+          // changed the audio route): a fresh player tries again, more slowly
+          // each time, rather than leaving B songless for this video.
+          videoErrors++;
+          videoRetryAtMs = performance.now() + Math.min(15_000, 3_000 * videoErrors);
           setStatus('choir.followerVideoError');
           try { player?.pauseVideo(); } catch {}
         },
@@ -254,7 +265,8 @@ function publishReport() {
   window.dispatchEvent(new CustomEvent('relay-choir-follower-report', {
     detail: {
       eligible, role, playerReady, starting, playerState, startAttempts,
-      autoplayBlocked, failedVideo: failedVideoId !== null, status: statusKey, sound: soundState,
+      autoplayBlocked, failedVideo: failedVideoId !== null, errorCode: lastErrorCode, videoErrors,
+      status: statusKey, sound: soundState,
       localPlayback: localBackingAudibleRole, roomVideo: latestRoom?.videoId ?? null,
     },
   }));
@@ -271,7 +283,8 @@ function tick() {
     return;
   }
   if (failedVideoId === room.videoId) {
-    setStatus('choir.followerVideoError');
+    if (performance.now() >= videoRetryAtMs) resetPlayer();
+    else setStatus('choir.followerVideoError');
     return;
   }
   if (!playerReady) {

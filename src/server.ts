@@ -4985,20 +4985,23 @@ function beginChoirRoom(primaryId: string, secondaryId: string, transport: numbe
   const actualPublisher = [...wss.clients].some(raw =>
     (raw as RelaySocket).participantId === primaryId
     && micRuntime.isPublisher(raw as RelaySocket));
-  const canStart = Boolean(roomEpoch !== null
-    && actualPublisher
-    && participants.micOwnerId === primaryId
-    && choirConsent.hasConsent(primaryId, secondaryId, roomEpoch, nowMs)
-    && Number.isSafeInteger(leaderStatus.revision)
-    && choirRestartCoordinator.approveTrustedRestart({
-      actorParticipantId: primaryId,
-      primaryId,
-      secondaryId,
-      expectedRetiredRoomEpoch: roomEpoch! - 1,
-      expectedPlaybackRevision: leaderStatus.revision,
-      nowMs,
-    }));
-  if (!canStart) return 'room-not-authorized';
+  const refusal = roomEpoch === null ? 'no-proposed-room'
+    : !actualPublisher ? 'mic-owner-not-publishing'
+      : participants.micOwnerId !== primaryId ? 'mic-owner-changed'
+        : !choirConsent.hasConsent(primaryId, secondaryId, roomEpoch, nowMs) ? 'join-scope'
+          : !Number.isSafeInteger(leaderStatus.revision) ? 'playback-revision'
+            : !choirRestartCoordinator.approveTrustedRestart({
+              actorParticipantId: primaryId,
+              primaryId,
+              secondaryId,
+              expectedRetiredRoomEpoch: roomEpoch - 1,
+              expectedPlaybackRevision: leaderStatus.revision,
+              nowMs,
+            }) ? choirRestartCoordinator.lastRefusal ?? 'restart' : null;
+  if (refusal !== null) {
+    lastRoomRefusal = refusal;
+    return 'room-not-authorized';
+  }
   const status = choirRestartCoordinator.preview();
   const ticket = choirRestartCoordinator.admitVerifiedSinger({
     roomEpoch: status.roomEpoch!, songEpoch: status.songEpoch!,
@@ -5024,6 +5027,8 @@ function beginChoirRoom(primaryId: string, secondaryId: string, transport: numbe
  * retires the room; the next tick creates a fresh one the same way.
  */
 let lastJoinedRoomAttemptMs = Number.NEGATIVE_INFINITY;
+/** Which check refused the last room, for the [choir] room log. */
+let lastRoomRefusal = '';
 let lastJoinedRoomOutcome = '';
 let lastRoomReadyResend = { roomEpoch: -1, atMs: Number.NEGATIVE_INFINITY };
 function sendToSecondary(secondaryId: string, payload: Record<string, unknown>) {
@@ -5057,7 +5062,8 @@ function beginJoinedChoirRoom(nowMs: number) {
     : !publisher || publisher.participantId !== joined.primaryId ? 'waiting-for-mic-owner-media'
       : null;
   const result = outcome ?? beginChoirRoom(joined.primaryId, joined.secondaryId, publisher!.connectionIncarnation, nowMs);
-  const label = typeof result === 'string' ? result : 'room-started';
+  const label = result === 'room-not-authorized' ? `${result}:${lastRoomRefusal}`
+    : typeof result === 'string' ? result : 'room-started';
   if (label !== lastJoinedRoomOutcome) {
     lastJoinedRoomOutcome = label;
     logChoir('room', { outcome: label, ...(typeof result === 'string' ? {} : { roomEpoch: result.roomEpoch }) });

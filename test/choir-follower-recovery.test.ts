@@ -44,6 +44,7 @@ async function fixture() {
   vm.runInNewContext(source, {
     window, document: { querySelector: (key: string) => nodes.get(key), createElement: () => ({}) },
     performance: { now: () => now }, projectFollowerRoom, decideFollowerAction,
+    location: { origin: 'https://relay.test' },
     Event: class { constructor(public type: string) {} },
     CustomEvent: class { detail: any; constructor(public type: string, init: any) { this.detail = init.detail; } },
     setInterval: (fn: () => void) => { tick = fn; },
@@ -71,12 +72,18 @@ async function fixture() {
   };
 }
 
-test('Monitor stays available until B actually plays and returns after video failure', async () => {
+test('Monitor yields while B\'s song starts in a playing room and returns after video failure', async () => {
   const f = await fixture();
   assert.equal(f.active(), false);
   const p = f.players[0];
+  // Created with the room's video and position, as the main Song player is.
+  assert.equal(p.config.videoId, 'abcdefghijk');
+  assert.equal(p.config.playerVars.start, 80);
+  assert.equal(p.config.playerVars.origin, 'https://relay.test');
   p.config.events.onReady();
-  assert.equal(f.active(), false);
+  // Starting, not yet playing: Listen already yields (on iOS it would
+  // interrupt the video trying to start).
+  assert.equal(f.active(), true);
   p.state = 1;
   p.config.events.onStateChange({ data: 1 });
   assert.equal(f.active(), true);

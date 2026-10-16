@@ -27,6 +27,7 @@ async function openFollowerFixture(page, { blocked = false, unmutePauses = false
           this.muted = false;
           this.config = config;
           window.__localFollower = this;
+          window.__followerCalls.push(['create', config.videoId, config.playerVars?.start, config.playerVars?.origin]);
           queueMicrotask(() => config.events.onReady());
         }
         getCurrentTime() { return this.position; }
@@ -89,8 +90,9 @@ test('B keeps ordinary Song layout and follows automatically after consent', asy
   await expect(page.locator('#choir-follower-position')).toContainText(' / 3:40');
   await expect(page.locator('#choir-follower-start')).toHaveCount(0);
   await expect(page.locator('#choir-follower-panel')).toHaveCount(0);
-  await expect.poll(async () => (await page.evaluate(() => window.__followerCalls))
-    .some(x => x[0] === 'cue')).toBe(true);
+  // Created with the room's video, as the main player is (iPhone fails an empty one).
+  expect((await page.evaluate(() => window.__followerCalls)).find(x => x[0] === 'create'))
+    .toEqual(['create', 'abcdefghijk', 80, new URL(BASE).origin]);
   await expect.poll(async () => (await page.evaluate(() => window.__followerCalls))
     .some(x => x[0] === 'play')).toBe(true);
   // Muted first, which any browser lets a script play, then turned up.

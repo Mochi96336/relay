@@ -168,12 +168,29 @@ async function startPlayer() {
   setStatus('choir.followerLoading');
   try {
     const YT = await loadYouTubeAPI();
-    if (!eligible || role !== 'observer' || ownGeneration !== generation) return;
+    const room = currentRoom();
+    if (!eligible || role !== 'observer' || ownGeneration !== generation || !room) {
+      if (ownGeneration === generation) {
+        clearTimeout(readyTimer);
+        readyTimer = null;
+        starting = false;
+      }
+      return;
+    }
     const mount = document.createElement('div');
     host.replaceChildren(mount);
+    // Created with the room's video, as the main Song player is: on iPhone a
+    // player made without one fails with error 2 (invalid parameter) and
+    // never plays. origin is the page's, again as the main player.
+    localVideoId = room.videoId;
+    lastSeekAtMs = performance.now();
     player = new YT.Player(mount, {
       width: '320', height: '180',
-      playerVars: { playsinline: 1, controls: 1, rel: 0, enablejsapi: 1 },
+      videoId: room.videoId,
+      playerVars: {
+        playsinline: 1, controls: 1, rel: 0, origin: location.origin,
+        start: Math.floor(room.positionSeconds),
+      },
       events: {
         onReady: () => {
           if (ownGeneration !== generation) return;

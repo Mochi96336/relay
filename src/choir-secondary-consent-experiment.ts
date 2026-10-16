@@ -14,11 +14,19 @@ type Invite = {
   inviteId: string;
   primaryId: string;
   secondaryId: string;
-  primarySocket: AuthenticatedSocket;
+  /** Null for a join: B asked, A did not invite. */
+  primarySocket: AuthenticatedSocket | null;
   consentSocket: AuthenticatedSocket | null;
   scope: ChoirConsentScope;
   expiresAtMs: number;
   accepted: boolean;
+  /**
+   * B joined whoever holds the Mic by pressing + Second Mic. Not bound to a
+   * song or playback revision: it lasts while A holds the Mic and B's socket
+   * stays open, across pauses, seeks and Takes, so the room can be created
+   * as soon as a song plays and recreated after each seek.
+   */
+  join: boolean;
 };
 
 /**
@@ -56,6 +64,12 @@ export class ChoirSecondaryConsentExperiment {
   }
 
   private validInvite(invite: Invite, nowMs: number) {
+    if (invite.join) {
+      return Number.isFinite(nowMs) && nowMs >= 0
+        && invite.consentSocket !== null && this.policy.socketOpen(invite.consentSocket)
+        && this.policy.primaryStillOwnsMic(invite.primaryId)
+        && this.policy.participantConnected(invite.secondaryId);
+    }
     const scope = this.policy.scopeNow(nowMs);
     return Number.isFinite(nowMs) && nowMs >= 0
       // Pending invitations expire quickly. Accepted consent persists for
@@ -65,7 +79,7 @@ export class ChoirSecondaryConsentExperiment {
       && !this.policy.takeFrozenNow()
       && this.policy.primaryStillOwnsMic(invite.primaryId)
       && this.policy.participantConnected(invite.secondaryId)
-      && this.policy.socketOpen(invite.primarySocket)
+      && invite.primarySocket !== null && this.policy.socketOpen(invite.primarySocket)
       && (!invite.accepted || (invite.consentSocket !== null
         && this.policy.socketOpen(invite.consentSocket)));
   }
@@ -101,7 +115,7 @@ export class ChoirSecondaryConsentExperiment {
     const invite: Invite = {
       inviteId: randomUUID(), primaryId, secondaryId, primarySocket,
       consentSocket: null, scope: { ...scope }, accepted: false,
-      expiresAtMs: nowMs + this.ttlMs,
+      expiresAtMs: nowMs + this.ttlMs, join: false,
     };
     this.pending.set(invite.inviteId, invite);
     this.policy.notifyParticipant(secondaryId, {
@@ -113,6 +127,47 @@ export class ChoirSecondaryConsentExperiment {
   }
 
   /**
+   * B joins the current Mic owner from its own authenticated socket. One
+   * second singer per Mic owner: a different B is refused while one is in.
+   * Returns false when nobody else holds the Mic.
+   */
+  join(secondarySocket: AuthenticatedSocket, primaryId: string | null, nowMs: number): boolean {
+    this.sweep(nowMs);
+    const secondaryId = secondarySocket.participantId;
+    if (!secondaryId || !primaryId || secondaryId === primaryId
+      || !this.policy.socketOpen(secondarySocket)
+      || !this.policy.primaryStillOwnsMic(primaryId)
+      || !this.policy.participantConnected(secondaryId)) return false;
+    for (const invite of this.pending.values()) {
+      if (invite.primaryId !== primaryId || !invite.accepted) continue;
+      if (invite.secondaryId !== secondaryId) return false;
+      if (invite.consentSocket === secondarySocket) return true;
+    }
+    for (const [id, invite] of this.pending)
+      if (invite.primaryId === primaryId || invite.secondaryId === secondaryId) this.pending.delete(id);
+    const joined: Invite = {
+      inviteId: randomUUID(), primaryId, secondaryId, primarySocket: null,
+      consentSocket: secondarySocket, accepted: true, join: true,
+      scope: { roomEpoch: 0, playbackRevision: 0, videoId: '', backingGeneration: 0, robotSourceGeneration: 0 },
+      expiresAtMs: Number.POSITIVE_INFINITY,
+    };
+    this.pending.set(joined.inviteId, joined);
+    this.policy.notifySocket(secondarySocket, {
+      type: 'choir-secondary-consent-status', status: 'accepted',
+      secondaryId, primaryId, joined: true,
+    });
+    return true;
+  }
+
+  /** The joined pair, if a B is in: the server creates its room when a song plays. */
+  activeJoin(nowMs: number): { primaryId: string; secondaryId: string } | null {
+    this.sweep(nowMs);
+    for (const invite of this.pending.values())
+      if (invite.join) return { primaryId: invite.primaryId, secondaryId: invite.secondaryId };
+    return null;
+  }
+
+  /**
    * B explicitly accepts or declines from its own authenticated socket.
    * The invite UUID is never sufficient proof of identity by itself.
    */
@@ -120,7 +175,7 @@ export class ChoirSecondaryConsentExperiment {
     accept: boolean, nowMs: number): boolean {
     this.sweep(nowMs);
     const invite = this.pending.get(inviteId);
-    if (!invite || !secondarySocket.participantId
+    if (!invite || invite.join || !secondarySocket.participantId
       || secondarySocket.participantId !== invite.secondaryId
       || !this.policy.socketOpen(secondarySocket)
       || !this.validInvite(invite, nowMs)) return false;
@@ -132,7 +187,7 @@ export class ChoirSecondaryConsentExperiment {
     }
     if (!accept) {
       this.pending.delete(inviteId);
-      this.policy.notifySocket(invite.primarySocket, {
+      if (invite.primarySocket) this.policy.notifySocket(invite.primarySocket, {
         type: 'choir-secondary-consent-status', status: 'declined',
         roomEpoch: invite.scope.roomEpoch, secondaryId: invite.secondaryId,
       });
@@ -140,7 +195,7 @@ export class ChoirSecondaryConsentExperiment {
     }
     invite.accepted = true;
     invite.consentSocket = secondarySocket;
-    this.policy.notifySocket(invite.primarySocket, {
+    if (invite.primarySocket) this.policy.notifySocket(invite.primarySocket, {
       type: 'choir-secondary-consent-status', status: 'accepted',
       roomEpoch: invite.scope.roomEpoch, secondaryId: invite.secondaryId,
     });
@@ -161,7 +216,7 @@ export class ChoirSecondaryConsentExperiment {
         || invite.consentSocket !== secondarySocket) continue;
       this.pending.delete(id);
       removed = true;
-      this.policy.notifySocket(invite.primarySocket, {
+      if (invite.primarySocket) this.policy.notifySocket(invite.primarySocket, {
         type: 'choir-secondary-consent-status', status: 'withdrawn',
         roomEpoch: invite.scope.roomEpoch, secondaryId,
       });
@@ -175,7 +230,7 @@ export class ChoirSecondaryConsentExperiment {
     this.sweep(nowMs);
     return [...this.pending.values()].some(p => p.accepted
       && p.primaryId === primaryId && p.secondaryId === secondaryId
-      && p.scope.roomEpoch === roomEpoch
+      && (p.join || p.scope.roomEpoch === roomEpoch)
       && this.validInvite(p, nowMs));
   }
 
@@ -190,7 +245,7 @@ export class ChoirSecondaryConsentExperiment {
     return this.hasConsent(primaryId, secondaryId, roomEpoch, nowMs)
       && [...this.pending.values()].some(p => p.accepted
         && p.primaryId === primaryId && p.secondaryId === secondaryId
-        && p.scope.roomEpoch === roomEpoch
+        && (p.join || p.scope.roomEpoch === roomEpoch)
         && p.consentSocket === socket
         && socket.participantId === secondaryId
         && this.validInvite(p, nowMs));
@@ -203,7 +258,7 @@ export class ChoirSecondaryConsentExperiment {
       reason, roomEpoch: invite.scope.roomEpoch,
       secondaryId: invite.secondaryId,
     };
-    if (this.policy.socketOpen(invite.primarySocket))
+    if (invite.primarySocket && this.policy.socketOpen(invite.primarySocket))
       this.policy.notifySocket(invite.primarySocket, notice);
     if (invite.consentSocket && this.policy.socketOpen(invite.consentSocket))
       this.policy.notifySocket(invite.consentSocket, notice);

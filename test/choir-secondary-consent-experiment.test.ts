@@ -170,3 +170,55 @@ describe('default-off Choir B secondary consent state machine', () => {
     assert.equal(socketClose.consent.hasConsent(A, B, 1, 20), false);
   });
 });
+
+describe('B joins the Mic owner by its own press', () => {
+  test('joining needs no song and survives pauses, seeks, song changes and Takes', () => {
+    const f = fixture();
+    f.setScope(null);
+    assert.equal(f.consent.join(f.b, A, 0), true);
+    assert.deepEqual(f.consent.activeJoin(0), { primaryId: A, secondaryId: B });
+    assert.equal(f.delivered.at(-1)?.payload.status, 'accepted');
+    assert.equal(f.delivered.at(-1)?.payload.joined, true);
+    // Any room the server creates for this pair carries the join.
+    for (const roomEpoch of [1, 2, 7]) assert.equal(f.consent.hasConsent(A, B, roomEpoch, 10), true);
+    assert.equal(f.consent.hasConsentOnSocket(A, B, 2, f.b, 10), true);
+    assert.equal(f.consent.hasConsentOnSocket(A, B, 2, f.anotherB, 10), false, 'only the tab that joined');
+    f.setScope({ roomEpoch: 3, playbackRevision: 9, videoId: 'zyxwvutsrqp', backingGeneration: 1, robotSourceGeneration: 2 });
+    f.setRecording(true);
+    assert.deepEqual(f.consent.activeJoin(60_000), { primaryId: A, secondaryId: B });
+  });
+
+  test('nobody can join without another Mic owner, nor while a different B is in', () => {
+    const f = fixture();
+    assert.equal(f.consent.join(f.b, null, 0), false, 'no Mic owner');
+    assert.equal(f.consent.join(f.a, A, 0), false, 'the Mic owner is not their own second singer');
+    assert.equal(f.consent.join(f.b, A, 0), true);
+    assert.equal(f.consent.join(f.b, A, 1), true, 'joining again is a no-op');
+    assert.equal(f.consent.join(f.attacker, A, 2), false, 'one second singer per Mic owner');
+    assert.equal(f.consent.activeJoin(3)?.secondaryId, B);
+  });
+
+  test('the join ends when A gives up the Mic, B disconnects or B leaves', () => {
+    const owner = fixture();
+    owner.consent.join(owner.b, A, 0);
+    owner.changeOwner(C);
+    assert.equal(owner.consent.activeJoin(1), null);
+
+    const presence = fixture();
+    presence.consent.join(presence.b, A, 0);
+    presence.changeBPresence(false);
+    assert.equal(presence.consent.activeJoin(1), null);
+
+    const closed = fixture();
+    closed.consent.join(closed.b, A, 0);
+    closed.b.open = false;
+    assert.equal(closed.consent.disconnected(closed.b), true);
+    assert.equal(closed.consent.activeJoin(1), null);
+
+    const left = fixture();
+    left.consent.join(left.b, A, 0);
+    assert.equal(left.consent.withdraw(left.b, 1), true);
+    assert.equal(left.consent.activeJoin(2), null);
+    assert.equal(left.consent.hasConsent(A, B, 1, 2), false);
+  });
+});

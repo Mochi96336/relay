@@ -36,21 +36,44 @@ test('normal N=1 shows no Choir invitation UI without explicit server availabili
     document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
-test('mobile host can choose B and send invitation-only command without starting Mic', async ({ page }) => {
+test('only someone other than the Mic owner sees + Second Mic, and one tap joins and starts capture', async ({ page }) => {
+  const enable = () => page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('relay-choir-consent-availability', { detail: { available: true } }));
+    window.dispatchEvent(new CustomEvent('relay-choir-media-mode', { detail: { enabled: true } }));
+  });
   await openFixture(page, 'owner', 'owner');
-  await page.evaluate(() => window.dispatchEvent(
-    new CustomEvent('relay-choir-consent-availability', { detail: { available: true } }),
-  ));
+  await enable();
+  await expect(page.locator('#choir-invite-open')).toBeHidden();
+
+  await openFixture(page, 'singerB', null);
+  await enable();
+  await expect(page.locator('#choir-invite-open')).toBeHidden();
+
+  await openFixture(page, 'singerB', 'owner');
+  await enable();
+  await page.evaluate(() => {
+    window.__choirCaptureStarts = 0;
+    window.addEventListener('relay-choir-start-secondary-capture',
+      () => { window.__choirCaptureStarts++; });
+  });
   const open = page.locator('#choir-invite-open');
   await expect(open).toBeVisible();
+  await expect(page.locator('#choir-room-begin')).toBeHidden();
+  await expect(page.locator('#choir-secondary-connect')).toBeHidden();
   await open.click();
-  await expect(page.locator('#choir-consent-panel')).toBeVisible();
-  await expect(page.locator('#choir-secondary-person option')).toHaveCount(1);
-  await expect(page.locator('#choir-secondary-person')).toHaveValue('singerB');
+  expect(await page.evaluate(() => ({
+    starts: window.__choirCaptureStarts, commands: window.__choirSent,
+  }))).toEqual({ starts: 1, commands: [{ type: 'choir-secondary-join' }] });
+  await expect(page.locator('#choir-consent-status')).toContainText('正在加入副 Mic');
   await expect(page.locator('#choir-consent-note')).toContainText('兩人都完成時間對齊後');
-  await page.locator('#choir-invite-send').click();
-  const sent = await page.evaluate(() => window.__choirSent);
-  expect(sent).toEqual([{ type: 'choir-secondary-invite', secondaryId: 'singerB' }]);
+
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('relay-choir-consent-message', {
+    detail: { type: 'choir-secondary-consent-status', status: 'accepted',
+      secondaryId: 'singerB', primaryId: 'owner', joined: true },
+  })));
+  await expect(page.locator('#choir-consent-status')).toContainText('已加入副 Mic');
+  await expect(page.locator('#choir-withdraw')).toBeVisible();
+  await expect(open).toBeHidden();
   await expect.poll(() => page.evaluate(() =>
     document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
@@ -103,60 +126,4 @@ test('mobile B explicitly accepts and withdraws; disconnect hides stale authoriz
   )));
   await expect(page.locator('#choir-consent-panel')).toBeHidden();
   await expect(page.locator('#choir-withdraw')).toBeHidden();
-});
-
-test('double opt-in shows explicit A room creation and B isolated media request only after consent', async ({ page }) => {
-  await openFixture(page, 'owner', 'owner');
-  await page.evaluate(() => {
-    window.dispatchEvent(new CustomEvent('relay-choir-consent-availability', {
-      detail: { available: true },
-    }));
-    window.dispatchEvent(new CustomEvent('relay-choir-media-mode', {
-      detail: { enabled: true },
-    }));
-  });
-  await page.locator('#choir-invite-open').click();
-  await expect(page.locator('#choir-room-begin')).toBeHidden();
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent(
-    'relay-choir-consent-message', {
-      detail: { type: 'choir-secondary-consent-status', status: 'accepted',
-        secondaryId: 'singerB', roomEpoch: 1 },
-    },
-  )));
-  await expect(page.locator('#choir-room-begin')).toBeVisible();
-  await page.locator('#choir-room-begin').click();
-  expect((await page.evaluate(() => window.__choirSent)).at(-1)).toEqual({
-    type: 'choir-room-begin', secondaryId: 'singerB',
-  });
-  await expect.poll(() => page.evaluate(() =>
-    document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-
-  await openFixture(page, 'singerB', 'owner');
-  await page.evaluate(() => {
-    window.dispatchEvent(new CustomEvent('relay-choir-consent-availability', {
-      detail: { available: true },
-    }));
-    window.dispatchEvent(new CustomEvent('relay-choir-media-mode', {
-      detail: { enabled: true },
-    }));
-    window.dispatchEvent(new CustomEvent('relay-choir-consent-message', {
-      detail: { type: 'choir-secondary-invitation',
-        inviteId: 'test-invite', primaryId: 'owner', roomEpoch: 1 },
-    }));
-    window.dispatchEvent(new CustomEvent('relay-choir-consent-message', {
-      detail: { type: 'choir-secondary-consent-status',
-        status: 'accepted', secondaryId: 'singerB', roomEpoch: 1 },
-    }));
-  });
-  await expect(page.locator('#choir-secondary-connect')).toBeVisible();
-  await page.evaluate(() => {
-    window.__choirCaptureStarts = 0;
-    window.addEventListener('relay-choir-start-secondary-capture',
-      () => { window.__choirCaptureStarts++; });
-  });
-  await page.locator('#choir-secondary-connect').click();
-  expect(await page.evaluate(() => ({
-    starts: window.__choirCaptureStarts, commands: window.__choirSent,
-  }))).toEqual({ starts: 1, commands: [] });
-  await expect(page.locator('#choir-consent-note')).toContainText('兩人都完成時間對齊後');
 });

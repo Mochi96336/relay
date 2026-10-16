@@ -10,9 +10,11 @@ RELAY_CHOIR_MEDIA_EXPERIMENT=1   # only together with RELAY_CHOIR_SHADOW
 ## Roles
 
 - **A** is the normal Mic owner and keeps the existing Take Mic / Take Over Mic flow and its publisher socket.
-- **B** is invited by A through **+ 副 Mic** and must accept on B's own page.
+- **B** is anyone else. B presses **+ 副 Mic**, and that one tap starts B's microphone and joins B to whoever holds the Mic. There is one B at a time, and A does not approve.
+- A join is not tied to a song. It lasts while A holds the Mic and B's page stays connected, across pauses, seeks and Takes.
+- Whenever a song plays and there is no duet room, the server creates one (`beginJoinedChoirRoom()`) and sends B `choir-room-ready`. B's page then claims its media socket. A seek or song change retires the room, and the next one is created the same way.
 - B never becomes the N=1 publisher and has no room song commands.
-- If A leaves, B keeps its seat but is **not promoted**. Someone has to take the Mic explicitly.
+- If A gives up the Mic, B's join ends. B is **not promoted**; someone has to take the Mic explicitly.
 
 ## Path
 

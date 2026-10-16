@@ -3,11 +3,14 @@ import { wsUrl } from './ws-url.js';
 import { ChoirSecondaryCapture } from './choir-secondary-capture.js';
 
 /**
- * Double-opt-in isolated secondary publisher. An explicit B click prepares
- * a separate AudioContext + existing capture Worklet, with actual native
- * sample rate and monotonically positioned PCM. It may transmit v2 binary
- * ONLY after a freshly verified server Media Epoch has been bound.
- * The server remains acoustically muted until separate trusted Content proof.
+ * The second singer's publisher. B's own click on + Second Mic prepares a
+ * separate AudioContext + existing capture Worklet, with actual native sample
+ * rate and monotonically positioned PCM, and keeps it running while B is in.
+ * It transmits v2 binary ONLY on a media socket bound to a server-issued
+ * Media Epoch. It asks for one whenever the server says a duet room is ready,
+ * which happens when a song plays and again after each seek or song change,
+ * so B never has to press anything twice. The server keeps B silent until
+ * both singers are aligned.
  *
  * Claim tokens exist only in an event-local closure and are never put in
  * URL parameters, browser storage, logs or page text.
@@ -17,6 +20,8 @@ let mediaSocket = null;
 let awaitingClaim = false;
 let attempt = 0;
 let claimTimer = null;
+/** The latest room the server announced, waiting for capture to be ready. */
+let roomReady = false;
 const capture = new ChoirSecondaryCapture(() => disconnect());
 
 function notify(state) {
@@ -24,15 +29,40 @@ function notify(state) {
     detail: { state },
   }));
 }
+/** Stops everything: B left, was refused, or capture failed. */
 function disconnect() {
+  roomReady = false;
+  closeMedia();
+  capture.stop();
+}
+
+/** Drops the media socket only; capture keeps running for the next room. */
+function closeMedia() {
   ++attempt;
   awaitingClaim = false;
   if (claimTimer !== null) clearTimeout(claimTimer);
   claimTimer = null;
-  capture.stop();
   const old = mediaSocket;
   mediaSocket = null;
   if (old && old.readyState !== WebSocket.CLOSED) old.close();
+}
+
+/** Asks for a Media Epoch for the announced room, once capture is ready. */
+function requestClaim() {
+  if (!enabled || !roomReady || capture.rate === null || awaitingClaim) return;
+  closeMedia();
+  const current = attempt;
+  awaitingClaim = true;
+  roomReady = false;
+  window.dispatchEvent(new CustomEvent('relay-choir-consent-command', {
+    detail: { type: 'choir-secondary-media-claim-request' },
+  }));
+  claimTimer = setTimeout(() => {
+    if (attempt === current && awaitingClaim) {
+      awaitingClaim = false;
+      notify('claim-timeout');
+    }
+  }, 20_000);
 }
 
 window.addEventListener('relay-choir-media-mode', (event) => {
@@ -41,41 +71,40 @@ window.addEventListener('relay-choir-media-mode', (event) => {
 });
 window.addEventListener('relay-choir-consent-message', (event) => {
   const msg = event.detail;
-  if (msg?.type === 'choir-secondary-consent-status'
+  if ((msg?.type === 'choir-secondary-consent-status'
     && ['withdrawn', 'revoked'].includes(msg.status)
-    && msg.secondaryId === window.relayParticipantId) disconnect();
+    && msg.secondaryId === window.relayParticipantId)
+    || msg?.type === 'choir-consent-rejected') disconnect();
 });
 
+let preparing = false;
 window.addEventListener('relay-choir-start-secondary-capture', async () => {
-  if (!enabled || awaitingClaim || mediaSocket) return;
-  const current = ++attempt;
-  awaitingClaim = true;
+  if (!enabled || preparing || capture.rate !== null) return;
+  preparing = true;
   // The user's physical click initiates getUserMedia (not a server reply).
   // This path is NEVER started by an automatic invitation or login.
   try {
     const sourceRate = await capture.prepare();
-    if (attempt !== current || !enabled || !sourceRate) return;
-    window.dispatchEvent(new CustomEvent('relay-choir-consent-command', {
-      detail: { type: 'choir-secondary-media-claim-request' },
-    }));
-    claimTimer = setTimeout(() => {
-      if (attempt === current && awaitingClaim) {
-        disconnect();
-        notify('claim-timeout');
-      }
-    }, 20_000);
+    if (!enabled || !sourceRate) return;
+    requestClaim();
   } catch {
-    if (attempt === current) {
-      disconnect();
-      notify('capture-failed');
-    }
+    disconnect();
+    notify('capture-failed');
+  } finally {
+    preparing = false;
   }
 });
 
 window.addEventListener('relay-choir-media-message', (event) => {
   if (!enabled) return;
+  if (event.detail?.type === 'choir-room-ready') {
+    roomReady = true;
+    requestClaim();
+    return;
+  }
   if (event.detail?.type === 'choir-media-rejected' && awaitingClaim) {
-    disconnect();
+    // No room yet, or it was just retired: wait for the next one.
+    closeMedia();
     notify('claim-rejected');
     return;
   }
@@ -131,7 +160,9 @@ window.addEventListener('relay-choir-media-message', (event) => {
   });
   socket.addEventListener('close', () => {
     if (socket !== mediaSocket) return;
-    disconnect();
+    // The room was retired (seek, song change) or the link dropped; keep the
+    // microphone and reconnect when the server announces the next room.
+    closeMedia();
     notify('disconnected');
   });
   socket.addEventListener('error', () => {

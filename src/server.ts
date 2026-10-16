@@ -2474,6 +2474,7 @@ const mixerTimer = setInterval(() => {
     if (levelChanged) reportMicLevel('window');
   });
   reportMicTimelineFolds();
+  beginJoinedChoirRoom(performance.now());
   syncDuetOutput();
   // The duet room's own rendered frames stay numeric proof evidence only; B
   // reaches Listen and Take through the room output (syncDuetOutput above).
@@ -4839,48 +4840,14 @@ function handleChoirMediaMessage(socket: RelaySocket, payload: Record<string, un
   const nowMs = performance.now();
   if (type === 'choir-room-begin') {
     const secondaryId = normalizeParticipantId(payload.secondaryId);
-    const roomEpoch = choirRestartCoordinator.proposedRoomEpochForConsent;
-    const leaderStatus = youtubeTimeline.statusPayload(nowMs);
-    // An active authenticated N=1 v2 capture must belong to A.
-    // Its already-admitted PCM is mirrored into Choir's SEPARATE bounded
-    // proof room only; its production MixBus route remains untouched.
-    const actualPublisher = [...wss.clients].some(raw =>
-      (raw as RelaySocket).participantId === socket.participantId
-      && micRuntime.isPublisher(raw as RelaySocket));
-    const canStart = Boolean(secondaryId && roomEpoch !== null
-      && actualPublisher
-      && participants.micOwnerId === socket.participantId
-      && choirConsent.hasConsent(socket.participantId, secondaryId!, roomEpoch!, nowMs)
-      && Number.isSafeInteger(leaderStatus.revision)
-      && choirRestartCoordinator.approveTrustedRestart({
-        actorParticipantId: socket.participantId,
-        primaryId: socket.participantId,
-        secondaryId: secondaryId!,
-        expectedRetiredRoomEpoch: roomEpoch! - 1,
-        expectedPlaybackRevision: leaderStatus.revision,
-        nowMs,
-      }));
-    if (!canStart) {
-      sendJson(socket, { type: 'choir-media-rejected', reason: 'room-not-authorized' });
+    const result = secondaryId
+      ? beginChoirRoom(socket.participantId, secondaryId, socket.connectionIncarnation, nowMs)
+      : 'room-not-authorized';
+    if (typeof result === 'string') {
+      sendJson(socket, { type: 'choir-media-rejected', reason: result });
       return true;
     }
-    const status = choirRestartCoordinator.preview();
-    const ticket = choirRestartCoordinator.admitVerifiedSinger({
-      roomEpoch: status.roomEpoch!, songEpoch: status.songEpoch!,
-      verifiedParticipantId: socket.participantId,
-      transportId: `choir-primary:${socket.connectionIncarnation}`,
-      nowMs,
-    });
-    if (!ticket || !choirSourceMirror?.bindPrimary(ticket, nowMs)) {
-      choirRestartCoordinator.retireFailedPrimaryAdmission(nowMs);
-      sendJson(socket, { type: 'choir-media-rejected', reason: 'primary-join-failed' });
-      return true;
-    }
-    sendJson(socket, {
-      type: 'choir-room-ready', roomEpoch: ticket.roomEpoch,
-      songEpoch: ticket.songEpoch, primary: 'awaiting-content',
-      secondary: 'join-required',
-    });
+    sendJson(socket, result);
     return true;
   }
   if (type === 'choir-secondary-media-claim-request') {
@@ -4916,9 +4883,82 @@ function handleChoirMediaMessage(socket: RelaySocket, payload: Record<string, un
   return true;
 }
 
+/**
+ * Approves a duet room for A (the Mic owner) and B, and admits A. `transport`
+ * names A's connection inside the room. Returns the ready message, or why not.
+ */
+function beginChoirRoom(primaryId: string, secondaryId: string, transport: number, nowMs: number):
+  Record<string, unknown> | 'room-not-authorized' | 'primary-join-failed' {
+  if (!choirRestartCoordinator || !choirConsent || !choirSourceMirror) return 'room-not-authorized';
+  const roomEpoch = choirRestartCoordinator.proposedRoomEpochForConsent;
+  const leaderStatus = youtubeTimeline.statusPayload(nowMs);
+  // An active authenticated N=1 v2 capture must belong to A.
+  // Its already-admitted PCM is mirrored into Choir's SEPARATE bounded
+  // proof room only; its production MixBus route remains untouched.
+  const actualPublisher = [...wss.clients].some(raw =>
+    (raw as RelaySocket).participantId === primaryId
+    && micRuntime.isPublisher(raw as RelaySocket));
+  const canStart = Boolean(roomEpoch !== null
+    && actualPublisher
+    && participants.micOwnerId === primaryId
+    && choirConsent.hasConsent(primaryId, secondaryId, roomEpoch, nowMs)
+    && Number.isSafeInteger(leaderStatus.revision)
+    && choirRestartCoordinator.approveTrustedRestart({
+      actorParticipantId: primaryId,
+      primaryId,
+      secondaryId,
+      expectedRetiredRoomEpoch: roomEpoch! - 1,
+      expectedPlaybackRevision: leaderStatus.revision,
+      nowMs,
+    }));
+  if (!canStart) return 'room-not-authorized';
+  const status = choirRestartCoordinator.preview();
+  const ticket = choirRestartCoordinator.admitVerifiedSinger({
+    roomEpoch: status.roomEpoch!, songEpoch: status.songEpoch!,
+    verifiedParticipantId: primaryId,
+    transportId: `choir-primary:${transport}`,
+    nowMs,
+  });
+  if (!ticket || !choirSourceMirror.bindPrimary(ticket, nowMs)) {
+    choirRestartCoordinator.retireFailedPrimaryAdmission(nowMs);
+    return 'primary-join-failed';
+  }
+  return {
+    type: 'choir-room-ready', roomEpoch: ticket.roomEpoch,
+    songEpoch: ticket.songEpoch, primary: 'awaiting-content',
+    secondary: 'join-required',
+  };
+}
+
+/**
+ * A joined B needs no button press on A's side: once a song plays and no
+ * duet room exists, the server creates one for the current Mic owner and B,
+ * and tells B so its page claims the second-Mic media. A seek or song change
+ * retires the room; the next tick creates a fresh one the same way.
+ */
+let lastJoinedRoomAttemptMs = Number.NEGATIVE_INFINITY;
+function beginJoinedChoirRoom(nowMs: number) {
+  if (!choirMediaEnabled || !choirRestartCoordinator || !choirConsent) return;
+  if (nowMs - lastJoinedRoomAttemptMs < 250) return;
+  lastJoinedRoomAttemptMs = nowMs;
+  const joined = choirConsent.activeJoin(nowMs);
+  if (!joined) return;
+  const view = choirRestartCoordinator.preview();
+  if (view.roomEpoch !== null) return;
+  if (choirRestartCoordinator.proposedRoomEpochForConsent === null) return;
+  const publisher = micRuntime.publisher as RelaySocket | null | undefined;
+  if (!publisher || publisher.participantId !== joined.primaryId) return;
+  const result = beginChoirRoom(joined.primaryId, joined.secondaryId, publisher.connectionIncarnation, nowMs);
+  if (typeof result === 'string') return;
+  for (const raw of wss.clients) {
+    const target = raw as RelaySocket;
+    if (target.participantId === joined.secondaryId && target.role === 'unknown') sendJson(target, result);
+  }
+}
+
 function handleChoirConsentMessage(socket: RelaySocket, payload: Record<string, unknown>): boolean {
   const type = payload.type;
-  if (!['choir-secondary-invite', 'choir-secondary-accept',
+  if (!['choir-secondary-invite', 'choir-secondary-accept', 'choir-secondary-join',
     'choir-secondary-decline', 'choir-secondary-withdraw'].includes(String(type))) return false;
   // No anonymous/legacy/infrastructure, production Mic/backing or attached
   // Choir PCM-only sockets are eligible to mutate consent state.
@@ -4939,6 +4979,16 @@ function handleChoirConsentMessage(socket: RelaySocket, payload: Record<string, 
       && choirConsent.respond(socket, inviteId, type === 'choir-secondary-accept', nowMs);
   } else if (type === 'choir-secondary-withdraw') {
     accepted = choirConsent.withdraw(socket, nowMs);
+  } else if (type === 'choir-secondary-join') {
+    // The joiner never names the other singer: it is whoever holds the Mic.
+    accepted = participants.micOwnerId !== null
+      && micRuntime.mediaOwnerId === participants.micOwnerId
+      && choirConsent.join(socket, participants.micOwnerId, nowMs);
+    if (accepted) {
+      // A song may already be playing: start now rather than on the next tick.
+      lastJoinedRoomAttemptMs = Number.NEGATIVE_INFINITY;
+      beginJoinedChoirRoom(nowMs);
+    }
   }
   if (!accepted) sendJson(socket, { type: 'choir-consent-rejected', reason: 'invalid-or-stale' });
   else if (type === 'choir-secondary-invite')

@@ -23,7 +23,7 @@ export declare function decideFollowerAction(
   room: ProjectedFollowerRoom | null,
   local: {
     ready: boolean; videoId: string | null; positionSeconds: number;
-    playbackRate: number; playerState: number;
+    playbackRate: number; playerState: number; rateAttempted?: boolean;
   },
   nowMs: number,
   lastSeekAtMs: number,

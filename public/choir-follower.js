@@ -24,6 +24,23 @@ let apiPromise = null;
 let autoplayBlocked = false;
 let statusKey = null;
 let localBackingAudibleRole = false;
+let readyTimer = null;
+let startAttempts = 0;
+let retryAtMs = 0;
+let attemptedRate = null;
+
+function setLocalPlayback(active) {
+  if (active === localBackingAudibleRole) return;
+  localBackingAudibleRole = active;
+  window.dispatchEvent(new CustomEvent('relay-choir-local-playback', {
+    detail: { active },
+  }));
+}
+function failInitialization() {
+  resetPlayer();
+  retryAtMs = performance.now() + 5_000;
+  setStatus('choir.followerVideoError');
+}
 
 function setStatus(key) {
   if (statusKey === key) return;
@@ -40,6 +57,10 @@ function formatTime(seconds) {
 }
 function resetPlayer() {
   generation++;
+  clearTimeout(readyTimer);
+  readyTimer = null;
+  setLocalPlayback(false);
+  attemptedRate = null;
   try { player?.pauseVideo(); } catch {}
   try { player?.destroy(); } catch {}
   player = null;
@@ -60,16 +81,13 @@ function currentRoom() {
 function showFollower() {
   const visible = eligible && role === 'observer'
     && /^[A-Za-z0-9_-]{11}$/.test(latestRoom?.videoId ?? '');
-  if (visible !== localBackingAudibleRole) {
-    localBackingAudibleRole = visible;
-    window.dispatchEvent(new CustomEvent('relay-choir-local-playback', {
-      detail: { active: visible },
-    }));
-  }
   if (host) host.hidden = !visible;
   if (positionNode) positionNode.hidden = !visible;
   if (stage) stage.dataset.choirFollower = visible ? 'active' : 'off';
   if (!visible) {
+    startAttempts = 0;
+    retryAtMs = 0;
+    setLocalPlayback(false);
     if (player || starting) resetPlayer();
     setStatus(null);
     return;
@@ -122,9 +140,14 @@ function loadYouTubeAPI() {
 }
 
 async function startPlayer() {
-  if (!host || !eligible || role !== 'observer' || starting || player) return;
+  if (!host || !eligible || role !== 'observer' || starting || player
+    || startAttempts >= 3 || performance.now() < retryAtMs) return;
+  startAttempts++;
   starting = true;
   const ownGeneration = ++generation;
+  readyTimer = setTimeout(() => {
+    if (ownGeneration === generation && !playerReady) failInitialization();
+  }, 10_000);
   setStatus('choir.followerLoading');
   try {
     const YT = await loadYouTubeAPI();
@@ -137,17 +160,26 @@ async function startPlayer() {
       events: {
         onReady: () => {
           if (ownGeneration !== generation) return;
+          clearTimeout(readyTimer);
+          readyTimer = null;
           playerReady = true;
           starting = false;
           tick();
         },
         onAutoplayBlocked: () => {
           if (ownGeneration !== generation) return;
+          setLocalPlayback(false);
           autoplayBlocked = true;
           setStatus('choir.followerTapPlay');
         },
         onStateChange: (event) => {
           if (ownGeneration !== generation) return;
+          if (event.data === 1 && failedVideoId === latestRoom?.videoId) {
+            try { player?.pauseVideo(); } catch {}
+            return;
+          }
+          setLocalPlayback(event.data === 1 && eligible && role === 'observer'
+            && Boolean(currentRoom()));
           if (event.data === 1) {
             autoplayBlocked = false;
             setStatus(null);
@@ -155,6 +187,8 @@ async function startPlayer() {
         },
         onError: () => {
           if (ownGeneration !== generation) return;
+          if (!playerReady) { failInitialization(); return; }
+          setLocalPlayback(false);
           failedVideoId = localVideoId;
           setStatus('choir.followerVideoError');
           try { player?.pauseVideo(); } catch {}
@@ -163,8 +197,7 @@ async function startPlayer() {
     });
   } catch {
     if (ownGeneration !== generation) return;
-    resetPlayer();
-    setStatus('choir.followerVideoError');
+    failInitialization();
   }
 }
 
@@ -172,6 +205,7 @@ function tick() {
   if (!eligible || role !== 'observer') return;
   const room = currentRoom();
   if (!room) {
+    setLocalPlayback(false);
     if (playerReady) try { player.pauseVideo(); } catch {}
     setStatus('choir.followerRoomStale');
     return;
@@ -192,16 +226,20 @@ function tick() {
       positionSeconds: Number(player.getCurrentTime()),
       playbackRate: Number(player.getPlaybackRate()),
       playerState: Number(player.getPlayerState()),
+      rateAttempted: attemptedRate === room.playbackRate,
     };
   } catch {
     setStatus('choir.followerLoading');
     return;
   }
+  setLocalPlayback(local.playerState === 1);
   const nowMs = performance.now();
   const action = decideFollowerAction(room, local, nowMs, lastSeekAtMs);
   try {
     switch (action.type) {
       case 'cue':
+        attemptedRate = null;
+        setLocalPlayback(false);
         localVideoId = action.videoId;
         lastSeekAtMs = nowMs;
         player.cueVideoById({ videoId: action.videoId, startSeconds: action.positionSeconds });
@@ -210,7 +248,9 @@ function tick() {
         player.pauseVideo();
         break;
       case 'rate':
-        player.setPlaybackRate(action.playbackRate);
+        // A refused/unsupported rate must not starve play or seek forever.
+        attemptedRate = action.playbackRate;
+        try { player.setPlaybackRate(action.playbackRate); } catch {}
         break;
       case 'seek':
         lastSeekAtMs = nowMs;
@@ -226,6 +266,8 @@ function tick() {
         break;
     }
   } catch {
+    setLocalPlayback(false);
+    try { player?.pauseVideo(); } catch {}
     setStatus('choir.followerVideoError');
     return;
   }
@@ -270,12 +312,6 @@ window.addEventListener('relay-locale-changed', () => {
   setStatus(previous);
 });
 window.addEventListener('pagehide', () => {
-  if (localBackingAudibleRole) {
-    localBackingAudibleRole = false;
-    window.dispatchEvent(new CustomEvent('relay-choir-local-playback', {
-      detail: { active: false },
-    }));
-  }
   resetPlayer();
 });
 if (stage && host && positionNode && statusNode) {

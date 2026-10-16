@@ -18,8 +18,9 @@ paused after an actual attempt, a minimal note says to tap Play **on the same
 existing player**. Such a tap is a fallback, not an additional Relay join step.
 
 B's local YouTube replaces B's **room Monitor sound**, not the user's mute
-preference. While B owns a local follower in Song, Listen overlays the existing
-`song-owned` forced-mute reason; withdrawing consent or changing roles removes
+preference. Only while B's local follower reports actual playback, Listen overlays the
+existing `song-owned` forced-mute reason. Loading, autoplay refusal, playback
+failure, stale room status, withdrawing consent or changing roles removes
 the overlay. This avoids hearing the same Robot accompaniment twice on B.
 
 The primary room player's iframe stays separate and hidden in B's observer
@@ -51,3 +52,12 @@ Real Android/iOS YouTube playback and autoplay, headphone/route-change
 measurements, real B Content evidence, verified Sample/Boot transitions and
 explicit N=2 Monitor remain outstanding. Existing N=1 behavior stays behind
 both flags being off. Do not merge this stacked PR to main.
+
+
+## Follower failure recovery
+
+Player initialization has a ten-second deadline, with at most three attempts
+separated by five seconds. Retired iframe callbacks cannot revive playback or
+mute Monitor. Leaving and rejoining the follower resets the retry budget.
+A rejected playback-rate request is attempted once per target rate/video;
+play and position correction continue even when the player refuses that rate.

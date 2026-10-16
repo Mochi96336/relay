@@ -39,7 +39,7 @@ export function decideFollowerAction(room, local, nowMs, lastSeekAtMs) {
   if (!Number.isFinite(driftMs)) return { type: 'none', driftMs: null };
   if (!room.playing && local.playerState === 1) return { type: 'pause', driftMs };
   if (local.playerState === 3) return { type: 'none', driftMs }; // buffering
-  if (Math.abs(local.playbackRate - room.playbackRate) > 0.01) {
+  if (!local.rateAttempted && Math.abs(local.playbackRate - room.playbackRate) > 0.01) {
     return { type: 'rate', playbackRate: room.playbackRate, driftMs };
   }
   if (Math.abs(driftMs) >= FOLLOWER_SEEK_THRESHOLD_MS) {

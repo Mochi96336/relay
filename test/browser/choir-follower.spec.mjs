@@ -4,6 +4,10 @@ const BASE = process.env.RELAY_INTERACTION_URL ?? 'http://127.0.0.1:4173/';
 test.use({ viewport: { width: 390, height: 844 } });
 
 async function openFollowerFixture(page, { blocked = false } = {}) {
+  // Deterministic fixture: YouTube is mocked below; external assets must not
+  // hold navigation open when the network is slow or unavailable.
+  await page.route('**/*', route => new URL(route.request().url()).origin === new URL(BASE).origin
+    ? route.continue() : route.abort());
   await page.goto(new URL('__live-visual.html', BASE).href);
   await expect.poll(() => page.evaluate(() => window.__relayVisualReady === true)).toBe(true);
   await page.evaluate(async (blocked) => {
@@ -66,7 +70,7 @@ test('B keeps ordinary Song layout and follows automatically after consent', asy
     detail: { enabled: true },
   })));
   await expect(page.locator('#choir-follower-player')).toBeVisible();
-  expect((await page.evaluate(() => window.__choirLocalAudibility)).at(-1)).toBe(true);
+  await expect.poll(() => page.evaluate(() => window.__choirLocalAudibility.at(-1))).toBe(true);
   await expect(page.locator('#song-observer')).toBeHidden();
   await expect(page.locator('.youtube-player-shell')).toBeVisible();
   await expect(page.locator('#youtube-player')).toBeHidden();
@@ -104,4 +108,16 @@ test('manual Play hint appears only when browser actually blocks local autoplay'
   await page.evaluate(() => window.__emitFollowerRoom({ role: 'holder' }));
   await expect(page.locator('#choir-follower-player')).toBeHidden();
   expect((await page.evaluate(() => window.__followerCalls)).some(x => x[0] === 'destroy')).toBe(true);
+});
+
+
+test('video failure restores Monitor availability without withdrawing consent', async ({ page }) => {
+  await openFollowerFixture(page);
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('relay-choir-guest-state', {
+    detail: { enabled: true },
+  })));
+  await expect.poll(() => page.evaluate(() => window.__choirLocalAudibility.at(-1))).toBe(true);
+  await page.evaluate(() => window.__localFollower.config.events.onError());
+  await expect.poll(() => page.evaluate(() => window.__choirLocalAudibility.at(-1))).toBe(false);
+  await expect(page.locator('#choir-follower-player')).toBeVisible();
 });

@@ -61,3 +61,13 @@ separated by five seconds. Retired iframe callbacks cannot revive playback or
 mute Monitor. Leaving and rejoining the follower resets the retry budget.
 A rejected playback-rate request is attempted once per target rate/video;
 play and position correction continue even when the player refuses that rate.
+
+
+## Asynchronous Content timing
+
+Each server-owned six-second PCM snapshot must end within one second of
+the room clock when prepared. The existing 2.5-second analysis lease then
+bounds Worker result staging and commit; FFT processing time does not count
+against that one-second source-ingest skew. Room, song, capture, mapping and
+media identity are still rechecked at acceptance. Synchronous Content retains
+its original live-window freshness gate. This does not enable Choir output.

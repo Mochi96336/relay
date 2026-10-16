@@ -518,6 +518,66 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     }
   });
 
+  test('Worker analysis lease preserves fresh snapshots without accepting expired or replayed results', () => {
+    const create = () => {
+      const coordinator = new ChoirDeadlineRoomExperiment({
+        sampleRate: RATE, frameMs: 20, prebufferMs: 400,
+        retentionMs: 3_000, roomEpochMs: 0, outputHoldbackMs: 200,
+        songEpoch: 7, backingGeneration: 9, videoId: 'abcdefghijk',
+        maxCatchupFrames: 8, reconnectGraceMs: 2_000, requireInitialContent: true,
+      });
+      const { a } = admitBoth(coordinator);
+      assert.equal(coordinator.setTrustedPlaybackMapping({
+        mappingEpoch: 1, videoId: 'abcdefghijk', songEpoch: 7,
+        backingGeneration: 9, robotCaptureGeneration: 9,
+        playbackRate: 1, playing: true,
+      }, 0), true);
+      for (let at = 20; at <= 6_000; at += 20) {
+        if (at % 2_000 === 0) {
+          const firstSampleIndex = (at - 2_000) * RATE / 1000;
+          const pcm = Buffer.from(new Int16Array(2 * RATE).fill(2000).buffer);
+          assert.equal(coordinator.receiveFromTransport('socket-A', {
+            generation: 7, firstSampleIndex, pcm,
+          }, RATE, at), true);
+          assert.equal(coordinator.receiveTrustedBacking({
+            generation: 9, firstSampleIndex, pcm,
+          }, RATE, at), true);
+        }
+        coordinator.renderDue(at);
+      }
+      const proof = coordinator.prepareTrustedWorkerContent('socket-A', a.mediaEpoch, 6_001);
+      assert.ok(proof);
+      const advance = (end: number) => {
+        for (let at = 6_020; at <= end; at += 20) coordinator.renderDue(at);
+      };
+      return { coordinator, a, proof, advance };
+    };
+    const result = { micLagMs: 120, confidence: .9 };
+    const fresh = create();
+    fresh.advance(7_200); // >1s analysis, within the existing 2.5s Worker lease.
+    assert.equal(fresh.coordinator.stageTrustedWorkerContent(fresh.proof, result, 7_201), true);
+    assert.equal(fresh.coordinator.commitTrustedCanonicalContent(
+      'socket-A', fresh.a.mediaEpoch, 7_202, false), 'applied');
+    assert.equal(fresh.coordinator.stageTrustedWorkerContent(fresh.proof, result, 7_203), false,
+      'completed Worker snapshot is one-shot');
+
+    const expired = create();
+    expired.advance(8_520);
+    assert.equal(expired.coordinator.stageTrustedWorkerContent(expired.proof, result, 8_521), false);
+
+    const lateCommit = create();
+    lateCommit.advance(7_200);
+    assert.equal(lateCommit.coordinator.stageTrustedWorkerContent(lateCommit.proof, result, 7_201), true);
+    for (let at = 7_220; at <= 8_520; at += 20) lateCommit.coordinator.renderDue(at);
+    assert.equal(lateCommit.coordinator.commitTrustedCanonicalContent(
+      'socket-A', lateCommit.a.mediaEpoch, 8_521, false), 'rejected');
+
+    const staleWindow = create();
+    assert.equal(staleWindow.coordinator.stageTrustedWorkerContent({
+      ...staleWindow.proof, endSample: staleWindow.proof.endSample - 2 * RATE,
+    }, result, 6_002), false, 'analysis lease never refreshes already old source audio');
+  });
+
   test('actual six-second canonical PCM grants a single fresh-epoch Content authority', () => {
     const coordinator = new ChoirDeadlineRoomExperiment({
       sampleRate: RATE, frameMs: 20, prebufferMs: 400,

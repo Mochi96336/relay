@@ -110,6 +110,7 @@ export class ChoirDeadlineRoomExperiment {
     songEpoch: number; backingGeneration: number; videoId: string;
     captureGeneration: number; sourceRate: number;
     revision: number; measuredAtMs: number; endSample: number; advanceMs: number;
+    workerPreparedAtMs?: number;
     mappingEpoch: number;
   }>();
   private nextFrameIndex = 0;
@@ -505,8 +506,10 @@ export class ChoirDeadlineRoomExperiment {
       || this.contentAttempts.get(proof.participantId) !== proof.attempt
       || nowMs < proof.preparedAtMs
       || nowMs - proof.preparedAtMs > 2_500
+      // The 1s source-window freshness gate applies at snapshot preparation;
+      // the separate 2.5s lease above bounds asynchronous analysis.
       || !Number.isSafeInteger(proof.endSample)
-      || Math.abs(Math.floor((nowMs - this.roomEpochMs) * this.sampleRate / 1000)
+      || Math.abs(Math.floor((proof.preparedAtMs - this.roomEpochMs) * this.sampleRate / 1000)
         - proof.endSample) > this.sampleRate) return false;
     const active = this.registry.activePublisherForTransport(proof.transportId);
     if (!active || active.participantId !== proof.participantId
@@ -529,6 +532,7 @@ export class ChoirDeadlineRoomExperiment {
       backingGeneration: this.backingGeneration, videoId: this.videoId,
       captureGeneration: proof.captureGeneration, sourceRate: proof.sourceRate,
       revision, measuredAtMs: proof.preparedAtMs, endSample: proof.endSample,
+      workerPreparedAtMs: proof.preparedAtMs,
       advanceMs: result.micLagMs, mappingEpoch: proof.mappingEpoch,
     });
     return true;
@@ -625,9 +629,14 @@ export class ChoirDeadlineRoomExperiment {
       || pending.mappingEpoch !== this.playbackMapping.mappingEpoch
       || !Number.isFinite(nowMs) || nowMs < pending.measuredAtMs
       || nowMs - pending.measuredAtMs > 20_000
-      // An old candidate cannot gain playback authority after the source
-      // window itself has become stale, even if it was analyzed only recently.
-      || Math.abs(Math.floor((nowMs - this.roomEpochMs) * this.sampleRate / 1000)
+      // Worker snapshots must be fresh when submitted, then finish inside
+      // the bounded analysis lease. Counting analysis time against the source
+      // window's 1s ingest skew would reject valid >1s FFT jobs on slower hosts.
+      // Synchronous candidates retain their original live-window freshness.
+      || (pending.workerPreparedAtMs !== undefined
+        && nowMs - pending.workerPreparedAtMs > 2_500)
+      || Math.abs(Math.floor(((pending.workerPreparedAtMs ?? nowMs)
+        - this.roomEpochMs) * this.sampleRate / 1000)
         - pending.endSample) > this.sampleRate) return 'rejected';
     const id = {
       participantId: active.participantId, mediaEpoch,

@@ -399,6 +399,11 @@ export class ChoirRoomRestartCoordinatorExperiment {
   }
 
   /** Authoritative room discontinuity; no transport auto-promotion. */
+  /** A singer's Content lag in the approved duet room, or null. */
+  singerAlignment(participantId: string) {
+    return this.approved ? this.handshake.singerAlignment(participantId) : null;
+  }
+
   preview(): ChoirRestartPreview {
     if (!this.approved) {
       return {

@@ -386,10 +386,27 @@ test('double opt-in A/B room issues real one-use v2 B Media Epoch but no N=1 aud
       + relay.stderr().slice(-2_500));
     assert.equal(bMedia.messages.some(m => m.type === 'registered'),
       false, 'B must remain outside the N=1 publisher path after calibration');
+    // B now sings in the room output, the mix Listen and Take carry, at A's
+    // advance plus B's measured lag difference.
+    const duetSecondary = async () =>
+      (await (await fetch(relay.httpUrl('/statusz'))).json()).audio?.duetSecondary ?? null;
+    let duet: any = null;
+    for (const until = Date.now() + 2_000; Date.now() < until; await sleep(30)) {
+      duet = await duetSecondary();
+      if (duet?.audible) break;
+    }
+    assert.equal(duet?.audible, true, `B joins the room mix after duet-ready: ${JSON.stringify(duet)}`);
+    assert.ok(Number.isFinite(duet.lagMs), 'B has a lag in room-output coordinates');
+    assert.ok(duet.bufferedSamples > 0, "B's PCM reached the room output");
     // B's original consent can still revoke audio admission immediately.
     b.send({ type: 'choir-secondary-withdraw' });
     await b.waitFor((m) => m.type === 'choir-secondary-consent-status'
       && m.status === 'withdrawn');
+    for (const until = Date.now() + 2_000; Date.now() < until; await sleep(30)) {
+      duet = await duetSecondary();
+      if (!duet?.audible) break;
+    }
+    assert.ok(!duet?.audible, `a withdrawn B leaves the room mix: ${JSON.stringify(duet)}`);
     bMedia.sendBinary(encodeAudioPacket({
       source: 'mic', generation: 7, firstSampleIndex: 960, sequence: 1,
       pcm: Buffer.from(new Int16Array(960).fill(4_000).buffer),

@@ -398,6 +398,16 @@ const choirSecondaryIngress = choirRestartCoordinator
     choirRestartCoordinator,
     (socket) => (socket as RelaySocket).readyState === WebSocket.OPEN,
   ) : null;
+if (choirSecondaryIngress && choirRestartCoordinator) {
+  const coordinator = choirRestartCoordinator;
+  // The duet room accepted this B frame; the room output holds it too, silent
+  // until syncDuetOutput() gives B a lag.
+  choirSecondaryIngress.onAcceptedFrame = (frame, sampleRate, participantId, nowMs) => {
+    if (coordinator.preview().secondaryId !== participantId) return;
+    session.attachSecondaryMic();
+    session.ingestSecondaryMic(frame, sampleRate, nowMs);
+  };
+}
 /**
  * Shadow-mode authenticated invitation and consent control plane.
  * An accepted consent alone never grants a capture ticket or changes N=1.
@@ -1850,7 +1860,11 @@ function remoteStatusPayload() {
     ...status,
     // `micPage` null with a Mic connected is a page from before builds existed.
     build: { relay: relayBuild.current(), micPage: micRuntime.publisher?.pageBuild ?? null },
-    audio: { ...status.audio, listenerPlayback: monitorTransport.playbackHealth() },
+    audio: {
+      ...status.audio,
+      listenerPlayback: monitorTransport.playbackHealth(),
+      ...(choirRestartCoordinator ? { duetSecondary: session.secondaryMic } : {}),
+    },
   };
 }
 
@@ -2460,12 +2474,41 @@ const mixerTimer = setInterval(() => {
     if (levelChanged) reportMicLevel('window');
   });
   reportMicTimelineFolds();
-  // Offline proof scheduler drains bounded canonical frames to numeric
-  // evidence only; NEVER forwards Choir mix buffers to users or Take.
+  syncDuetOutput();
+  // The duet room's own rendered frames stay numeric proof evidence only; B
+  // reaches Listen and Take through the room output (syncDuetOutput above).
   const roomEpoch = choirSourceMirror?.roomEpoch;
   if (roomEpoch !== null && roomEpoch !== undefined)
     choirRestartCoordinator?.advanceDue(roomEpoch, performance.now());
 }, 5);
+
+/**
+ * Puts the duet room's B into the room output, which Listen and Take already
+ * carry. Both singers are measured against the same Robot backing in the
+ * duet room, so B's lag relative to A holds in any coordinates: B reads at
+ * A's advance plus that difference. B is silent unless the room is approved,
+ * A still owns the Mic and both have a Content lag; while a Take records, an
+ * audible B keeps its lag, as A's alignment does.
+ */
+function syncDuetOutput() {
+  if (!choirRestartCoordinator || !session.secondaryMic) return;
+  const view = choirRestartCoordinator.preview();
+  const primaryId = view.primaryId;
+  const secondaryId = view.secondaryId;
+  if (!primaryId || !secondaryId || view.secondary === 'join-required') {
+    session.detachSecondaryMic();
+    return;
+  }
+  const primaryOwnsMic = participants.micOwnerId === primaryId && micRuntime.mediaOwnerId === primaryId;
+  const a = primaryOwnsMic ? choirRestartCoordinator.singerAlignment(primaryId) : null;
+  const b = primaryOwnsMic ? choirRestartCoordinator.singerAlignment(secondaryId) : null;
+  if (!a || !b) {
+    session.setSecondaryMicLag(null);
+    return;
+  }
+  if (takeBlocksCalibration() && session.secondaryMic.audible) return;
+  session.setSecondaryMicLag(session.requestedMicAdvanceMs + (b.advanceMs - a.advanceMs));
+}
 
 function reportMicLevel(reason: 'window' | 'gain') {
   console.warn('[mic-level]', JSON.stringify({ reason, ...micLevel.status() }));

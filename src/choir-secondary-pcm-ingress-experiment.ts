@@ -47,6 +47,13 @@ export class ChoirSecondaryPcmIngressExperiment {
   /** v2 replay/reorder horizon: no unbounded sequence maps. */
   private static readonly MAX_REORDER_SEQUENCES = 128;
 
+  /**
+   * Every frame the duet room accepted, after the same checks, so the room
+   * output can mix this singer too. Rejected frames never reach it.
+   */
+  onAcceptedFrame: ((frame: { generation: number; firstSampleIndex: number; pcm: Buffer },
+    sampleRate: number, participantId: string, nowMs: number) => void) | null = null;
+
   constructor(
     private readonly coordinator: Pick<ChoirRoomRestartCoordinatorExperiment,
       'mayAcceptVerifiedTicket' | 'receiveVerifiedMic' | 'disconnectVerifiedSinger'>,
@@ -182,6 +189,9 @@ export class ChoirSecondaryPcmIngressExperiment {
       return rejected('stale-authority');
     }
     bound.generation = frame.generation;
+    this.onAcceptedFrame?.({
+      generation: frame.generation, firstSampleIndex: frame.firstSampleIndex!, pcm: frame.pcm,
+    }, bound.sampleRate, bound.ticket.participantId, nowMs);
     {
       const latest = bound.latestSequence;
       if (latest === null || ((sequence - latest) >>> 0) < 0x8000_0000)

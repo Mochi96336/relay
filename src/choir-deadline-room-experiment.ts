@@ -2,7 +2,7 @@ import { CanonicalChoirMixExperiment, type CanonicalChoirFrame } from './choir-c
 import { ChoirPublisherRegistry } from './choir-publisher-registry.js';
 import { ChoirSession, type ChoirSeat } from './choir-session.js';
 import type { PcmFrame } from './pcm-frame.js';
-import type { ChoirAlignmentDecision } from './choir-alignment-decision.js';
+import type { ChoirAlignmentDecision, ChoirCalibrationSource } from './choir-alignment-decision.js';
 import { analyzeTimingCalibration } from './timing-calibration.js';
 
 /**
@@ -667,6 +667,22 @@ export class ChoirDeadlineRoomExperiment {
         return 'staged';
     }
     return 'rejected';
+  }
+
+  /**
+   * The lag a singer's track holds in this room, so the same singer can be
+   * mixed elsewhere. Null until the track has an applied calibration.
+   */
+  singerAlignment(transportId: string): { source: ChoirCalibrationSource; advanceMs: number } | null {
+    const active = this.registry.activePublisherForTransport(transportId);
+    if (!active) return null;
+    const state = this.room.contentProofState({
+      participantId: active.participantId, mediaEpoch: active.mediaEpoch,
+      songEpoch: this.songEpoch, backingGeneration: this.backingGeneration,
+    });
+    if (!state || state.awaitingCalibration || state.authoritySource === null
+      || state.authorityAdvanceMs === null || !Number.isFinite(state.authorityAdvanceMs)) return null;
+    return { source: state.authoritySource, advanceMs: state.authorityAdvanceMs };
   }
 
   disconnectTransport(transportId: string, nowMs: number): boolean {

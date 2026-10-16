@@ -128,16 +128,20 @@ for (const [name, length, gap, advance, complete, crossfade] of [
     }
     // Test-only established history; no production snapshot/getMutableState.
     const state = session as unknown as {
-      lastEmittedMicAdvanceSamples: number | null;
-      lastEmittedMicFrameComplete: boolean;
-      micEdge: { readonly replacementActive: boolean };
+      micTrack: {
+        lastEmittedMicAdvanceSamples: number | null;
+        lastEmittedMicFrameComplete: boolean;
+        edge: { readonly replacementActive: boolean };
+      };
       planMicRead(index: number): { canCrossfadeReadHeadJump: boolean };
     };
-    state.lastEmittedMicAdvanceSamples = 0;
-    state.lastEmittedMicFrameComplete = complete;
-    assert.equal(state.micEdge.replacementActive, false);
+    // These are test-only fields, now correctly owned by the canonical
+    // MicTrack rather than stale AudioSession scalar properties.
+    state.micTrack.lastEmittedMicAdvanceSamples = 0;
+    state.micTrack.lastEmittedMicFrameComplete = complete;
+    assert.equal(state.micTrack.edge.replacementActive, false);
     assert.equal(state.planMicRead(2).canCrossfadeReadHeadJump, crossfade);
-    assert.equal(state.micEdge.replacementActive, !crossfade,
+    assert.equal(state.micTrack.edge.replacementActive, !crossfade,
       'a disallowed crossfade must converge, not replay old PCM over missing evidence');
     session.stop();
   });

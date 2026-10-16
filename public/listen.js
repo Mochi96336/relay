@@ -84,6 +84,10 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   let micMuteEpoch = 0;
   let roomMicForcedMuted = false;
   let playbackForcedMuted = false;
+  // A local B follower is also an audible song source. Do not double-play
+  // Robot Monitor underneath B's own YouTube; preserve user mute preference.
+  let choirLocalPlaybackActive = false;
+  let roomPlaybackRoleForcedMute = false;
   let takeReviewForcedMuted = false;
   let foregroundAudioBoundary = 0;
   let micAudioBoundary = 0;
@@ -739,7 +743,8 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     reconcile('resumed');
   }
 
-  function setPlaybackForcedMute(forced) {
+  function setPlaybackForcedMute(forcedByRoomRole) {
+    const forced = forcedByRoomRole || choirLocalPlaybackActive;
     if (playbackForcedMuted === forced) return;
     playbackForcedMuted = forced;
     if (forced) {
@@ -899,11 +904,18 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   window.dispatchEvent(new Event('relay-request-session-status'));
 
   window.addEventListener('relay:playback-view', (event) => {
-    setPlaybackForcedMute(shouldForceMuteListen({
+    roomPlaybackRoleForcedMute = shouldForceMuteListen({
       role: event.detail?.role,
       timeline: event.detail?.timeline,
-    }));
+    });
+    setPlaybackForcedMute(roomPlaybackRoleForcedMute);
   });
+  window.addEventListener('relay-choir-local-playback', (event) => {
+    choirLocalPlaybackActive = event.detail?.active === true;
+    setPlaybackForcedMute(roomPlaybackRoleForcedMute);
+  });
+  // A B follower may have initialized before Listen's own module.
+  window.dispatchEvent(new Event('relay-request-choir-local-playback'));
   window.addEventListener('relay-take-review-playback', (event) => {
     setTakeReviewForcedMute(event.detail?.active === true);
   });

@@ -180,3 +180,33 @@
     padding: 10px 12px;
   }
 }
+
+/* A and B use the SAME Song surface. Only B's local iframe differs. */
+.song-stage[data-playback-role="observer"][data-choir-follower="active"] .youtube-player-shell,
+.song-stage[data-playback-role="observer"][data-choir-follower="active"] .youtube-readout {
+  display: block;
+}
+.song-stage[data-playback-role="observer"][data-choir-follower="active"] .youtube-readout {
+  display: flex;
+}
+.song-stage[data-choir-follower="active"] #youtube-player,
+.song-stage[data-choir-follower="active"] #youtube-state,
+.song-stage[data-choir-follower="active"] #youtube-timeline {
+  display: none;
+}
+#choir-follower-player[hidden],
+#choir-follower-position[hidden],
+#choir-follower-status[hidden] {
+  display: none;
+}
+.song-stage[data-choir-follower="active"] #choir-follower-player {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  min-height: 180px;
+}
+.song-stage[data-choir-follower="active"] #choir-follower-player iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: none;
+}

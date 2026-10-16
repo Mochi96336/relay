@@ -96,10 +96,31 @@ describe('AudioSession second singer', () => {
       const peak = run(a, b);
       assert.ok(Math.abs(peak.ms - 400) < 2, `A=${a} B=${b}: on the beat at ~400 ms, peak at ${peak.ms.toFixed(1)} ms`);
     }
-    // Two equally loud voices share one voice's headroom: together as loud as one alone.
-    const alone = run(12_000, 0).value;
-    const both = run(12_000, 12_000).value;
-    assert.ok(Math.abs(both - alone) / alone < 0.05, `both ${both} vs one ${alone}`);
+    // Two singers sum as two voices in one room would, keeping their balance.
+    const aAlone = run(12_000, 0).value;
+    const bAlone = run(0, 6_000).value;
+    const both = run(12_000, 6_000).value;
+    assert.ok(Math.abs(both - (aAlone + bAlone)) / (aAlone + bAlone) < 0.03,
+      `both ${both} vs A ${aAlone} + B ${bAlone}`);
+  });
+
+  test('a sum past the ceiling is turned down, and comes back up for a voice alone', () => {
+    const session = makeSession();
+    session.start(0);
+    session.ingestBacking(frame(silence(3_000)), RATE, 0);
+    // Both near full scale for one second, then A alone.
+    session.ingestMic(frame(square(3_000, 30_000, 96)), RATE, 0);
+    session.setAlignment({ calibratedMicLagMs: 0 });
+    session.attachSecondaryMic();
+    session.setSecondaryMicGainDb(0);
+    session.ingestSecondaryMic(frame(Buffer.concat([square(1_000, 30_000, 96), silence(2_000)])), RATE, 0);
+    session.setSecondaryMicLag(0);
+    const { mixed, evidence } = drainAll(session, 600 + 2_400);
+    assert.equal(evidence.reduce((sum, e) => sum + e.clippedSamples, 0), 0);
+    const together = peakAt(mixed, 300, 900).value;
+    const aloneAfter = peakAt(mixed, 1_600, 2_300).value;
+    assert.ok(Math.abs(together - aloneAfter) / aloneAfter < 0.05,
+      `two full voices are held at one voice's ceiling (${together} vs ${aloneAfter})`);
   });
 
   test('two full-scale voices and the song never clip the room mix', () => {

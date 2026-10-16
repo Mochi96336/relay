@@ -34,9 +34,9 @@ B  AudioPacket v2 WS  ─┘                              MicTrack(A) + MicTrack
 The room output is still the N=1 `AudioSession`, so Listen, Take and timing need no separate path. Once the duet room is `duet-ready` and A still owns the Mic, B joins that output as a second `MicTrack` (`syncDuetOutput()` in `server.ts`):
 
 - B's lag is A's advance plus (B − A) from the duet room. Both singers are measured against the same Robot backing, so their difference holds in any coordinates.
-- A and B share one voice's headroom by gain sharing. The weights follow each voice's recent level and sum to one, so a singer alone stays at full level and the sum cannot clip. B fades in and out over 50 ms.
+- A and B are summed, as two singers in one room would sound, so a harmony keeps the balance it was sung at. A sum that would pass one voice's ceiling is turned down at once and comes back up over 80 ms; a singer alone is untouched. B fades in and out over 50 ms.
 - While a Take records, an audible B keeps its lag, as A's alignment does.
-- `/statusz` shows B under `audio.duetSecondary`.
+- `/statusz` shows B under `audio.duetSecondary`. `audio.duetIngress` counts B's accepted and rejected frames, `audio.duetRoom` gives the duet room's state, and `audio.duetContent` shows the Content worker's counters and last failure.
 
 The duet room's own rendered PCM is still only proof evidence and is not sent anywhere.
 

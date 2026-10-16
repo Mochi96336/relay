@@ -441,7 +441,7 @@ export class AudioSession {
     }
     this.secondary = {
       track: new MicTrack(this.micTrackOptions),
-      audible: false, blend: 0, detaching: false, primaryLevel: 0, secondaryLevel: 0,
+      audible: false, blend: 0, detaching: false, sumGain: 1,
       gapSamples: 0, starvedSamples: 0, mixedFrames: 0,
     };
   }
@@ -1186,19 +1186,18 @@ export class AudioSession {
       secondary, plan, read,
       slewFrameEndPosition: read.slew ? read.slew.firstPosition + this.frameSamples * read.slew.rate : 0,
       blendStep: 1 / Math.max(1, Math.round((SECONDARY_BLEND_MS * this.sampleRate) / 1000)),
-      levelCoefficient: 1 - Math.exp(-1000 / (GAIN_SHARE_LEVEL_MS * this.sampleRate)),
+      sumReleaseStep: 1 - Math.exp(-1000 / (SECONDARY_SUM_RELEASE_MS * this.sampleRate)),
     };
   }
 
   /**
-   * One sample of A and B together. The bus reserves summing headroom for one
-   * voice at the limiter ceiling, so the two voices share it by gain sharing
-   * (a Dugan automixer): each weight follows that voice's share of the recent
-   * level, and the weights sum to one. A singing alone stays at full level;
-   * two equally loud voices get half each; and since the result is a weighted
-   * average of two voices bounded to the ceiling, it cannot pass the ceiling.
-   * B's share fades in and out over SECONDARY_BLEND_MS, so joining is not a
-   * click.
+   * One sample of A and B together: their sum, as two singers in one room
+   * would sound, so a harmony keeps the balance they sang it at. The bus
+   * reserves summing headroom for one voice at the limiter ceiling, so a sum
+   * that would pass the ceiling is turned down: at once when it does, and
+   * back up over SECONDARY_SUM_RELEASE_MS. The output never exceeds the
+   * ceiling, and a singer alone is untouched. B fades in and out over
+   * SECONDARY_BLEND_MS, so joining is not a click.
    */
   private withSecondaryVoice(duet: SecondaryFrame, i: number, primaryVoice: number) {
     const { secondary, plan, read } = duet;
@@ -1220,16 +1219,16 @@ export class AudioSession {
     secondary.blend = secondary.blend < target
       ? Math.min(target, secondary.blend + duet.blendStep)
       : Math.max(target, secondary.blend - duet.blendStep);
+    if (secondary.blend === 0 && secondary.sumGain === 1) return primaryVoice;
     const ceiling = this.micLimiter.ceiling;
     const a = Math.max(-ceiling, Math.min(ceiling, primaryVoice));
     const b = Math.max(-ceiling, Math.min(ceiling, processed.voice));
-    secondary.primaryLevel += duet.levelCoefficient * (Math.abs(a) - secondary.primaryLevel);
-    secondary.secondaryLevel += duet.levelCoefficient * (Math.abs(b) - secondary.secondaryLevel);
-    if (secondary.blend === 0) return primaryVoice;
-    const share = (secondary.secondaryLevel + GAIN_SHARE_FLOOR)
-      / (secondary.primaryLevel + secondary.secondaryLevel + 2 * GAIN_SHARE_FLOOR);
-    const weight = share * secondary.blend;
-    return a * (1 - weight) + b * weight;
+    const sum = a + b * secondary.blend;
+    const allowed = Math.abs(sum) > ceiling ? ceiling / Math.abs(sum) : 1;
+    secondary.sumGain = allowed < secondary.sumGain
+      ? allowed
+      : Math.min(allowed, secondary.sumGain + duet.sumReleaseStep * (1 - secondary.sumGain));
+    return sum * secondary.sumGain;
   }
 
   private finishSecondaryFrame(duet: SecondaryFrame, startSample: number) {
@@ -1254,19 +1253,16 @@ export class AudioSession {
 
 /** How long B takes to fade in or out of the room mix. */
 const SECONDARY_BLEND_MS = 50;
-/** Level averaging for gain sharing: slow enough not to modulate a note. */
-const GAIN_SHARE_LEVEL_MS = 30;
-/** Below this level a voice is silence; two silent voices split evenly. */
-const GAIN_SHARE_FLOOR = 1e-4;
+/** How fast the A+B sum comes back up after a peak turned it down. */
+const SECONDARY_SUM_RELEASE_MS = 80;
 
 type SecondaryVoice = {
   track: MicTrack;
   audible: boolean;
-  /** 0 = A alone; 1 = B takes its full gain-sharing weight. */
+  /** 0 = A alone; 1 = B at full level. */
   blend: number;
-  /** Recent absolute level of each voice, for gain sharing. */
-  primaryLevel: number;
-  secondaryLevel: number;
+  /** Gain on the A+B sum that keeps it under the ceiling; 1 = untouched. */
+  sumGain: number;
   detaching: boolean;
   gapSamples: number;
   starvedSamples: number;
@@ -1279,5 +1275,5 @@ type SecondaryFrame = {
   read: ReturnType<MicTrack['readMicFrame']>;
   slewFrameEndPosition: number;
   blendStep: number;
-  levelCoefficient: number;
+  sumReleaseStep: number;
 };

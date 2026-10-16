@@ -151,3 +151,24 @@ test('a refused join stays on screen until closed, and + Second Mic hides while 
   })));
   await expect(page.locator('#choir-invite-open')).toBeHidden();
 });
+
+test('when the server ends the second Mic, the panel says why', async ({ page }) => {
+  await openFixture(page, 'singerB', 'owner');
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('relay-choir-consent-availability', { detail: { available: true } }));
+    window.dispatchEvent(new CustomEvent('relay-choir-media-mode', { detail: { enabled: true } }));
+  });
+  await page.locator('#choir-invite-open').click();
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('relay-choir-consent-message', {
+    detail: { type: 'choir-secondary-consent-status', status: 'accepted', secondaryId: 'singerB', joined: true },
+  })));
+  await expect(page.locator('#choir-withdraw')).toBeVisible();
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('relay-choir-consent-message', {
+    detail: { type: 'choir-secondary-consent-status', status: 'revoked', secondaryId: 'singerB', reason: 'scope-or-authority-changed' },
+  })));
+  await expect(page.locator('#choir-consent-panel')).toBeVisible();
+  await expect(page.locator('#choir-consent-status')).toContainText('副 Mic 已結束');
+  await expect(page.locator('#choir-withdraw')).toBeHidden();
+  await page.locator('#choir-consent-close').click();
+  await expect(page.locator('#choir-consent-panel')).toBeHidden();
+});

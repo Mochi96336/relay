@@ -134,12 +134,16 @@ window.addEventListener('relay-choir-consent-message', (event) => {
         if (acceptedAsGuest) joinFeedback = false;
         statusKey = message.joined === true ? null : 'choir.accepted';
       } else if (['withdrawn', 'revoked', 'declined'].includes(message.status)) {
+        const wasGuest = acceptedAsGuest && message.secondaryId === myId();
         if (message.secondaryId === myId()) {
           acceptedAsGuest = false;
           invitation = null;
         }
         statusKey = message.status === 'declined' ? 'choir.declined'
           : message.status === 'withdrawn' ? 'choir.withdrawn' : 'choir.revoked';
+        // Ended by the server (the Mic changed hands, a link dropped): say so
+        // in the open panel instead of only changing the heading.
+        if (wasGuest && message.status === 'revoked') joinFeedback = true;
       }
       break;
     case 'choir-consent-rejected':

@@ -140,6 +140,8 @@ test('video failure restores Monitor availability without withdrawing consent', 
 
 test('where a tap is needed for sound (iOS), the song keeps time muted and B is asked to tap', async ({ page }) => {
   await openFollowerFixture(page, { unmutePauses: true });
+  // The server keeps the room clock fresh; one snapshot goes stale in ~2 s.
+  await page.evaluate(() => { setInterval(() => window.__emitFollowerRoom(), 300); });
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('relay-choir-guest-state', {
     detail: { enabled: true },
   })));

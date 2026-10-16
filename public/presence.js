@@ -238,13 +238,17 @@ window.relayIdentityReady = (async () => {
     if (!choirConsentAvailable || !sessionAuthorityFresh
       || !payload || ![
         'choir-secondary-invite', 'choir-secondary-accept', 'choir-secondary-join',
-        'choir-secondary-song-anchor', 'choir-secondary-page',
+        'choir-secondary-song-anchor', 'choir-secondary-page', 'choir-secondary-gain',
         'choir-secondary-decline', 'choir-secondary-withdraw',
         'choir-room-begin', 'choir-secondary-media-claim-request',
       ].includes(payload.type)) return;
     if (['choir-room-begin', 'choir-secondary-media-claim-request', 'choir-secondary-join',
-      'choir-secondary-song-anchor', 'choir-secondary-page']
+      'choir-secondary-song-anchor', 'choir-secondary-page', 'choir-secondary-gain']
       .includes(payload.type) && !choirMediaEnabled) return;
+    if (payload.type === 'choir-secondary-gain') {
+      send({ type: payload.type, micGainDb: payload.micGainDb });
+      return;
+    }
     if (payload.type === 'choir-secondary-song-anchor') {
       send({
         type: payload.type, videoId: payload.videoId, state: payload.state,

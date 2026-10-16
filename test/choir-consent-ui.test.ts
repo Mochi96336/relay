@@ -29,6 +29,21 @@ test('second Mic controls live in the Mic row, hidden in an ordinary N=1 page', 
   assert.doesNotMatch(app, /getUserMedia|sendAudioPacket|bindVerifiedSecondary|innerHTML/);
 });
 
+test('a joined B sets its own Mic gain, as the Mic owner does', async () => {
+  const html = await file('../public/index.html');
+  const app = await file('../public/choir-consent-ui.js');
+  const presence = await file('../public/presence.js');
+  const server = await file('../src/server.ts');
+  const css = await file('../public/live-ia.css');
+  assert.match(html, /<details id="choir-gain-control" class="mic-live-control choir-gain-control">[\s\S]*?id="choir-gain" class="adjust-range" type="range" min="0" max="40"/);
+  assert.match(css, /body\[data-choir-guest="joined"\] \.choir-gain-control \{\s*display: block;/);
+  // This device's remembered gain, sent while B is in.
+  assert.match(app, /storedNumber\(MIC_GAIN_KEY, 0, 40\)/);
+  assert.match(app, /if \(!joined \|\| !gainSlider\) return;[\s\S]*?publishCommand\('choir-secondary-gain', \{ micGainDb \}\)/);
+  assert.match(presence, /payload\.type === 'choir-secondary-gain'[\s\S]*?send\(\{ type: payload\.type, micGainDb: payload\.micGainDb \}\)/);
+  assert.match(server, /type === 'choir-secondary-gain'[\s\S]*?session\.setSecondaryMicGainDb\(gainDb\)/);
+});
+
 test('the second Mic copy exists in both locales and the old invitation copy is gone', async () => {
   const i18n = await file('../public/i18n.js');
   for (const key of ['choir.invite', 'choir.takeOver', 'choir.withdraw', 'choir.joinRejected',

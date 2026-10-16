@@ -532,6 +532,19 @@ test('B joins by its own press while the song is paused; the room starts itself 
       }
       assert.equal(duet?.audible, true, `the joined B sings in the room mix: ${JSON.stringify(duet)}`);
 
+      // B sets its own Mic gain from its page.
+      b.send({ type: 'choir-secondary-gain', micGainDb: 12 });
+      for (const until = Date.now() + 2_000; Date.now() < until; await sleep(30)) {
+        duet = (await (await fetch(relay.httpUrl('/statusz'))).json()).audio?.duetSecondary ?? null;
+        if (duet?.gainDb === 12) break;
+      }
+      assert.equal(duet?.gainDb, 12, JSON.stringify(duet));
+      // Only the joined B: someone else's gain is ignored.
+      a.send({ type: 'choir-secondary-gain', micGainDb: 30 });
+      await sleep(300);
+      duet = (await (await fetch(relay.httpUrl('/statusz'))).json()).audio?.duetSecondary ?? null;
+      assert.equal(duet?.gainDb, 12);
+
       // C takes over the second Mic, as the Mic itself can be taken over:
       // B is told it was replaced and leaves the room mix, and C is in.
       const c = await connect();

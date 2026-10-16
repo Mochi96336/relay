@@ -5086,14 +5086,27 @@ function beginJoinedChoirRoom(nowMs: number) {
  * - choir-secondary-song-anchor: which capture sample was recorded at which
  *   point of B's local YouTube, for B's YouTube-time alignment;
  * - choir-secondary-page: what B's page shows and plays (its local player
- *   state), logged on change, so a silent or songless B can be explained.
+ *   state), logged on change, so a silent or songless B can be explained;
+ * - choir-secondary-gain: B's own Mic gain, set on B's page as the main
+ *   Mic's is on the owner's.
  */
 let lastSecondaryPageReport = '';
 function handleChoirSecondaryReport(socket: RelaySocket, payload: Record<string, unknown>): boolean {
   const type = payload.type;
-  if (type !== 'choir-secondary-song-anchor' && type !== 'choir-secondary-page') return false;
+  if (type !== 'choir-secondary-song-anchor' && type !== 'choir-secondary-page'
+    && type !== 'choir-secondary-gain') return false;
   const joined = choirConsent?.activeJoin(performance.now()) ?? null;
   if (!joined || socket.participantId !== joined.secondaryId || socket.role !== 'unknown') return true;
+  if (type === 'choir-secondary-gain') {
+    const gainDb = requestedMicGainDb(payload.micGainDb);
+    if (gainDb === null || gainDb === duetSecondaryGainDb) return true;
+    const previousGainDb = duetSecondaryGainDb;
+    duetSecondaryGainDb = gainDb;
+    session.setSecondaryMicGainDb(gainDb);
+    console.warn('[mic-gain]', JSON.stringify({ reason: 'second-mic',
+      participant: participantLogLabel(joined.secondaryId), previousGainDb, gainDb }));
+    return true;
+  }
   if (type === 'choir-secondary-page') {
     const report = JSON.stringify(payload.page ?? null).slice(0, 600);
     if (report !== lastSecondaryPageReport) {

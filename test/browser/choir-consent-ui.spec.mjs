@@ -95,12 +95,19 @@ test('only someone other than the Mic owner sees + Second Mic, and one tap joins
   await expect(page.locator('#choir-withdraw')).toBeVisible();
   await expect(open).toBeHidden();
   await expect(page.locator('#start-publisher')).toBeHidden();
+  // B's own Mic gain, in the same row the Mic owner has.
+  await expect(page.locator('#choir-gain-control')).toBeVisible();
+  await page.locator('#choir-gain').fill('12');
+  await expect(page.locator('#choir-gain-value')).toHaveText('+12 dB');
+  await expect.poll(() => page.evaluate(() => window.__choirSent.at(-1)))
+    .toEqual({ type: 'choir-secondary-gain', micGainDb: 12 });
   await page.locator('#choir-withdraw').click();
   expect((await page.evaluate(() => window.__choirSent)).at(-1)).toEqual({ type: 'choir-secondary-withdraw' });
   await consent(page, { type: 'choir-secondary-consent-status', status: 'withdrawn', secondaryId: 'singerB' });
   await expect(page.locator('#choir-withdraw')).toBeHidden();
   await expect(open).toBeVisible();
   await expect(open).toBeEnabled();
+  await expect(page.locator('#choir-gain-control')).toBeHidden();
   await expect.poll(() => page.evaluate(() =>
     document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });

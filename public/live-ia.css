@@ -152,7 +152,8 @@
   border-bottom: 1px solid #202227;
 }
 
-body[data-self-mic="live"] .mic-live-control {
+body[data-self-mic="live"] .mic-live-control,
+body[data-choir-guest="joined"] .choir-gain-control {
   display: block;
 }
 

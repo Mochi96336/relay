@@ -9,6 +9,9 @@ async function openFixture(page, participantId, micOwnerId = null) {
   await page.evaluate(async ({ participantId, micOwnerId }) => {
     window.relayParticipantId = participantId;
     window.__choirSent = [];
+    // The join tap really starts capture now. Keep it pending: these tests are
+    // about the panel, and a fixture microphone failing would leave the join.
+    if (navigator.mediaDevices) navigator.mediaDevices.getUserMedia = () => new Promise(() => {});
     window.addEventListener('relay-choir-consent-command', event => {
       window.__choirSent.push(event.detail);
     });

@@ -165,6 +165,19 @@ export class ChoirSecondaryConsentExperiment {
     return true;
   }
 
+  /** The Mic owner ends their second singer's join. B is told why. */
+  dismiss(primaryId: string | undefined): boolean {
+    if (!primaryId) return false;
+    let removed = false;
+    for (const [id, invite] of this.pending) {
+      if (!invite.join || invite.primaryId !== primaryId) continue;
+      this.pending.delete(id);
+      this.notifyRevoked(invite, 'dismissed');
+      removed = true;
+    }
+    return removed;
+  }
+
   /** The joined pair, if a B is in: the server creates its room when a song plays. */
   activeJoin(nowMs: number): { primaryId: string; secondaryId: string } | null {
     this.sweep(nowMs);

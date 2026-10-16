@@ -5000,7 +5000,7 @@ function beginJoinedChoirRoom(nowMs: number) {
 function handleChoirConsentMessage(socket: RelaySocket, payload: Record<string, unknown>): boolean {
   const type = payload.type;
   if (!['choir-secondary-invite', 'choir-secondary-accept', 'choir-secondary-join',
-    'choir-secondary-decline', 'choir-secondary-withdraw'].includes(String(type))) return false;
+    'choir-secondary-decline', 'choir-secondary-withdraw', 'choir-secondary-dismiss'].includes(String(type))) return false;
   // No anonymous/legacy/infrastructure, production Mic/backing or attached
   // Choir PCM-only sockets are eligible to mutate consent state.
   if (!choirConsent || !socket.participantId || socket.role !== 'unknown'
@@ -5020,6 +5020,10 @@ function handleChoirConsentMessage(socket: RelaySocket, payload: Record<string, 
       && choirConsent.respond(socket, inviteId, type === 'choir-secondary-accept', nowMs);
   } else if (type === 'choir-secondary-withdraw') {
     accepted = choirConsent.withdraw(socket, nowMs);
+  } else if (type === 'choir-secondary-dismiss') {
+    // Only the Mic owner ends the second singer it has.
+    accepted = participants.micOwnerId === socket.participantId
+      && choirConsent.dismiss(socket.participantId);
   } else if (type === 'choir-secondary-join') {
     // The joiner never names the other singer: it is whoever holds the Mic.
     accepted = participants.micOwnerId !== null

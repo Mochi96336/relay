@@ -175,3 +175,34 @@ test('when the server ends the second Mic, the panel says why', async ({ page })
   await page.locator('#choir-consent-close').click();
   await expect(page.locator('#choir-consent-panel')).toBeHidden();
 });
+
+test('the Mic owner can end its second Mic, and B is told the owner ended it', async ({ page }) => {
+  const enable = () => page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('relay-choir-consent-availability', { detail: { available: true } }));
+    window.dispatchEvent(new CustomEvent('relay-choir-media-mode', { detail: { enabled: true } }));
+  });
+  await openFixture(page, 'owner', 'owner');
+  await enable();
+  const dismiss = page.locator('#choir-dismiss');
+  await expect(dismiss).toBeHidden();
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('relay-product-status', {
+    detail: { type: 'product-status', room: { mic: { ownerId: 'owner' }, duet: { secondaryId: 'singerB', state: 'singing' } } },
+  })));
+  await expect(dismiss).toBeVisible();
+  await expect(dismiss).toHaveText('結束副 Mic');
+  await dismiss.click();
+  expect((await page.evaluate(() => window.__choirSent)).at(-1)).toEqual({ type: 'choir-secondary-dismiss' });
+
+  await openFixture(page, 'singerB', 'owner');
+  await enable();
+  await page.locator('#choir-invite-open').click();
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('relay-choir-consent-message', {
+      detail: { type: 'choir-secondary-consent-status', status: 'accepted', secondaryId: 'singerB', joined: true },
+    }));
+    window.dispatchEvent(new CustomEvent('relay-choir-consent-message', {
+      detail: { type: 'choir-secondary-consent-status', status: 'revoked', secondaryId: 'singerB', reason: 'dismissed' },
+    }));
+  });
+  await expect(page.locator('#choir-consent-status')).toContainText('主唱結束了副 Mic');
+});

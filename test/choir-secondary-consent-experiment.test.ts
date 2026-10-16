@@ -244,3 +244,14 @@ test('a join follows the Mic owner through a media or control hiccup', () => {
   owner = 'participant-CCCCCCC3';
   assert.equal(consent.activeJoin(2), null, 'a new Mic owner ends it');
 });
+
+test('the Mic owner ends its own second singer, and B is told it was dismissed', () => {
+  const f = fixture();
+  assert.equal(f.consent.join(f.b, A, 0), true);
+  assert.equal(f.consent.dismiss(C), false, 'nobody else can end it');
+  assert.equal(f.consent.dismiss(A), true);
+  assert.equal(f.consent.activeJoin(1), null);
+  assert.equal(f.delivered.at(-1)?.payload.status, 'revoked');
+  assert.equal(f.delivered.at(-1)?.payload.reason, 'dismissed');
+  assert.equal(f.consent.dismiss(A), false, 'nothing left to end');
+});

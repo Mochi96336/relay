@@ -531,6 +531,16 @@ test('B joins by its own press while the song is paused; the room starts itself 
         if (duet?.audible) break;
       }
       assert.equal(duet?.audible, true, `the joined B sings in the room mix: ${JSON.stringify(duet)}`);
+
+      // A ends the second Mic: B is told why and leaves the room mix.
+      a.send({ type: 'choir-secondary-dismiss' });
+      const ended = await b.waitFor((m) => m.type === 'choir-secondary-consent-status' && m.status === 'revoked');
+      assert.equal(ended.reason, 'dismissed');
+      for (const until = Date.now() + 2_000; Date.now() < until; await sleep(30)) {
+        duet = (await (await fetch(relay.httpUrl('/statusz'))).json()).audio?.duetSecondary ?? null;
+        if (!duet?.audible) break;
+      }
+      assert.ok(!duet?.audible, `a dismissed B leaves the room mix: ${JSON.stringify(duet)}`);
     } finally {
       clearInterval(keepPlaying);
     }

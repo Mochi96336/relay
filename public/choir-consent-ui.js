@@ -18,6 +18,7 @@ const withdrawPanel = document.querySelector('#choir-withdraw-actions');
 const withdrawButton = document.querySelector('#choir-withdraw');
 const statusCopy = document.querySelector('#choir-consent-status');
 const closeButton = document.querySelector('#choir-consent-close');
+const dismissButton = document.querySelector('#choir-dismiss');
 
 let available = false;
 let session = null;
@@ -28,6 +29,8 @@ let mediaEnabled = false;
 let pendingSend = false;
 /** Someone else is already the second singer (from product status). */
 let duetTaken = false;
+/** This person holds the Mic and has a second singer. */
+let ownsDuet = false;
 /** A join was tried: keep the panel open to say how it went until closed. */
 let joinFeedback = false;
 let statusKey = null;
@@ -59,6 +62,7 @@ function render() {
   // and the server creates the room itself once a song plays.
   trigger.hidden = !canJoin();
   trigger.disabled = !canJoin() || pendingSend;
+  if (dismissButton) dismissButton.hidden = !(available && authorityFresh && ownsDuet);
   const hasGuestInvitation = Boolean(invitation && !acceptedAsGuest);
   const show = available && authorityFresh
     && (hasGuestInvitation || acceptedAsGuest || joinFeedback);
@@ -140,7 +144,8 @@ window.addEventListener('relay-choir-consent-message', (event) => {
           invitation = null;
         }
         statusKey = message.status === 'declined' ? 'choir.declined'
-          : message.status === 'withdrawn' ? 'choir.withdrawn' : 'choir.revoked';
+          : message.status === 'withdrawn' ? 'choir.withdrawn'
+            : message.reason === 'dismissed' ? 'choir.dismissed' : 'choir.revoked';
         // Ended by the server (the Mic changed hands, a link dropped): say so
         // in the open panel instead of only changing the heading.
         if (wasGuest && message.status === 'revoked') joinFeedback = true;
@@ -173,8 +178,10 @@ window.addEventListener('relay-choir-media-connection', (event) => {
 window.addEventListener('relay-product-status', (event) => {
   const duet = event.detail?.room?.duet;
   const taken = Boolean(duet && duet.secondaryId !== myId());
-  if (taken === duetTaken) return;
+  const owns = Boolean(duet && event.detail?.room?.mic?.ownerId === myId());
+  if (taken === duetTaken && owns === ownsDuet) return;
   duetTaken = taken;
+  ownsDuet = owns;
   render();
 });
 window.addEventListener('relay-locale-changed', render);
@@ -208,6 +215,10 @@ withdrawButton?.addEventListener('click', () => {
   if (!acceptedAsGuest) return;
   if (publishCommand('choir-secondary-withdraw')) statusKey = 'choir.responding';
   render();
+});
+dismissButton?.addEventListener('click', () => {
+  if (!ownsDuet) return;
+  publishCommand('choir-secondary-dismiss');
 });
 closeButton?.addEventListener('click', () => {
   joinFeedback = false;

@@ -2441,6 +2441,13 @@ function reportMicDevice(health: AudioUplinkHealth) {
     },
     audioSessionType: health.capture?.audioSessionType ?? null,
     gainDb: session.micGainDb,
+    // A page keeps the scripts it loaded. On 2026-10-16 a Mic in Germany ran
+    // an app.js from before Opus and sent PCM at six times the bitrate; only
+    // missing fields gave it away. null: the page predates sending its build.
+    pageBuild: micRuntime.publisher?.pageBuild ?? null,
+    relayBuild: relayBuild.current(),
+    codec: health.transport.codec ?? null,
+    codecBitrate: health.transport.codecBitrate ?? null,
   }));
 }
 

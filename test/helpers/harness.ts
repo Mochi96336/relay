@@ -18,6 +18,8 @@ export type RelayServer = {
   stop: () => Promise<void>;
   /** Everything the server has written to stderr so far, where its diagnostic lines go. */
   stderr: () => string;
+  /** Everything the server has written to stdout so far, where its [tagged] log lines go. */
+  stdout: () => string;
 };
 
 /**
@@ -91,6 +93,7 @@ export function startRelay(env: Record<string, string> = {}): Promise<RelayServe
         signal,
         stop,
         stderr: () => stderr,
+        stdout: () => stdout,
       });
     });
   });

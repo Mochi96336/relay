@@ -58,6 +58,7 @@ test('B playback remains separate from production room song commands and monitor
   const ui = await readFile(new URL('../public/choir-follower.js', import.meta.url), 'utf8');
   const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
   const bridge = await readFile(new URL('../public/youtube-sync.js', import.meta.url), 'utf8');
+  const listen = await readFile(new URL('../public/listen.js', import.meta.url), 'utf8');
   assert.match(html, /id="choir-follower-player" hidden/);
   assert.match(html, /id="choir-follower-position" hidden/);
   assert.doesNotMatch(html, /choir-follower-panel|choir-follower-start|啟用伴奏/);
@@ -66,5 +67,11 @@ test('B playback remains separate from production room song commands and monitor
   assert.doesNotMatch(ui, /startButton|userEnabled|relay:room-song-command-intent/);
   assert.match(ui, /role !== 'observer'/);
   assert.match(bridge, /roomReceivedAtMs: latestRoomReceivedAtMs/);
+  assert.match(ui, /relay-choir-local-playback/);
+  assert.match(listen, /roomPlaybackRoleForcedMute = shouldForceMuteListen/);
+  assert.match(listen, /const forced = forcedByRoomRole \|\| choirLocalPlaybackActive;/);
+  assert.match(listen, /relay-choir-local-playback/);
+  assert.match(listen, /window\.dispatchEvent\(new Event\('relay-request-choir-local-playback'\)\)/);
+  assert.match(listen, /if \(userMuted\)/);
   assert.doesNotMatch(ui, /relay:room-song-command-intent|relay:youtube-telemetry|room-song-command|micCalibration|sendAudioPacket/);
 });

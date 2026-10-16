@@ -28,6 +28,14 @@ let readyTimer = null;
 let startAttempts = 0;
 let retryAtMs = 0;
 let attemptedRate = null;
+/**
+ * The local song starts muted, which every browser lets a script play, so B
+ * is in time (and aligned by YouTube time) at once. It is then unmuted; where
+ * the browser needs a tap for sound (iOS), it keeps playing muted and B is
+ * asked to tap the player. muted → unmuting → audible | tap-for-sound.
+ */
+let soundState = 'muted';
+let unmuteTimer = null;
 
 function setLocalPlayback(active) {
   if (active === localBackingAudibleRole) return;
@@ -61,6 +69,9 @@ function resetPlayer() {
   generation++;
   clearTimeout(readyTimer);
   readyTimer = null;
+  clearTimeout(unmuteTimer);
+  unmuteTimer = null;
+  soundState = 'muted';
   setLocalPlayback(false);
   attemptedRate = null;
   try { player?.pauseVideo(); } catch {}
@@ -167,6 +178,7 @@ async function startPlayer() {
           playerReady = true;
           starting = false;
           startAttempts = 0;
+          try { player.mute(); } catch { soundState = 'audible'; }
           tick();
         },
         onAutoplayBlocked: () => {
@@ -185,7 +197,7 @@ async function startPlayer() {
             && Boolean(currentRoom()));
           if (event.data === 1) {
             autoplayBlocked = false;
-            setStatus(null);
+            setStatus(soundState === 'tap-for-sound' ? 'choir.followerTapSound' : null);
           }
         },
         onError: () => {
@@ -205,13 +217,44 @@ async function startPlayer() {
 }
 
 /** What B's local player is doing, for the server log (a songless B is otherwise a guess). */
+function playerMuted() {
+  try { return player.isMuted() === true; } catch { return false; }
+}
+/** Once the muted song plays: turn it up, or ask for the tap the browser needs. */
+function reconcileSound(playerState) {
+  if (playerState !== 1) return;
+  if (soundState === 'muted') {
+    soundState = 'unmuting';
+    const ownGeneration = generation;
+    try { player.unMute(); } catch {}
+    // WebKit pauses a scripted unmute without a fresh tap. Back to muted
+    // playback then: the song keeps time and B taps the player for sound.
+    unmuteTimer = setTimeout(() => {
+      unmuteTimer = null;
+      if (ownGeneration !== generation || soundState !== 'unmuting') return;
+      let state = null;
+      try { state = Number(player.getPlayerState()); } catch {}
+      if (state === 1 && !playerMuted()) {
+        soundState = 'audible';
+        return;
+      }
+      soundState = 'tap-for-sound';
+      try { player.mute(); } catch {}
+      try { player.playVideo(); } catch {}
+      tick();
+    }, 400);
+  } else if (soundState === 'tap-for-sound' && !playerMuted()) {
+    soundState = 'audible';
+  }
+}
+
 function publishReport() {
   let playerState = null;
   try { playerState = playerReady ? Number(player.getPlayerState()) : null; } catch {}
   window.dispatchEvent(new CustomEvent('relay-choir-follower-report', {
     detail: {
       eligible, role, playerReady, starting, playerState, startAttempts,
-      autoplayBlocked, failedVideo: failedVideoId !== null, status: statusKey,
+      autoplayBlocked, failedVideo: failedVideoId !== null, status: statusKey, sound: soundState,
       localPlayback: localBackingAudibleRole, roomVideo: latestRoom?.videoId ?? null,
     },
   }));
@@ -252,6 +295,7 @@ function tick() {
     return;
   }
   setLocalPlayback(local.playerState === 1);
+  reconcileSound(local.playerState);
   if (local.playerState === 1 && localVideoId === room.videoId) {
     // Where B's local YouTube is, for B's YouTube-time alignment.
     window.dispatchEvent(new CustomEvent('relay-choir-song-anchor', {
@@ -299,7 +343,10 @@ function tick() {
     setStatus('choir.followerVideoError');
     return;
   }
-  if (!room.playing || local.playerState === 1) {
+  if (room.playing && local.playerState === 1 && soundState === 'tap-for-sound') {
+    autoplayBlocked = false;
+    setStatus('choir.followerTapSound');
+  } else if (!room.playing || local.playerState === 1) {
     autoplayBlocked = false;
     setStatus(null);
   } else if (autoplayBlocked || (localVideoId === room.videoId

@@ -27,6 +27,7 @@ B  AudioPacket v2 WS  ─┘                              MicTrack(A) + MicTrack
 ```
 
 - B's page plays the room's YouTube locally inside the normal Song player (`public/choir-follower.js`). B's playback position is never treated as room time.
+- That local song starts **muted**, which any browser lets a script play, so B keeps time and is aligned by YouTube time at once; it is then unmuted. Where sound needs a tap (iOS pauses a scripted unmute), it goes on playing muted and B is asked to tap the YouTube player.
 - Each singer gets their own Content calibration: a six-second window of their own PCM against the Robot backing, analysed off-thread (`choir-content-analysis-worker.mjs`). The server then checks again that the room, song, media and capture are unchanged before it accepts the result.
 - `MicTrack` is the per-singer state that `AudioSession` used to hold directly: PCM timeline, gain, limiter, clock trim, read head. N=1 uses exactly one `MicTrack`.
 

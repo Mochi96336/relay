@@ -265,7 +265,8 @@ test('a reconnecting B cannot automatically take the seat from a new second sing
   f.b.open = false;
   f.consent.disconnected(f.b);
   f.changeCPresence(true);
-  assert.equal(f.consent.join({ participantId: C, open: true }, A, 1), true);
+  const c: Socket = { participantId: C, open: true };
+  assert.equal(f.consent.join(c, A, 1), true);
   assert.equal(f.consent.join(f.anotherB, A, 2, true), false);
   assert.equal(f.consent.activeJoin(2)?.secondaryId, C);
   assert.equal(f.consent.join(f.anotherB, A, 3), true, 'an explicit press can still take over');

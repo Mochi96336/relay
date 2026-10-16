@@ -1812,6 +1812,7 @@ function timingCalibrationStatusPayload() {
     probeMaxAttempts: probe.maxAttempts,
     probeError: probe.error,
     bootCalibration: bootProbeRuntime.calibrationResult,
+    bootCalibrationMic: bootCalibrationMicLabel(),
     bootProbeTimingEvidence,
     completedBootProbeTimingEvidence,
     robotOffsetTimingEvidence,
@@ -1820,6 +1821,17 @@ function timingCalibrationStatusPayload() {
     autoCalibrate: AUTO_CALIBRATE,
     validation: contentCalibrationValidator.status(nowMs),
   };
+}
+
+/**
+ * Whose Mic the stored test-tone result measured. The result is bound to the
+ * capture it ran on, so while it still matches, that is the current owner.
+ */
+function bootCalibrationMicLabel() {
+  const ownerId = participants.micOwnerId;
+  if (!ownerId || !bootProbeRuntime.calibrationResult
+    || !bootProbeRuntime.completedContextMatches(bootProbeContext())) return null;
+  return { nickname: participants.participant(ownerId)?.nickname ?? null };
 }
 
 function mixSettingsPayload() {

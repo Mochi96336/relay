@@ -379,20 +379,20 @@ export function describeTiming({ product, readiness, source, timing, timeline } 
     }
   }
   if (timeline) {
+    // One row: the phone, room and Robot positions agree to milliseconds and
+    // only flickered as three rows. How far the Robot's player sits from the
+    // room is what timing uses; it is in the player offset and robotDelta.
     const connected = timeline.connected === true;
-    const seconds = (value) => finite(value) === null ? '—' : `${Number(value).toFixed(3)} s`;
-    rows.push(row('youtubePhone', t('diag.timing.ytPhone'), connected ? seconds(timeline.youtubeTime) : '—', t('diag.timing.ytPhoneNote')));
-    rows.push(row('youtubeServer', t('diag.timing.ytServer'), connected ? seconds(timeline.serverTime) : '—', t('diag.timing.ytServerNote')));
-    if (source?.robotRoute || timing?.robotRoute) {
-      const evidence = timing?.robotOffsetTimingEvidence;
-      const fresh = connected && timing?.robotDeltaFresh === true;
-      rows.push(row('youtubeRobot', t('diag.timing.ytRobot'), fresh ? seconds(evidence?.playerSeconds) : '—',
-        fresh ? t('diag.timing.ytRobotNote') : t('diag.timing.ytStale'), fresh ? 'neutral' : 'warn'));
-    }
+    const position = finite(timeline.serverTime);
+    const clock = position === null ? null
+      : `${Math.floor(position / 60)}:${String(Math.floor(position % 60)).padStart(2, '0')}`;
     const stateKeys = { '-1': 'unstarted', 0: 'ended', 1: 'playing', 2: 'paused', 3: 'buffering', 5: 'cued' };
     const stateName = stateKeys[timeline.state];
+    const parts = [stateName ? t(`diag.timing.ytState.${stateName}`) : '—',
+      finite(timeline.playbackRate) === null ? '—' : `${timeline.playbackRate}×`];
+    if (clock) parts.push(clock);
     rows.push(row('youtubeRate', t('diag.timing.ytRate'),
-      connected ? `${stateName ? t(`diag.timing.ytState.${stateName}`) : '—'} · ${finite(timeline.playbackRate) === null ? '—' : `${timeline.playbackRate}×`}` : t('diag.timing.clock.disconnected')));
+      connected ? parts.join(' · ') : t('diag.timing.clock.disconnected')));
   }
   if (timing) {
     const value = (v) => finite(v) === null ? '—' : signedMs(Number(v));

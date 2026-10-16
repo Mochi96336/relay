@@ -152,7 +152,14 @@ function initialize() {
         : null;
       nodes.pathDifference.textContent = pathDifference === null
         ? '—'
-        : t('diag.cal.pathMicSong', { difference: ms(pathDifference), mic: ms(micLatency), song: ms(backingLatency) });
+        : t('diag.cal.pathMicSong', {
+          difference: ms(pathDifference),
+          micName: typeof timing.bootCalibrationMic?.nickname === 'string'
+            ? t('diag.cal.pathMicOf', { name: timing.bootCalibrationMic.nickname })
+            : 'Mic',
+          mic: ms(micLatency),
+          song: ms(backingLatency),
+        });
     } else {
       nodes.pathDifference.textContent = '—';
     }

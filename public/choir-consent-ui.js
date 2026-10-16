@@ -3,7 +3,6 @@ import './live-i18n.js';
 // media client listens for the capture its tap starts. As a separate page
 // script it could finish loading seconds later, and the tap was lost.
 import './choir-secondary-media-client.js';
-import { MIC_GAIN_KEY, storeNumber, storedNumber } from './device-preferences.js';
 
 /**
  * The second Mic's controls, in the Mic row like Take Mic: + 副 Mic to join
@@ -16,8 +15,6 @@ const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const joinButton = document.querySelector('#choir-invite-open');
 const leaveButton = document.querySelector('#choir-withdraw');
 const statusCopy = document.querySelector('#choir-consent-status');
-const gainSlider = document.querySelector('#choir-gain');
-const gainValue = document.querySelector('#choir-gain-value');
 
 let available = false;
 let session = null;
@@ -152,34 +149,6 @@ joinButton?.addEventListener('click', () => {
   pendingTimer = setTimeout(() => { if (pending && !joined) leftWith('choir.joinRejected'); }, 8_000);
   render();
 });
-// B's own Mic gain, like the main Mic's: this device's remembered value,
-// sent while B is in (at most every 100 ms while dragging, and on release).
-let gainSentAtMs = Number.NEGATIVE_INFINITY;
-let gainTimer = null;
-function showGain() {
-  if (gainValue && gainSlider) gainValue.value = `+${Number(gainSlider.value)} dB`;
-}
-function sendGain() {
-  clearTimeout(gainTimer);
-  gainTimer = null;
-  if (!joined || !gainSlider) return;
-  const micGainDb = Number(gainSlider.value);
-  storeNumber(MIC_GAIN_KEY, micGainDb);
-  gainSentAtMs = performance.now();
-  publishCommand('choir-secondary-gain', { micGainDb });
-}
-if (gainSlider) {
-  const remembered = storedNumber(MIC_GAIN_KEY, 0, 40);
-  if (remembered !== null) gainSlider.value = String(remembered);
-  showGain();
-  gainSlider.addEventListener('input', () => {
-    showGain();
-    const waitMs = 100 - (performance.now() - gainSentAtMs);
-    if (waitMs <= 0) sendGain();
-    else if (!gainTimer) gainTimer = setTimeout(sendGain, waitMs);
-  });
-  gainSlider.addEventListener('change', sendGain);
-}
 leaveButton?.addEventListener('click', () => {
   if (!joined) return;
   publishCommand('choir-secondary-withdraw');

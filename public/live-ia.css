@@ -153,7 +153,7 @@
 }
 
 body[data-self-mic="live"] .mic-live-control,
-body[data-choir-guest="joined"] .choir-gain-control {
+body[data-choir-guest="joined"] .mic-live-control {
   display: block;
 }
 

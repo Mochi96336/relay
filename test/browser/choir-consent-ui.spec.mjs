@@ -21,6 +21,10 @@ async function openFixture(page, participantId, micOwnerId = null) {
     window.addEventListener('relay-product-status', event => {
       if (event.detail?.room) event.detail.room.duet = window.__fixtureDuet;
     });
+    const mix = await import('/mix-controls.js');
+    window.__mixControls = mix;
+    window.__primaryMixChanges = 0;
+    mix.listenForSingerInput({ onMix: () => window.__primaryMixChanges++ });
     await import('/choir-consent-ui.js');
     window.dispatchEvent(new CustomEvent('relay-presence-state', {
       detail: {
@@ -96,18 +100,32 @@ test('only someone other than the Mic owner sees + Second Mic, and one tap joins
   await expect(open).toBeHidden();
   await expect(page.locator('#start-publisher')).toBeHidden();
   // B's own Mic gain, in the same row the Mic owner has.
-  await expect(page.locator('#choir-gain-control')).toBeVisible();
-  await page.locator('#choir-gain').fill('12');
-  await expect(page.locator('#choir-gain-value')).toHaveText('+12 dB');
+  await expect(page.locator('.mic-live-control')).toBeVisible();
+  await expect(page.locator('.mic-live-control')).toHaveCount(1);
+  await expect(page.locator('.mic-live-control summary span')).toHaveText('Mic');
+  await expect(page.locator('#mic-gain')).toBeEnabled();
+  await page.locator('#mic-gain').fill('12');
+  await expect(page.locator('#mic-gain-value')).toHaveText('+12 dB');
   await expect.poll(() => page.evaluate(() => window.__choirSent.at(-1)))
     .toEqual({ type: 'choir-secondary-gain', micGainDb: 12 });
+  await page.evaluate(() => {
+    window.__mixControls.acceptMixSettings({ micGainDb: 35 });
+    window.__mixControls.setSingerControlsEnabled(false);
+    window.__mixControls.restoreLastKnownControl('set-mix');
+  });
+  await expect(page.locator('#mic-gain')).toHaveValue('12');
+  await expect(page.locator('#mic-gain')).toBeEnabled();
+  expect(await page.evaluate(() => window.__primaryMixChanges)).toBe(0);
+
   await page.locator('#choir-withdraw').click();
   expect((await page.evaluate(() => window.__choirSent)).at(-1)).toEqual({ type: 'choir-secondary-withdraw' });
   await consent(page, { type: 'choir-secondary-consent-status', status: 'withdrawn', secondaryId: 'singerB' });
   await expect(page.locator('#choir-withdraw')).toBeHidden();
   await expect(open).toBeVisible();
   await expect(open).toBeEnabled();
-  await expect(page.locator('#choir-gain-control')).toBeHidden();
+  await expect(page.locator('.mic-live-control')).toBeHidden();
+  await expect(page.locator('#mic-gain')).toBeDisabled();
+  await expect(page.locator('#mic-gain')).toHaveValue('35');
   await expect.poll(() => page.evaluate(() =>
     document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });

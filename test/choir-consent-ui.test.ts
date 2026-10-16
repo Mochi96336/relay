@@ -35,11 +35,12 @@ test('a joined B sets its own Mic gain, as the Mic owner does', async () => {
   const presence = await file('../public/presence.js');
   const server = await file('../src/server.ts');
   const css = await file('../public/live-ia.css');
-  assert.match(html, /<details id="choir-gain-control" class="mic-live-control choir-gain-control">[\s\S]*?id="choir-gain" class="adjust-range" type="range" min="0" max="40"/);
-  assert.match(css, /body\[data-choir-guest="joined"\] \.choir-gain-control \{\s*display: block;/);
-  // This device's remembered gain, sent while B is in.
-  assert.match(app, /storedNumber\(MIC_GAIN_KEY, 0, 40\)/);
-  assert.match(app, /if \(!joined \|\| !gainSlider\) return;[\s\S]*?publishCommand\('choir-secondary-gain', \{ micGainDb \}\)/);
+  const mix = await file('../public/mix-controls.js');
+  assert.doesNotMatch(html, /choir-gain/);
+  assert.equal((html.match(/id="mic-gain"/g) ?? []).length, 1);
+  assert.match(css, /body\[data-choir-guest="joined"\] \.mic-live-control \{\s*display: block;/);
+  assert.match(mix, /storedNumber\(MIC_GAIN_KEY, 0, 40\)/);
+  assert.match(mix, /type: 'choir-secondary-gain', micGainDb: micGainDb\(\)/);
   assert.match(presence, /payload\.type === 'choir-secondary-gain'[\s\S]*?send\(\{ type: payload\.type, micGainDb: payload\.micGainDb \}\)/);
   assert.match(server, /type === 'choir-secondary-gain'[\s\S]*?session\.setSecondaryMicGainDb\(gainDb\)/);
 });

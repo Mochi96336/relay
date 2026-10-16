@@ -86,10 +86,20 @@ calibrateTiming?.addEventListener('click', () => {
   if (moreMenu) moreMenu.open = false;
 });
 
+let primaryMicActive = false;
+let secondaryMicActive = false;
+function updateMicControlOpen() {
+  if (micLiveControl) micLiveControl.open = primaryMicActive || secondaryMicActive;
+}
 window.addEventListener('relay-microphone-local-state', (event) => {
-  if (!micLiveControl) return;
-  micLiveControl.open = event.detail?.active === true;
+  primaryMicActive = event.detail?.active === true;
+  updateMicControlOpen();
 });
+window.addEventListener('relay-choir-guest-state', (event) => {
+  secondaryMicActive = event.detail?.enabled === true;
+  updateMicControlOpen();
+});
+window.dispatchEvent(new Event('relay-request-choir-guest-state'));
 
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;

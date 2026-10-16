@@ -1,12 +1,19 @@
+import { MIC_GAIN_KEY, storeNumber, storedNumber } from './device-preferences.js';
+
 // The singer's mix controls on the Mic page: what the sliders show, and the
-// values the Relay last confirmed. Whether this page may send a change, and
-// the command it sends, stay with the publisher session in app.js.
+// values the Relay last confirmed. Primary changes go through the publisher
+// session in app.js; a joined second singer changes its own gain.
 
 const micGain = document.querySelector('#mic-gain');
 const micGainValue = document.querySelector('#mic-gain-value');
 
 const SLIDER_HOLD_MS = 2000;
 export const FIXED_SONG_LEVEL = 100;
+
+let secondaryActive = false;
+let primaryActionable = false;
+let secondaryGainTimer = null;
+let secondaryGainSentAtMs = Number.NEGATIVE_INFINITY;
 
 let lastKnownControlSnapshot = {
   micGainDb: Number(micGain.value) || 24,
@@ -47,7 +54,7 @@ export function micGainDb() {
 }
 
 export function restoreLastKnownControl(command = null) {
-  if (command === null || command === 'set-mix') {
+  if (!secondaryActive && (command === null || command === 'set-mix')) {
     micGain.value = String(lastKnownControlSnapshot.micGainDb);
     updateMixLabels();
   }
@@ -62,7 +69,7 @@ export function acceptMixSettings(message) {
       ...lastKnownControlSnapshot,
       micGainDb: nextGain,
     };
-    if (!sliderIsBusy(micGain)) micGain.value = String(nextGain);
+    if (!secondaryActive && !sliderIsBusy(micGain)) micGain.value = String(nextGain);
   }
   updateMixLabels();
   return accepted;
@@ -80,14 +87,50 @@ export function acceptVocalFineTune(message) {
 }
 
 export function setSingerControlsEnabled(actionable) {
-  micGain.disabled = !actionable;
+  primaryActionable = actionable;
+  micGain.disabled = !(secondaryActive || primaryActionable);
 }
 
-/** Calls `onMix` each time the singer moves the Mic gain slider. */
+/** Routes the shared Mic slider to the microphone held on this device. */
 export function listenForSingerInput({ onMix }) {
   micGain.addEventListener('input', () => {
     markSliderTouched(micGain);
-    onMix();
+    if (secondaryActive) {
+      updateMixLabels();
+      storeNumber(MIC_GAIN_KEY, micGainDb());
+      const waitMs = 100 - (performance.now() - secondaryGainSentAtMs);
+      if (waitMs <= 0) sendSecondaryGain();
+      else if (!secondaryGainTimer) secondaryGainTimer = setTimeout(sendSecondaryGain, waitMs);
+    } else onMix();
   });
-  micGain.addEventListener('change', () => markSliderTouched(micGain));
+  micGain.addEventListener('change', () => {
+    markSliderTouched(micGain);
+    if (secondaryActive) sendSecondaryGain();
+  });
 }
+
+// The single Mic rail follows the microphone held on this device. Room mix
+// broadcasts still update the primary snapshot without replacing B's gain.
+function sendSecondaryGain() {
+  clearTimeout(secondaryGainTimer);
+  secondaryGainTimer = null;
+  if (!secondaryActive) return;
+  storeNumber(MIC_GAIN_KEY, micGainDb());
+  secondaryGainSentAtMs = performance.now();
+  window.dispatchEvent(new CustomEvent('relay-choir-consent-command', {
+    detail: { type: 'choir-secondary-gain', micGainDb: micGainDb() },
+  }));
+}
+window.addEventListener('relay-choir-guest-state', (event) => {
+  const enabled = event.detail?.enabled === true;
+  if (enabled === secondaryActive) return;
+  secondaryActive = enabled;
+  clearTimeout(secondaryGainTimer);
+  secondaryGainTimer = null;
+  micGain.value = String(enabled
+    ? storedNumber(MIC_GAIN_KEY, 0, 40) ?? 24
+    : lastKnownControlSnapshot.micGainDb);
+  updateMixLabels();
+  setSingerControlsEnabled(primaryActionable);
+});
+window.dispatchEvent(new Event('relay-request-choir-guest-state'));

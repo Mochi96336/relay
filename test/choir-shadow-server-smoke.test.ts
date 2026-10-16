@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { startRelay, RelayClient, sleep } from './helpers/harness.js';
+import { startRelay, RelayClient, sleep, waitForNewMessage } from './helpers/harness.js';
 import { encodePcmFrame } from '../src/pcm-frame.js';
 import { encodeAudioPacket } from '../src/audio-packet.js';
 import { participantIdForCapability } from '../src/participant-capability.js';
@@ -532,18 +532,147 @@ test('B joins by its own press while the song is paused; the room starts itself 
       }
       assert.equal(duet?.audible, true, `the joined B sings in the room mix: ${JSON.stringify(duet)}`);
 
-      // A ends the second Mic: B is told why and leaves the room mix.
-      a.send({ type: 'choir-secondary-dismiss' });
-      const ended = await b.waitFor((m) => m.type === 'choir-secondary-consent-status' && m.status === 'revoked');
-      assert.equal(ended.reason, 'dismissed');
+      // C takes over the second Mic, as the Mic itself can be taken over:
+      // B is told it was replaced and leaves the room mix, and C is in.
+      const c = await connect();
+      const capC = 'e'.repeat(64);
+      const idC = participantIdForCapability(capC)!;
+      c.send({ type: 'participant-authenticate', participantId: idC, capability: capC, nickname: 'C' });
+      await c.waitFor((m) => m.type === 'participant-authenticated' && m.participantId === idC);
+      c.send({ type: 'choir-secondary-join' });
+      const cIn = await c.waitFor((m) => m.type === 'choir-secondary-consent-status' || m.type === 'choir-consent-rejected');
+      assert.equal(cIn.status, 'accepted', JSON.stringify(cIn));
+      const replaced = await b.waitFor((m) => m.type === 'choir-secondary-consent-status' && m.status === 'revoked');
+      assert.equal(replaced.reason, 'replaced');
       for (const until = Date.now() + 2_000; Date.now() < until; await sleep(30)) {
         duet = (await (await fetch(relay.httpUrl('/statusz'))).json()).audio?.duetSecondary ?? null;
         if (!duet?.audible) break;
       }
-      assert.ok(!duet?.audible, `a dismissed B leaves the room mix: ${JSON.stringify(duet)}`);
+      assert.ok(!duet?.audible, `the replaced B leaves the room mix: ${JSON.stringify(duet)}`);
+      // The room is rebuilt for C, and C is told so.
+      const cReady = await c.waitForType('choir-room-ready', 5_000);
+      assert.ok(cReady.roomEpoch > ready.roomEpoch, 'a new room for the new second singer');
     } finally {
       clearInterval(keepPlaying);
     }
+  } finally {
+    for (const client of clients) client.close();
+    await relay.stop();
+  }
+});
+
+test('without Content, B is placed by its YouTube time against the Robot', async () => {
+  const relay = await startRelay({
+    RELAY_CHOIR_SHADOW: '1', RELAY_CHOIR_MEDIA_EXPERIMENT: '1',
+    RELAY_TEST_LEGACY_PARTICIPANTS: '0',
+    RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000',
+  });
+  const clients: RelayClient[] = [];
+  try {
+    const [a, b, publisher, robotBacking, robotControl, bMedia] = await Promise.all(
+      Array.from({ length: 6 }, async () => {
+        const c = await RelayClient.connect(relay);
+        clients.push(c);
+        return c;
+      }),
+    );
+    const capA = 'f'.repeat(64);
+    const capB = '9'.repeat(64);
+    const idA = participantIdForCapability(capA)!;
+    const idB = participantIdForCapability(capB)!;
+    const authenticate = async (client: RelayClient, id: string, cap: string) => {
+      client.send({ type: 'participant-authenticate', participantId: id, capability: cap, nickname: id === idA ? 'A' : 'B' });
+      await client.waitFor((m) => m.type === 'participant-authenticated' && m.participantId === id);
+    };
+    await Promise.all([
+      authenticate(a, idA, capA), authenticate(b, idB, capB),
+      authenticate(publisher, idA, capA), authenticate(bMedia, idB, capB),
+    ]);
+    publisher.send({ type: 'register', role: 'publisher', sampleRate: 48_000,
+      captureGeneration: 1, initialSequence: 0, audioPacketVersion: 2 });
+    await publisher.waitFor((m) => m.type === 'registered' && m.role === 'publisher');
+    robotBacking.send({ type: 'register', role: 'backing', robot: true,
+      sampleRate: 48_000, captureGeneration: 9, captureSampleCursor: 0 });
+    await robotBacking.waitFor((m) => m.type === 'registered' && m.role === 'backing');
+    robotBacking.resumeCaptureSession(9, 0);
+    robotBacking.sendPcm(Buffer.from(new Int16Array(960).fill(900).buffer));
+    robotControl.send({ type: 'robot-source-hello' });
+    const videoId = 'dQw4w9WgXcQ';
+    a.send({ type: 'playback-hello', playbackTransportId: 'choir-yt-playback-a', playbackGeneration: 1 });
+    await a.waitForType('playback-registered');
+    const telemetry = (state: number, position: number, captureAnchor?: unknown) => ({
+      type: 'youtube-telemetry', videoId, state, currentTime: position, duration: 200,
+      playbackRate: 1, bufferedFraction: .8, playbackTransportId: 'choir-yt-playback-a', playbackGeneration: 1,
+      captureAnchor,
+    });
+    a.send({ type: 'room-song-command', commandId: 'yt-load-1', expectedRevision: 0, action: 'load', videoId, positionSeconds: 10 });
+    const loaded = await a.waitFor((m) => (m.type === 'room-song-command-apply' || m.type === 'room-song-command-rejected') && m.commandId === 'yt-load-1');
+    assert.equal(loaded.type, 'room-song-command-apply', JSON.stringify(loaded));
+    a.send(telemetry(5, 10));
+    await a.waitFor((m) => m.type === 'room-song-command-complete' && m.commandId === 'yt-load-1');
+    b.send({ type: 'choir-secondary-join' });
+    const joined = await b.waitFor((m) => m.type === 'choir-secondary-consent-status' || m.type === 'choir-consent-rejected');
+    assert.equal(joined.status, 'accepted', JSON.stringify(joined));
+    a.send({ type: 'room-song-command', commandId: 'yt-play-1', expectedRevision: 1, action: 'play' });
+    await a.waitFor((m) => m.type === 'room-song-command-apply' && m.commandId === 'yt-play-1');
+    const playBeganAt = Date.now();
+    const songAt = (unixMs: number) => 10 + (unixMs - playBeganAt) / 1_000;
+    a.send(telemetry(1, 10));
+    await a.waitFor((m) => m.type === 'room-song-command-complete' && m.commandId === 'yt-play-1');
+    await b.waitForType('choir-room-ready', 5_000);
+    b.send({ type: 'choir-secondary-media-claim-request' });
+    const claim = await b.waitForType('choir-secondary-media-claim');
+    bMedia.send({ type: 'choir-secondary-media-register', claimToken: claim.claimToken, sampleRate: 48_000, packetVersion: 2 });
+    const registration = await bMedia.waitFor((m) => m.type === 'choir-secondary-media-registered' || m.type === 'choir-media-rejected');
+    assert.equal(registration.type, 'choir-secondary-media-registered', JSON.stringify(registration));
+
+    // Both singers silent: Content can never place B. The YouTube time can:
+    // B's player is 150 ms behind the Robot's at the same moment of capture.
+    const frame = 960;
+    const silence = Buffer.alloc(frame * 2);
+    const backingPcm = Buffer.from(new Int16Array(frame).fill(900).buffer);
+    const startedAt = Date.now();
+    const loopSong = songAt(startedAt);
+    let duet: any = null;
+    let audio: any = null;
+    for (let i = 0; Date.now() - startedAt < 8_000; i++) {
+      // Wall-clock pacing, so the 20 ms frames keep up with real time.
+      while (Date.now() - startedAt < i * 20) await sleep(2);
+      publisher.sendAudioPacket(silence);
+      robotBacking.sendPcm(backingPcm);
+      bMedia.sendBinary(encodeAudioPacket({ source: 'mic', generation: 7,
+        firstSampleIndex: frame * i, sequence: i, pcm: silence }));
+      if (i % 12 !== 11) continue;
+      const cursor = frame * (i + 1);
+      const at = Date.now();
+      // Where the song was when this sample was captured.
+      const robotSeconds = loopSong + cursor / 48_000;
+      const anchor = (generation: number) => ({ generation, sampleRate: 48_000,
+        sampleIndex: cursor, mediaDeltaSeconds: 0, uncertaintyMs: 40 });
+      a.send(telemetry(1, robotSeconds, anchor(1)));
+      robotControl.send({ type: 'robot-player-offset', offsetMs: 0, songObservation: {
+        videoId, state: 1, mediaSeconds: robotSeconds, playbackRate: 1, observedAtUnixMs: at } });
+      robotBacking.send({ type: 'backing-song-clock', generation: 9, sampleRate: 48_000,
+        sampleIndex: cursor, observedAtUnixMs: at });
+      b.send({ type: 'choir-secondary-song-anchor', videoId, state: 1, playbackRate: 1,
+        currentTime: robotSeconds - .15, captureAnchor: anchor(7) });
+      if (i % 48 !== 47) continue;
+      audio = (await (await fetch(relay.httpUrl('/statusz'))).json()).audio;
+      duet = audio?.duetSecondary ?? null;
+      if (duet?.audible && relay.stdout().includes('"source":"youtube-time"')) break;
+    }
+    assert.match(relay.stdout(), /"event":"b-lag-source","source":"youtube-time"/,
+      `${relay.stdout().split('\n').filter((l) => l.startsWith('[choir]')).join('\n')}\n${JSON.stringify({ duet, youtube: audio?.duetYoutube, room: audio?.duetRoom?.state })}`);
+    assert.equal(duet?.audible, true, JSON.stringify(duet));
+    // In the main Mic's coordinates: A's own YouTube-time lag, plus the 150 ms
+    // B's player runs behind A's for the same captured moment.
+    const from = a.messages.length;
+    a.send({ type: 'timing-calibration-status-request' });
+    const timing = await waitForNewMessage(a, from, (m) => m.type === 'timing-calibration-status');
+    const aLagMs = timing.sampleSongFallback.candidateMs;
+    assert.equal(typeof aLagMs, 'number', JSON.stringify(timing.sampleSongFallback));
+    assert.ok(Math.abs(duet.targetLagMs - (aLagMs + 150)) < 40,
+      `B ${duet.targetLagMs} ms against A ${aLagMs} ms: ${JSON.stringify(duet)}`);
   } finally {
     for (const client of clients) client.close();
     await relay.stop();

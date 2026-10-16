@@ -310,33 +310,10 @@ body:has(#start-publisher:disabled) .voice-ribbon span:nth-child(6) { animation-
   cursor: pointer; font-size: 12px; font-weight: 630;
 }
 .choir-invite-open[hidden] { display: none; }
-.choir-consent-panel {
-  margin-top: 14px; padding: 14px; border: 1px solid var(--line);
-  border-radius: 12px; background: #18191c; display: grid; gap: 10px;
-  max-width: 440px;
-}
-.choir-consent-panel[hidden], .choir-consent-panel [hidden] { display: none; }
-.choir-consent-panel strong { font-size: 13px; }
-.choir-consent-panel .microcopy { margin: 0; }
-.choir-host-actions { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
-.choir-host-actions label { grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
-.choir-host-actions select {
-  min-width: 0; padding: 9px; color: var(--text); background: #101114;
-  border: 1px solid var(--line-strong); border-radius: 8px;
-}
-.choir-host-actions button, .choir-guest-actions button {
-  border: 1px solid var(--line-strong); border-radius: 8px;
-  background: #24262a; color: var(--text); padding: 9px 11px; cursor: pointer;
-}
-.choir-guest-actions { display: grid; gap: 9px; font-size: 13px; }
-.choir-guest-actions p { margin: 0; }
-#choir-consent-status { margin: 0; font-size: 13px; color: #d6d7dc; }
-#choir-consent-status:empty { display: none; }
-#choir-withdraw { border-color: var(--line-strong); background: #24262a; font-size: 13px; padding: 9px 12px; }
-/* A joined second singer leaves the duet first; taking over would end it.
-   With Take Mic gone the row is empty, so the panel moves up in its place. */
-body[data-choir-guest="joined"] .performance-stage > .mic-actions { display: none !important; }
-#choir-consent-close { justify-self: start; }
+.choir-status { margin: 10px 0 0; font-size: 13px; color: #d6d7dc; }
+.choir-status[hidden] { display: none; }
+/* A joined second singer leaves the duet first; taking over the Mic would end it. */
+body[data-choir-guest="joined"] #start-publisher { display: none !important; }
 
 #start-publisher {
   appearance: none;

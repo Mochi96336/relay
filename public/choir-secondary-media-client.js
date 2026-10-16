@@ -208,5 +208,21 @@ function connectMedia(claimToken, roomEpoch, sourceRate, direct) {
   });
 }
 
+// B's local YouTube position, paired with the capture sample recorded then.
+// Sent only while B's media is connected: the server cannot place samples it
+// does not have.
+window.addEventListener('relay-choir-song-anchor', (event) => {
+  const detail = event.detail;
+  if (!enabled || !mediaSocket || mediaSocket.readyState !== WebSocket.OPEN || !detail) return;
+  const captureAnchor = capture.anchorFor(Number(detail.sampledAtPerformanceMs));
+  if (!captureAnchor) return;
+  window.dispatchEvent(new CustomEvent('relay-choir-consent-command', {
+    detail: {
+      type: 'choir-secondary-song-anchor', videoId: detail.videoId, state: detail.state,
+      currentTime: detail.currentTime, playbackRate: detail.playbackRate, captureAnchor,
+    },
+  }));
+});
+
 // Presence may have announced Choir before this module finished loading.
 window.dispatchEvent(new Event('relay-request-choir-media-mode'));

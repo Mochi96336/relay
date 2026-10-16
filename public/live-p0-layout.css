@@ -219,12 +219,12 @@ html body .performance-stage > #mic-takeover {
   margin-bottom: auto !important;
 }
 
-/* An open second-Mic panel belongs with the Mic actions it came from: it
+/* A second-Mic status line belongs with the Mic actions it came from: it
    claims the free space instead, so it sits right under them. */
-html body .performance-stage:has(> .choir-consent-panel:not([hidden])) > .mic-actions {
+html body .performance-stage:has(> .choir-status:not([hidden])) > .mic-actions {
   margin-bottom: 0 !important;
 }
-html body .performance-stage > .choir-consent-panel:not([hidden]) {
+html body .performance-stage > .choir-status:not([hidden]) {
   margin-bottom: auto !important;
 }
 

@@ -38,7 +38,9 @@ function setLocalPlayback(active) {
 }
 function failInitialization() {
   resetPlayer();
-  retryAtMs = performance.now() + 5_000;
+  // Keep trying while B is in, more slowly each time: giving up after three
+  // slow loads left a joined B with no song for the rest of the session.
+  retryAtMs = performance.now() + Math.min(15_000, 5_000 * Math.max(1, startAttempts));
   setStatus('choir.followerVideoError');
 }
 
@@ -141,7 +143,7 @@ function loadYouTubeAPI() {
 
 async function startPlayer() {
   if (!host || !eligible || role !== 'observer' || starting || player
-    || startAttempts >= 3 || performance.now() < retryAtMs) return;
+    || performance.now() < retryAtMs) return;
   startAttempts++;
   starting = true;
   const ownGeneration = ++generation;
@@ -164,6 +166,7 @@ async function startPlayer() {
           readyTimer = null;
           playerReady = true;
           starting = false;
+          startAttempts = 0;
           tick();
         },
         onAutoplayBlocked: () => {
@@ -201,7 +204,21 @@ async function startPlayer() {
   }
 }
 
+/** What B's local player is doing, for the server log (a songless B is otherwise a guess). */
+function publishReport() {
+  let playerState = null;
+  try { playerState = playerReady ? Number(player.getPlayerState()) : null; } catch {}
+  window.dispatchEvent(new CustomEvent('relay-choir-follower-report', {
+    detail: {
+      eligible, role, playerReady, starting, playerState, startAttempts,
+      autoplayBlocked, failedVideo: failedVideoId !== null, status: statusKey,
+      localPlayback: localBackingAudibleRole, roomVideo: latestRoom?.videoId ?? null,
+    },
+  }));
+}
+
 function tick() {
+  publishReport();
   if (!eligible || role !== 'observer') return;
   const room = currentRoom();
   if (!room) {
@@ -219,7 +236,9 @@ function tick() {
     return;
   }
   let local;
+  let sampledAtPerformanceMs = 0;
   try {
+    sampledAtPerformanceMs = performance.now();
     local = {
       ready: true,
       videoId: localVideoId,
@@ -233,6 +252,15 @@ function tick() {
     return;
   }
   setLocalPlayback(local.playerState === 1);
+  if (local.playerState === 1 && localVideoId === room.videoId) {
+    // Where B's local YouTube is, for B's YouTube-time alignment.
+    window.dispatchEvent(new CustomEvent('relay-choir-song-anchor', {
+      detail: {
+        videoId: localVideoId, state: 1, currentTime: local.positionSeconds,
+        playbackRate: local.playbackRate, sampledAtPerformanceMs,
+      },
+    }));
+  }
   const nowMs = performance.now();
   const action = decideFollowerAction(room, local, nowMs, lastSeekAtMs);
   try {

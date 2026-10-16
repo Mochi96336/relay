@@ -91,7 +91,7 @@ test('Monitor stays available until B actually plays and returns after video fai
   assert.equal(f.status(), 'choir.followerVideoError');
 });
 
-test('initialization timeout retries with bounds and ignores retired iframe callbacks', async () => {
+test('a slow player load keeps being retried, more slowly, and ignores retired iframe callbacks', async () => {
   const f = await fixture();
   const retired = f.players[0];
   await f.advance(10_000);
@@ -103,12 +103,12 @@ test('initialization timeout retries with bounds and ignores retired iframe call
   retired.config.events.onReady();
   retired.config.events.onStateChange({ data: 1 });
   assert.equal(f.active(), false);
-  await f.advance(10_000);
-  await f.advance(5_000);
+  await f.advance(10_000); // the second load times out
+  await f.advance(10_000); // and the third starts 10 s later
   assert.equal(f.players.length, 3);
-  await f.advance(10_000);
-  await f.advance(60_000);
-  assert.equal(f.players.length, 3);
+  await f.advance(10_000); // the third times out
+  await f.advance(15_000); // retries go on while B is in, at most 15 s apart
+  assert.equal(f.players.length, 4);
 });
 
 test('refused playback rate cannot starve play or seek', async () => {

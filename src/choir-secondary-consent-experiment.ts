@@ -133,9 +133,10 @@ export class ChoirSecondaryConsentExperiment {
   }
 
   /**
-   * B joins the current Mic owner from its own authenticated socket. One
-   * second singer per Mic owner: a different B is refused while one is in.
-   * Returns false when nobody else holds the Mic.
+   * B joins the current Mic owner from its own authenticated socket. There is
+   * one second singer per Mic owner, and like the Mic itself it can be taken
+   * over: a different B joining replaces the one already in, who is told it
+   * was replaced. Returns false when nobody else holds the Mic.
    */
   join(secondarySocket: AuthenticatedSocket, primaryId: string | null, nowMs: number): boolean {
     this.sweep(nowMs);
@@ -145,12 +146,14 @@ export class ChoirSecondaryConsentExperiment {
       || !this.policy.primaryStillOwnsMic(primaryId)
       || !this.policy.participantConnected(secondaryId)) return false;
     for (const invite of this.pending.values()) {
-      if (invite.primaryId !== primaryId || !invite.accepted) continue;
-      if (invite.secondaryId !== secondaryId) return false;
-      if (invite.consentSocket === secondarySocket) return true;
+      if (invite.primaryId === primaryId && invite.accepted
+        && invite.secondaryId === secondaryId && invite.consentSocket === secondarySocket) return true;
     }
-    for (const [id, invite] of this.pending)
-      if (invite.primaryId === primaryId || invite.secondaryId === secondaryId) this.pending.delete(id);
+    for (const [id, invite] of this.pending) {
+      if (invite.primaryId !== primaryId && invite.secondaryId !== secondaryId) continue;
+      this.pending.delete(id);
+      if (invite.secondaryId !== secondaryId) this.notifyRevoked(invite, 'replaced');
+    }
     const joined: Invite = {
       inviteId: randomUUID(), primaryId, secondaryId, primarySocket: null,
       consentSocket: secondarySocket, accepted: true, join: true,
@@ -165,18 +168,6 @@ export class ChoirSecondaryConsentExperiment {
     return true;
   }
 
-  /** The Mic owner ends their second singer's join. B is told why. */
-  dismiss(primaryId: string | undefined): boolean {
-    if (!primaryId) return false;
-    let removed = false;
-    for (const [id, invite] of this.pending) {
-      if (!invite.join || invite.primaryId !== primaryId) continue;
-      this.pending.delete(id);
-      this.notifyRevoked(invite, 'dismissed');
-      removed = true;
-    }
-    return removed;
-  }
 
   /** The joined pair, if a B is in: the server creates its room when a song plays. */
   activeJoin(nowMs: number): { primaryId: string; secondaryId: string } | null {

@@ -237,18 +237,31 @@ window.relayIdentityReady = (async () => {
     const payload = event.detail;
     if (!choirConsentAvailable || !sessionAuthorityFresh
       || !payload || ![
-        'choir-secondary-invite', 'choir-secondary-accept', 'choir-secondary-join', 'choir-secondary-dismiss',
+        'choir-secondary-invite', 'choir-secondary-accept', 'choir-secondary-join',
+        'choir-secondary-song-anchor', 'choir-secondary-page',
         'choir-secondary-decline', 'choir-secondary-withdraw',
         'choir-room-begin', 'choir-secondary-media-claim-request',
       ].includes(payload.type)) return;
-    if (['choir-room-begin', 'choir-secondary-media-claim-request', 'choir-secondary-join']
+    if (['choir-room-begin', 'choir-secondary-media-claim-request', 'choir-secondary-join',
+      'choir-secondary-song-anchor', 'choir-secondary-page']
       .includes(payload.type) && !choirMediaEnabled) return;
+    if (payload.type === 'choir-secondary-song-anchor') {
+      send({
+        type: payload.type, videoId: payload.videoId, state: payload.state,
+        currentTime: payload.currentTime, playbackRate: payload.playbackRate,
+        captureAnchor: payload.captureAnchor,
+      });
+      return;
+    }
+    if (payload.type === 'choir-secondary-page') {
+      send({ type: payload.type, page: payload.page });
+      return;
+    }
     if (payload.type === 'choir-secondary-invite') {
       if (typeof payload.secondaryId !== 'string') return;
       send({ type: payload.type, secondaryId: payload.secondaryId });
     } else if (payload.type === 'choir-secondary-withdraw'
       || payload.type === 'choir-secondary-join'
-      || payload.type === 'choir-secondary-dismiss'
       || payload.type === 'choir-secondary-media-claim-request') {
       send({ type: payload.type });
     } else if (payload.type === 'choir-room-begin') {

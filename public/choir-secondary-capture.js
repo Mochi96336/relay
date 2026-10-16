@@ -120,6 +120,28 @@ export class ChoirSecondaryCapture {
     }
   }
 
+  /**
+   * Which capture sample was being recorded at `sampledAtPerformanceMs`, as
+   * the main Mic's sample/song anchor (app.js) computes it: the server maps
+   * it against B's local YouTube position for YouTube-time alignment.
+   */
+  anchorFor(sampledAtPerformanceMs) {
+    const anchor = this.lastChunk;
+    if (!anchor || !this.context || this.context.state !== 'running' || this.rate === null) return null;
+    const now = performance.now();
+    const age = now - anchor.observedAt;
+    if (age < 0 || age > 250) return null;
+    if (!Number.isFinite(sampledAtPerformanceMs)
+      || now - sampledAtPerformanceMs < 0 || now - sampledAtPerformanceMs > 100) return null;
+    const index = anchor.firstSampleIndex
+      + (this.context.currentTime - anchor.contextTime + (sampledAtPerformanceMs - now) / 1000) * this.rate;
+    if (!Number.isFinite(index)) return null;
+    return {
+      generation: this.generation, sampleRate: this.rate, sampleIndex: anchor.firstSampleIndex,
+      mediaDeltaSeconds: (anchor.firstSampleIndex - index) / this.rate, uncertaintyMs: 40,
+    };
+  }
+
   attach(socket, sampleRate) {
     if (!this.graph || !this.context || this.context.state !== 'running'
       || !this.track || this.track.readyState !== 'live' || this.track.muted
@@ -170,6 +192,9 @@ export class ChoirSecondaryCapture {
           this.clockSampleOrigin = this.cursor;
         }
       }
+      if (Number.isFinite(value.capturedAtContextTime)) {
+        this.lastChunk = { firstSampleIndex, contextTime: value.capturedAtContextTime, observedAt: nowMs };
+      }
       const age = Number.isFinite(value.capturedAtContextTime)
         ? this.context.currentTime - value.capturedAtContextTime : Infinity;
       const socket = this.socket;
@@ -211,5 +236,6 @@ export class ChoirSecondaryCapture {
     this.generation = null;
     this.clockWallOriginMs = null;
     this.clockSampleOrigin = 0;
+    this.lastChunk = null;
   }
 }

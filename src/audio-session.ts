@@ -487,6 +487,16 @@ export class AudioSession {
     this.secondary?.track.gain.setTargetDb(value, this.running);
   }
 
+  /** B's session position for one of its recent capture samples (sample/song anchors). */
+  secondarySampleSongPosition(generation: number, index: number, rate: number) {
+    const timeline = this.secondary?.track.timeline;
+    if (!timeline || timeline.generation !== generation || timeline.sourceRate !== rate
+        || timeline.sourceFrontier === null || !Number.isFinite(index)
+        || index < 0 || index > timeline.sourceFrontier
+        || timeline.sourceFrontier - index > rate) return null;
+    return timeline.totalSamples - (timeline.sourceFrontier - index) * this.sampleRate / rate;
+  }
+
   /** What the second singer is doing in the mix; null with no B attached. */
   get secondaryMic() {
     const secondary = this.secondary;

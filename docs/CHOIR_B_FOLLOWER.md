@@ -17,6 +17,11 @@ only when the YouTube API reports autoplay blocked, or the local player stays
 paused after an actual attempt, a minimal note says to tap Play **on the same
 existing player**. Such a tap is a fallback, not an additional Relay join step.
 
+B's local YouTube replaces B's **room Monitor sound**, not the user's mute
+preference. While B owns a local follower in Song, Listen overlays the existing
+`song-owned` forced-mute reason; withdrawing consent or changing roles removes
+the overlay. This avoids hearing the same Robot accompaniment twice on B.
+
 The primary room player's iframe stays separate and hidden in B's observer
 role; its production ownership and telemetry code remain untouched.
 The B iframe never dispatches room commands or authoritative telemetry.

@@ -47,7 +47,7 @@ test('mobile host can choose B and send invitation-only command without starting
   await expect(page.locator('#choir-consent-panel')).toBeVisible();
   await expect(page.locator('#choir-secondary-person option')).toHaveCount(1);
   await expect(page.locator('#choir-secondary-person')).toHaveValue('singerB');
-  await expect(page.locator('#choir-consent-note')).toContainText('尚未開放雙人混音');
+  await expect(page.locator('#choir-consent-note')).toContainText('兩人都完成時間對齊後');
   await page.locator('#choir-invite-send').click();
   const sent = await page.evaluate(() => window.__choirSent);
   expect(sent).toEqual([{ type: 'choir-secondary-invite', secondaryId: 'singerB' }]);
@@ -158,5 +158,5 @@ test('double opt-in shows explicit A room creation and B isolated media request 
   expect(await page.evaluate(() => ({
     starts: window.__choirCaptureStarts, commands: window.__choirSent,
   }))).toEqual({ starts: 1, commands: [] });
-  await expect(page.locator('#choir-consent-note')).toContainText('尚未開放雙人混音');
+  await expect(page.locator('#choir-consent-note')).toContainText('兩人都完成時間對齊後');
 });

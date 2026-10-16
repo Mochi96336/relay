@@ -43,11 +43,22 @@ export type ProductTakeInput = {
   qualityVerdict: TakeQualityVerdict | null;
 };
 
+/**
+ * A second singer (Choir B) with the Mic owner: joined, being aligned, or
+ * heard in the room mix. Absent whenever nobody has joined.
+ */
+export type ProductDuet = {
+  secondaryId: string;
+  secondaryNickname: string | null;
+  state: 'joined' | 'aligning' | 'singing';
+};
+
 export type ProductViewModelInput = {
   readiness: ReadinessSnapshot;
   participantCount: number;
   micOwnerId: string | null;
   micOwnerNickname: string | null;
+  duet?: ProductDuet | null;
   /** Manual calibration needs the publisher control socket, not only Mic media. */
   publisherControlConnected?: boolean;
   /** Capture-scoped browser verdict after bounded media recovery is exhausted. */
@@ -115,6 +126,7 @@ export type ProductStatus = {
       ownerId: string | null;
       ownerNickname: string | null;
     };
+    duet?: ProductDuet;
     song: {
       state: RoomSongState;
       videoId: string | null;
@@ -358,6 +370,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
         ownerId: input.micOwnerId,
         ownerNickname: input.micOwnerNickname,
       },
+      ...(input.duet && input.micOwnerId ? { duet: { ...input.duet } } : {}),
       song: {
         state: songState(input),
         videoId: input.roomSong.videoId,

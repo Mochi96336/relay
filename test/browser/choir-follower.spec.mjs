@@ -3,15 +3,17 @@ import { expect, test } from '@playwright/test';
 const BASE = process.env.RELAY_INTERACTION_URL ?? 'http://127.0.0.1:4173/';
 test.use({ viewport: { width: 390, height: 844 } });
 
-async function openFollowerFixture(page, { blocked = false } = {}) {
+async function openFollowerFixture(page, { blocked = false, unmutePauses = false, unmuteBuffers = false } = {}) {
   // Deterministic fixture: YouTube is mocked below; external assets must not
   // hold navigation open when the network is slow or unavailable.
   await page.route('**/*', route => new URL(route.request().url()).origin === new URL(BASE).origin
     ? route.continue() : route.abort());
   await page.goto(new URL('__live-visual.html', BASE).href);
   await expect.poll(() => page.evaluate(() => window.__relayVisualReady === true)).toBe(true);
-  await page.evaluate(async (blocked) => {
+  await page.evaluate(async ({ blocked, unmutePauses, unmuteBuffers }) => {
     window.__followerCalls = [];
+    window.__songAnchors = 0;
+    window.addEventListener('relay-choir-song-anchor', () => { window.__songAnchors++; });
     window.__choirLocalAudibility = [];
     window.addEventListener('relay-choir-local-playback', event => {
       window.__choirLocalAudibility.push(event.detail?.active);
@@ -22,8 +24,10 @@ async function openFollowerFixture(page, { blocked = false } = {}) {
           this.state = 5;
           this.position = 80;
           this.rate = 1;
+          this.muted = false;
           this.config = config;
           window.__localFollower = this;
+          window.__followerCalls.push(['create', config.videoId, config.playerVars?.start, config.playerVars?.origin]);
           queueMicrotask(() => config.events.onReady());
         }
         getCurrentTime() { return this.position; }
@@ -35,10 +39,19 @@ async function openFollowerFixture(page, { blocked = false } = {}) {
         }
         playVideo() {
           window.__followerCalls.push(['play']);
+          if (unmuteBuffers && !this.muted) { this.state = 3; return; }
           if (blocked) this.config.events.onAutoplayBlocked();
           else { this.state = 1; this.config.events.onStateChange({ data: 1 }); }
         }
         pauseVideo() { window.__followerCalls.push(['pause']); this.state = 2; }
+        mute() { window.__followerCalls.push(['mute']); this.muted = true; }
+        // WebKit pauses a scripted unmute without a fresh tap.
+        unMute() {
+          window.__followerCalls.push(['unmute']);
+          if (unmutePauses) this.state = 2;
+          else { this.muted = false; if (unmuteBuffers) this.state = 3; }
+        }
+        isMuted() { return this.muted; }
         seekTo(position) { window.__followerCalls.push(['seek', position]); this.position = position; }
         setPlaybackRate(rate) { window.__followerCalls.push(['rate', rate]); this.rate = rate; }
         destroy() { window.__followerCalls.push(['destroy']); }
@@ -59,7 +72,7 @@ async function openFollowerFixture(page, { blocked = false } = {}) {
       }));
     };
     window.__emitFollowerRoom();
-  }, blocked);
+  }, { blocked, unmutePauses, unmuteBuffers });
 }
 
 test('B keeps ordinary Song layout and follows automatically after consent', async ({ page }) => {
@@ -78,10 +91,16 @@ test('B keeps ordinary Song layout and follows automatically after consent', asy
   await expect(page.locator('#choir-follower-position')).toContainText(' / 3:40');
   await expect(page.locator('#choir-follower-start')).toHaveCount(0);
   await expect(page.locator('#choir-follower-panel')).toHaveCount(0);
-  await expect.poll(async () => (await page.evaluate(() => window.__followerCalls))
-    .some(x => x[0] === 'cue')).toBe(true);
+  // Created with the room's video, as the main player is (iPhone fails an empty one).
+  expect((await page.evaluate(() => window.__followerCalls)).find(x => x[0] === 'create'))
+    .toEqual(['create', 'abcdefghijk', 80, new URL(BASE).origin]);
   await expect.poll(async () => (await page.evaluate(() => window.__followerCalls))
     .some(x => x[0] === 'play')).toBe(true);
+  // Muted first, which any browser lets a script play, then turned up.
+  await expect.poll(async () => (await page.evaluate(() => window.__followerCalls))
+    .map(x => x[0]).filter(x => x === 'mute' || x === 'unmute').join()).toBe('mute,unmute');
+  await expect.poll(() => page.evaluate(() => window.__localFollower.muted)).toBe(false);
+  await expect(page.locator('#choir-follower-status')).toBeHidden();
   await expect.poll(() => page.evaluate(() =>
     document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.evaluate(() => window.__emitFollowerRoom({ ageMs: 2000 }));
@@ -120,4 +139,54 @@ test('video failure restores Monitor availability without withdrawing consent', 
   await page.evaluate(() => window.__localFollower.config.events.onError());
   await expect.poll(() => page.evaluate(() => window.__choirLocalAudibility.at(-1))).toBe(false);
   await expect(page.locator('#choir-follower-player')).toBeVisible();
+});
+
+test('where a tap is needed for sound (iOS), the song keeps time muted and B is asked to tap', async ({ page }) => {
+  await openFollowerFixture(page, { unmutePauses: true });
+  // The server keeps the room clock fresh; one snapshot goes stale in ~2 s.
+  await page.evaluate(() => { setInterval(() => window.__emitFollowerRoom(), 300); });
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('relay-choir-guest-state', {
+    detail: { enabled: true },
+  })));
+  const status = page.locator('#choir-follower-status');
+  await expect(status).toHaveText('歌曲正在靜音播放。');
+  const unmute = page.locator('#choir-follower-unmute');
+  await expect(unmute).toBeVisible();
+  await expect(unmute).toHaveText('開啟歌曲聲音');
+  // Back to muted playback, so B's YouTube time still aligns B in the room.
+  await expect.poll(() => page.evaluate(() => ({
+    state: window.__localFollower.state, muted: window.__localFollower.muted,
+  }))).toEqual({ state: 1, muted: true });
+  const anchors = await page.evaluate(() => window.__songAnchors);
+  await expect.poll(() => page.evaluate(() => window.__songAnchors)).toBeGreaterThan(anchors);
+  // The page's button is not enough for this browser: it says to tap the video.
+  await unmute.click();
+  await expect(status).toHaveText('還是靜音：請直接點影片畫面開啟聲音。');
+  await expect.poll(() => page.evaluate(() => window.__localFollower.state)).toBe(1);
+  // B taps the video's sound on.
+  await page.evaluate(() => { window.__localFollower.muted = false; });
+  await expect(status).toBeHidden();
+  await expect(unmute).toBeHidden();
+  const calls = (await page.evaluate(() => window.__followerCalls)).map(x => x[0]);
+  expect(calls.filter(x => x === 'unmute')).toHaveLength(2);
+});
+
+
+test('a successful unmute followed by buffering never automatically mutes B again', async ({ page }) => {
+  await openFollowerFixture(page, { unmuteBuffers: true });
+  await page.evaluate(() => {
+    setInterval(() => window.__emitFollowerRoom(), 300);
+    window.dispatchEvent(new CustomEvent('relay-choir-guest-state', { detail: { enabled: true } }));
+  });
+  await expect.poll(() => page.evaluate(() => window.__localFollower.state)).toBe(3);
+  // Allow the unmute check to run while YouTube is still buffering.
+  await expect.poll(() => page.evaluate(() => window.__followerCalls
+    .filter(call => call[0] === 'unmute').length)).toBe(1);
+  await page.waitForTimeout(700);
+  expect(await page.evaluate(() => window.__localFollower.muted)).toBe(false);
+  expect(await page.evaluate(() => window.__followerCalls
+    .filter(call => call[0] === 'mute').length)).toBe(1);
+  await page.evaluate(() => { window.__localFollower.state = 1; });
+  await expect(page.locator('#choir-follower-unmute')).toBeHidden();
+  await expect(page.locator('#choir-follower-status')).toBeHidden();
 });

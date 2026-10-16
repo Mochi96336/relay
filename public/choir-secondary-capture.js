@@ -1,5 +1,6 @@
 import { enforceUnprocessedCapture } from './capture-observability.js';
 import { createMicCaptureGraph } from './mic-capture-graph.js';
+import { claimMicrophoneAudio } from './audio-session-policy.js';
 
 const HEADER_BYTES = 24;
 // This is only ~0.25s of native 48 kHz Int16 mono PCM, not seconds
@@ -39,6 +40,7 @@ export class ChoirSecondaryCapture {
   constructor(onFailure = () => {}) {
     this.onFailure = onFailure;
     this.epoch = 0;
+    this.claimedAudio = false;
     this.stream = null;
     this.context = null;
     this.graph = null;
@@ -56,6 +58,10 @@ export class ChoirSecondaryCapture {
     this.stop();
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('HTTPS microphone required');
     const epoch = this.epoch;
+    // As the main Mic does: iOS enters play-and-record before the input
+    // opens, rather than switching while B's local song plays.
+    claimMicrophoneAudio(true);
+    this.claimedAudio = true;
     // Establish the AudioContext during the actual click gesture on iOS.
     const context = new AudioContext({ latencyHint: 'interactive' });
     this.context = context;
@@ -120,6 +126,28 @@ export class ChoirSecondaryCapture {
     }
   }
 
+  /**
+   * Which capture sample was being recorded at `sampledAtPerformanceMs`, as
+   * the main Mic's sample/song anchor (app.js) computes it: the server maps
+   * it against B's local YouTube position for YouTube-time alignment.
+   */
+  anchorFor(sampledAtPerformanceMs) {
+    const anchor = this.lastChunk;
+    if (!anchor || !this.context || this.context.state !== 'running' || this.rate === null) return null;
+    const now = performance.now();
+    const age = now - anchor.observedAt;
+    if (age < 0 || age > 250) return null;
+    if (!Number.isFinite(sampledAtPerformanceMs)
+      || now - sampledAtPerformanceMs < 0 || now - sampledAtPerformanceMs > 100) return null;
+    const index = anchor.firstSampleIndex
+      + (this.context.currentTime - anchor.contextTime + (sampledAtPerformanceMs - now) / 1000) * this.rate;
+    if (!Number.isFinite(index)) return null;
+    return {
+      generation: this.generation, sampleRate: this.rate, sampleIndex: anchor.firstSampleIndex,
+      mediaDeltaSeconds: (anchor.firstSampleIndex - index) / this.rate, uncertaintyMs: 40,
+    };
+  }
+
   attach(socket, sampleRate) {
     if (!this.graph || !this.context || this.context.state !== 'running'
       || !this.track || this.track.readyState !== 'live' || this.track.muted
@@ -170,6 +198,9 @@ export class ChoirSecondaryCapture {
           this.clockSampleOrigin = this.cursor;
         }
       }
+      if (Number.isFinite(value.capturedAtContextTime)) {
+        this.lastChunk = { firstSampleIndex, contextTime: value.capturedAtContextTime, observedAt: nowMs };
+      }
       const age = Number.isFinite(value.capturedAtContextTime)
         ? this.context.currentTime - value.capturedAtContextTime : Infinity;
       const socket = this.socket;
@@ -207,9 +238,14 @@ export class ChoirSecondaryCapture {
     const ctx = this.context;
     this.context = null;
     if (ctx) void ctx.close().catch(() => {});
+    if (this.claimedAudio) {
+      this.claimedAudio = false;
+      claimMicrophoneAudio(false);
+    }
     this.rate = null;
     this.generation = null;
     this.clockWallOriginMs = null;
     this.clockSampleOrigin = 0;
+    this.lastChunk = null;
   }
 }

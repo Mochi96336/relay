@@ -129,6 +129,22 @@ describe('fixed-deadline canonical N=2 room, trusted server-only ingress', () =>
     });
   });
 
+  test("an evidence-only room skips a late backlog instead of ending: B's audio keeps arriving", () => {
+    const coordinator = new ChoirDeadlineRoomExperiment({
+      sampleRate: RATE, frameMs: 20, prebufferMs: 400, retentionMs: 3_000,
+      roomEpochMs: 0, outputHoldbackMs: 200, songEpoch: 7, backingGeneration: 9,
+      maxCatchupFrames: 2, reconnectGraceMs: 2_000, lateClock: 'skip',
+    });
+    admitBoth(coordinator);
+    assert.equal(coordinator.renderDue(220).state, 'ready');
+    // A 500 ms stall: far past the two-frame bound.
+    assert.equal(coordinator.receiveFromTransport('socket-B', captured(FRAME, 7_000), RATE, 720), true,
+      'the room skips to now and still accepts the singer');
+    assert.equal(coordinator.lateClockSkips, 1);
+    assert.equal(coordinator.renderDue(740).state, 'ready', 'and keeps rendering from now');
+    assert.equal(coordinator.receiveFromTransport('socket-B', captured(FRAME, 7_000, FRAME), RATE, 760), true);
+  });
+
   test('a late packet cannot fill an already sealed Mic frame after deadline', () => {
     const coordinator = room();
     admitBoth(coordinator);

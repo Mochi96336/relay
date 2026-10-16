@@ -166,6 +166,13 @@ export class AudioSession {
 
   /** Current canonical MicTrack — N=1's existing runtime now uses this state. */
   private readonly micTrack: MicTrack;
+  /**
+   * A second singer (Choir B), mixed into this same room output so Listen,
+   * Take and timing need no separate path. Null whenever no B is attached;
+   * every B line in `mixFrame` is then skipped and the N=1 mix is unchanged.
+   */
+  private secondary: SecondaryVoice | null = null;
+  private readonly micTrackOptions: ConstructorParameters<typeof MicTrack>[0];
   private readonly mic: PcmTimeline;
   private readonly backing = emptyPcmTimeline();
 
@@ -228,7 +235,7 @@ export class AudioSession {
       1,
       Math.round((SOURCE_GAP_DECLICK_MS * options.sampleRate) / 1000),
     );
-    this.micTrack = new MicTrack({
+    this.micTrackOptions = {
       sampleRate: options.sampleRate,
       prebufferMs: options.prebufferMs,
       retentionMs: options.retentionMs,
@@ -238,7 +245,8 @@ export class AudioSession {
       safetyMs: ADVANCE_SAFETY_MS,
       slewFraction: RUNTIME_CALIBRATION_SLEW_FRACTION,
       readHeadCrossfadeMs: MIC_READ_HEAD_CROSSFADE_MS,
-    });
+    };
+    this.micTrack = new MicTrack(this.micTrackOptions);
     // Keep the existing single-Mic methods literally unchanged: their fields
     // point to exactly the same component instances owned by micTrack.
     this.mic = this.micTrack.timeline;
@@ -380,6 +388,7 @@ export class AudioSession {
     this.micTrack.calibrationUnfoldedSamples = 0;
     this.clearTimeline(this.mic);
     this.clearTimeline(this.backing);
+    if (this.secondary) this.resetSecondary(this.secondary, true);
     this.resetHealth();
   }
 
@@ -400,6 +409,7 @@ export class AudioSession {
     this.micTrack.calibratedMicLagTargetMs = this.micTrack.alignmentState.calibratedMicLagMs;
     this.bus.reset();
     this.micGain.reset();
+    if (this.secondary) this.resetSecondary(this.secondary, false);
     this.resetHealth();
   }
 
@@ -421,6 +431,108 @@ export class AudioSession {
 
   setMicGainDb(value: number) {
     this.micGain.setTargetDb(value, this.running);
+  }
+
+  /** Starts holding a second singer's PCM. Silent until it has a lag. */
+  attachSecondaryMic() {
+    if (this.secondary) {
+      this.secondary.detaching = false;
+      return;
+    }
+    this.secondary = {
+      track: new MicTrack(this.micTrackOptions),
+      audible: false, blend: 0, detaching: false, sumGain: 1,
+      gapSamples: 0, starvedSamples: 0, mixedFrames: 0,
+    };
+  }
+
+  /** Fades the second singer out, then drops it. */
+  detachSecondaryMic() {
+    if (!this.secondary) return;
+    this.secondary.audible = false;
+    this.secondary.detaching = true;
+  }
+
+  ingestSecondaryMic(frame: PcmFrame, sourceRate: number | null, nowMs = performance.now()) {
+    const secondary = this.secondary;
+    if (!secondary || secondary.detaching) return null;
+    return secondary.track.ingestCapture({
+      frame, sourceRate, running: this.running,
+      roomSampleNow: () => this.currentSessionSample(nowMs),
+    });
+  }
+
+  /**
+   * The second singer's read-ahead, in the same coordinates as the main
+   * Mic's. Null silences it (faded) without dropping its PCM. The first lag,
+   * or one set while it is silent, applies at once; later changes ease in
+   * exactly as the main Mic's runtime corrections do.
+   */
+  setSecondaryMicLag(lagMs: number | null) {
+    const secondary = this.secondary;
+    if (!secondary) return;
+    if (lagMs === null || !Number.isFinite(lagMs)) {
+      secondary.audible = false;
+      return;
+    }
+    const track = secondary.track;
+    if (track.alignmentState.calibratedMicLagMs === null || secondary.blend === 0 || !this.running) {
+      track.alignmentState = { ...track.alignmentState, calibratedMicLagMs: lagMs };
+    }
+    track.calibratedMicLagTargetMs = lagMs;
+    if (!secondary.detaching) secondary.audible = true;
+  }
+
+  setSecondaryMicGainDb(value: number) {
+    this.secondary?.track.gain.setTargetDb(value, this.running);
+  }
+
+  /** B's session position for one of its recent capture samples (sample/song anchors). */
+  secondarySampleSongPosition(generation: number, index: number, rate: number) {
+    const timeline = this.secondary?.track.timeline;
+    if (!timeline || timeline.generation !== generation || timeline.sourceRate !== rate
+        || timeline.sourceFrontier === null || !Number.isFinite(index)
+        || index < 0 || index > timeline.sourceFrontier
+        || timeline.sourceFrontier - index > rate) return null;
+    return timeline.totalSamples - (timeline.sourceFrontier - index) * this.sampleRate / rate;
+  }
+
+  /** What the second singer is doing in the mix; null with no B attached. */
+  get secondaryMic() {
+    const secondary = this.secondary;
+    if (!secondary) return null;
+    return {
+      audible: secondary.audible,
+      blend: secondary.blend,
+      lagMs: secondary.track.alignmentState.calibratedMicLagMs,
+      targetLagMs: secondary.track.calibratedMicLagTargetMs,
+      gainDb: secondary.track.gain.targetDb,
+      gapSamples: secondary.gapSamples,
+      starvedSamples: secondary.starvedSamples,
+      mixedFrames: secondary.mixedFrames,
+      bufferedSamples: secondary.track.timeline.totalSamples,
+    };
+  }
+
+  /** B's timeline and read trajectory, as clearTimeline/resetEpoch do for A. */
+  private resetSecondary(secondary: SecondaryVoice, stopping: boolean) {
+    const track = secondary.track;
+    track.clockTrim.reset();
+    track.lastEmittedMicAdvanceSamples = null;
+    track.lastEmittedMicFrameComplete = false;
+    track.lastEmittedMicSourceSample = null;
+    track.captureRestarts.clear();
+    track.clipping.clear();
+    resetPcmTimeline(track.timeline);
+    track.frontier.reset(track.timeline.generation);
+    track.gain.reset();
+    track.calibratedMicLagTargetMs = track.alignmentState.calibratedMicLagMs;
+    if (stopping) {
+      track.alignmentState = { networkCompensationMs: 0, calibratedMicLagMs: null, fineTuneMs: 0 };
+      track.calibratedMicLagTargetMs = null;
+      secondary.audible = false;
+      secondary.blend = 0;
+    }
   }
 
   /** Recent capture coordinate mapped through the current ingest transform.
@@ -925,6 +1037,7 @@ export class AudioSession {
       gapMask: backingGapMask,
       frontierMissingStart: backingFrontierMissingStart,
     } = this.readBackingFrame(startSample);
+    const duet = this.secondary ? this.readSecondaryFrame(this.secondary, startSample) : null;
     this.micTrack.micUnplayableRunFrames = this.bus.micExpected
       && micReadEvidence.gapSamples + micReadEvidence.frontierMissingSamples > 0
       ? this.micTrack.micUnplayableRunFrames + 1
@@ -982,7 +1095,7 @@ export class AudioSession {
         evidenceMissing: micEvidenceMissing,
         audibleMissing: micAudibleMissing,
       });
-      const voice = processedVoice.voice;
+      const voice = duet ? this.withSecondaryVoice(duet, i, processedVoice.voice) : processedVoice.voice;
       if (processedVoice.limited) this.limitedSamples += 1;
       if (processedVoice.heavilyLimited) this.heavyLimitedSamples += 1;
       // Release only once the departing source has run out: silent at the
@@ -1069,6 +1182,108 @@ export class AudioSession {
 
     this.trim(this.mic, startSample - this.retentionSamples);
     this.trim(this.backing, startSample - this.backingRetentionSamples);
+    if (duet) this.finishSecondaryFrame(duet, startSample);
     return { frame: output, evidence };
   }
+
+  /** B's frame at the same room position, planned on B's own track. */
+  private readSecondaryFrame(secondary: SecondaryVoice, startSample: number): SecondaryFrame {
+    const track = secondary.track;
+    const plan = track.planMicRead(startSample, secondary.audible);
+    track.measureReadHeadroom(plan, secondary.audible);
+    const read = track.readMicFrame(plan);
+    return {
+      secondary, plan, read,
+      slewFrameEndPosition: read.slew ? read.slew.firstPosition + this.frameSamples * read.slew.rate : 0,
+      blendStep: 1 / Math.max(1, Math.round((SECONDARY_BLEND_MS * this.sampleRate) / 1000)),
+      sumReleaseStep: 1 - Math.exp(-1000 / (SECONDARY_SUM_RELEASE_MS * this.sampleRate)),
+    };
+  }
+
+  /**
+   * One sample of A and B together: their sum, as two singers in one room
+   * would sound, so a harmony keeps the balance they sang it at. The bus
+   * reserves summing headroom for one voice at the limiter ceiling, so a sum
+   * that would pass the ceiling is turned down: at once when it does, and
+   * back up over SECONDARY_SUM_RELEASE_MS. The output never exceeds the
+   * ceiling, and a singer alone is untouched. B fades in and out over
+   * SECONDARY_BLEND_MS, so joining is not a click.
+   */
+  private withSecondaryVoice(duet: SecondaryFrame, i: number, primaryVoice: number) {
+    const { secondary, plan, read } = duet;
+    const sourceSample = read.slew ? read.slew.firstPosition + i * read.slew.rate : plan.micReadStart + i;
+    const evidenceMissing = read.slew
+      ? read.slew.missingMask[i] === 1
+      : read.gapMask?.[i] === 1 || i >= read.frontierMissingStart;
+    const processed = secondary.track.processVoiceSample({
+      samples: read.samples,
+      i,
+      sourceSample,
+      micReadStart: plan.micReadStart,
+      slew: read.slew,
+      slewFrameEndPosition: duet.slewFrameEndPosition,
+      evidenceMissing,
+      audibleMissing: sourceSample < 0 || evidenceMissing,
+    });
+    const target = secondary.audible ? 1 : 0;
+    secondary.blend = secondary.blend < target
+      ? Math.min(target, secondary.blend + duet.blendStep)
+      : Math.max(target, secondary.blend - duet.blendStep);
+    if (secondary.blend === 0 && secondary.sumGain === 1) return primaryVoice;
+    const ceiling = this.micLimiter.ceiling;
+    const a = Math.max(-ceiling, Math.min(ceiling, primaryVoice));
+    const b = Math.max(-ceiling, Math.min(ceiling, processed.voice));
+    const sum = a + b * secondary.blend;
+    const allowed = Math.abs(sum) > ceiling ? ceiling / Math.abs(sum) : 1;
+    secondary.sumGain = allowed < secondary.sumGain
+      ? allowed
+      : Math.min(allowed, secondary.sumGain + duet.sumReleaseStep * (1 - secondary.sumGain));
+    return sum * secondary.sumGain;
+  }
+
+  private finishSecondaryFrame(duet: SecondaryFrame, startSample: number) {
+    const { secondary, plan, read } = duet;
+    const track = secondary.track;
+    track.lastEmittedMicAdvanceSamples = plan.boundedRuntimeAdvanceMoved
+      ? plan.advanceSamplesExact
+      : plan.advanceSamples;
+    track.lastEmittedMicFrameComplete = read.evidence.gapSamples === 0
+      && read.evidence.frontierMissingSamples === 0;
+    if (secondary.audible) {
+      secondary.gapSamples += read.evidence.gapSamples;
+      secondary.starvedSamples += read.evidence.frontierMissingSamples;
+      secondary.mixedFrames += 1;
+    }
+    trimPcmTimeline(track.timeline, startSample - this.retentionSamples);
+    track.captureRestarts.trimBefore(startSample - this.retentionSamples);
+    track.clipping.trimBefore(startSample - this.retentionSamples);
+    if (secondary.detaching && secondary.blend === 0) this.secondary = null;
+  }
 }
+
+/** How long B takes to fade in or out of the room mix. */
+const SECONDARY_BLEND_MS = 50;
+/** How fast the A+B sum comes back up after a peak turned it down. */
+const SECONDARY_SUM_RELEASE_MS = 80;
+
+type SecondaryVoice = {
+  track: MicTrack;
+  audible: boolean;
+  /** 0 = A alone; 1 = B at full level. */
+  blend: number;
+  /** Gain on the A+B sum that keeps it under the ceiling; 1 = untouched. */
+  sumGain: number;
+  detaching: boolean;
+  gapSamples: number;
+  starvedSamples: number;
+  mixedFrames: number;
+};
+
+type SecondaryFrame = {
+  secondary: SecondaryVoice;
+  plan: MicReadPlan;
+  read: ReturnType<MicTrack['readMicFrame']>;
+  slewFrameEndPosition: number;
+  blendStep: number;
+  sumReleaseStep: number;
+};

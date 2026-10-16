@@ -2,7 +2,7 @@ import { CanonicalChoirMixExperiment, type CanonicalChoirFrame } from './choir-c
 import { ChoirPublisherRegistry } from './choir-publisher-registry.js';
 import { ChoirSession, type ChoirSeat } from './choir-session.js';
 import type { PcmFrame } from './pcm-frame.js';
-import type { ChoirAlignmentDecision } from './choir-alignment-decision.js';
+import type { ChoirAlignmentDecision, ChoirCalibrationSource } from './choir-alignment-decision.js';
 import { analyzeTimingCalibration } from './timing-calibration.js';
 
 /**
@@ -36,6 +36,15 @@ export type ChoirDeadlineRoomOptions = {
   outputHoldbackMs: number;
   /** Defaults to 8; larger outages require an explicit new room epoch. */
   maxCatchupFrames?: number;
+  /**
+   * What a backlog beyond maxCatchupFrames does. 'invalidate' (default) ends
+   * the room rather than replay late audio. 'skip' drops the late frames and
+   * resumes at now: for a room whose rendered PCM is evidence only, and whose
+   * singers reach listeners through the N=1 room output instead. There a
+   * 160 ms server stall would otherwise silence the second singer for the
+   * rest of the song.
+   */
+  lateClock?: 'invalidate' | 'skip';
   reconnectGraceMs?: number;
   /** New trusted Room Epoch must allocate disjoint singer Media Epochs. */
   firstMediaEpoch?: number;
@@ -95,6 +104,9 @@ export class ChoirDeadlineRoomExperiment {
   private readonly roomEpochMs: number;
   private readonly holdbackMs: number;
   private readonly maxCatchupFrames: number;
+  private readonly lateClock: 'invalidate' | 'skip';
+  /** Late-clock backlogs dropped under lateClock 'skip'. */
+  lateClockSkips = 0;
   private readonly songEpoch: number;
   private readonly backingGeneration: number;
   private readonly videoId: string | null;
@@ -134,6 +146,7 @@ export class ChoirDeadlineRoomExperiment {
     this.roomEpochMs = config.roomEpochMs;
     this.holdbackMs = config.outputHoldbackMs;
     this.maxCatchupFrames = config.maxCatchupFrames ?? 8;
+    this.lateClock = config.lateClock ?? 'invalidate';
     this.songEpoch = config.songEpoch;
     this.backingGeneration = config.backingGeneration;
     if (config.videoId !== undefined && !/^[A-Za-z0-9_-]{11}$/.test(config.videoId))
@@ -180,8 +193,13 @@ export class ChoirDeadlineRoomExperiment {
     // If the output sink is not draining, queued sealed frames are a replay
     // hazard too; bound total undelivered PCM, not only new timer lateness.
     if (backlog + this.sealedFrames.length > this.maxCatchupFrames) {
-      this.invalidated = 'late-clock';
       this.sealedFrames.length = 0;
+      if (this.lateClock === 'skip' && this.room.skipOutputTo(dueCount * this.frameSamples)) {
+        this.nextFrameIndex = dueCount;
+        this.lateClockSkips += 1;
+        return true;
+      }
+      this.invalidated = 'late-clock';
       return false;
     }
     for (let i = 0; i < backlog; i++) {
@@ -667,6 +685,22 @@ export class ChoirDeadlineRoomExperiment {
         return 'staged';
     }
     return 'rejected';
+  }
+
+  /**
+   * The lag a singer's track holds in this room, so the same singer can be
+   * mixed elsewhere. Null until the track has an applied calibration.
+   */
+  singerAlignment(transportId: string): { source: ChoirCalibrationSource; advanceMs: number } | null {
+    const active = this.registry.activePublisherForTransport(transportId);
+    if (!active) return null;
+    const state = this.room.contentProofState({
+      participantId: active.participantId, mediaEpoch: active.mediaEpoch,
+      songEpoch: this.songEpoch, backingGeneration: this.backingGeneration,
+    });
+    if (!state || state.awaitingCalibration || state.authoritySource === null
+      || state.authorityAdvanceMs === null || !Number.isFinite(state.authorityAdvanceMs)) return null;
+    return { source: state.authoritySource, advanceMs: state.authorityAdvanceMs };
   }
 
   disconnectTransport(transportId: string, nowMs: number): boolean {

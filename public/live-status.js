@@ -360,6 +360,29 @@ if (
     attentionRegion.dataset.severity = attention.severity || 'warning';
   }
 
+  /**
+   * A second singer joins the heading. The Mic owner sees who is with them,
+   * the second singer sees how far along they are, and everyone else sees
+   * both names once both voices are in the room. Problem states (delays,
+   * dropouts) keep their own wording.
+   */
+  function withDuet(copy, status) {
+    const duet = status.room?.duet;
+    const mic = status.room?.mic;
+    if (!duet || mic?.state !== 'live') return copy;
+    const partner = duet.secondaryNickname || t('voice.someone');
+    const owner = mic.ownerNickname || t('voice.someone');
+    if (duet.secondaryId === window.relayParticipantId) {
+      return { title: t('voice.duetYours', { name: owner }), detail: t(`voice.duet.self.${duet.state}`) };
+    }
+    if (isSelfOwner(status)) {
+      if (copy.title !== t('voice.live')) return copy;
+      return { title: copy.title, detail: t(`voice.duet.owner.${duet.state}`, { name: partner }) };
+    }
+    if (duet.state !== 'singing' || copy.detail !== t('voice.singing')) return copy;
+    return { title: t('voice.duetPair', { owner, partner }), detail: t('voice.singing') };
+  }
+
   function render(status, observed = true) {
     if (!status || status.type !== 'product-status') return;
     if (observed) {
@@ -367,7 +390,7 @@ if (
       productAuthorityFresh = true;
       observeProductStatus();
     }
-    const copy = liveCopy(status);
+    const copy = withDuet(liveCopy(status), status);
     title.textContent = copy.title;
     detail.textContent = copy.detail;
 

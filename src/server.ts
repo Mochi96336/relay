@@ -85,6 +85,7 @@ import {
   type RemoteStatusFacts,
   type RobotPlayerError,
 } from './relay-status-projection.js';
+import type { ProductDuet } from './product-view-model.js';
 import { createRelayHttpServer } from './relay-http-server.js';
 import { createRelayBuildTracker, validPageBuild } from './relay-build.js';
 import { createRelayQueryProtocol } from './relay-query-protocol.js';
@@ -345,6 +346,8 @@ const choirShadowConfig = {
   sampleRate: MIX_SAMPLE_RATE, frameMs: MIX_FRAME_MS,
   prebufferMs: LIVE_MIX_PREBUFFER_MS, retentionMs: MIC_RETENTION_MS,
   outputHoldbackMs: 200, contentHistoryMs: 7_000,
+  // The duet room's PCM is evidence; B is heard through the N=1 output.
+  lateClock: 'skip' as const,
 };
 const choirMediaEnabled = relayConfig.choirShadow && relayConfig.choirMediaExperiment;
 const choirShadow = relayConfig.choirShadow
@@ -386,6 +389,14 @@ const choirRestartCoordinator = choirShadow
       )),
     }),
     (retiredRoomEpoch) => {
+      const song = youtubeTimeline.statusPayload();
+      logChoir('room-retired', {
+        roomEpoch: retiredRoomEpoch, songState: song.state ?? null,
+        connected: song.connected, leaderFresh: song.leaderFresh,
+        revision: song.revision, corrections: song.corrections ?? null,
+        phaseCorrections: song.phaseCorrections ?? null,
+        ageMs: song.ageMs ?? null, robotGeneration: sourceRuntime.generation,
+      });
       choirSourceMirror?.revokeRoom(retiredRoomEpoch);
       choirContentPipeline?.cancelRoom(retiredRoomEpoch);
     },
@@ -393,11 +404,26 @@ const choirRestartCoordinator = choirShadow
 // B's secondary byte path is only armed after explicit double-flag
 // A/B consent and server-issued Media Epoch registration. Never routes
 // those bytes into the production N=1 Mic, backing, monitor or recording.
+/** B's own remembered Mic gain, from its media registration; null keeps the default. */
+let duetSecondaryGainDb: number | null = null;
 const choirSecondaryIngress = choirRestartCoordinator
   ? new ChoirSecondaryPcmIngressExperiment(
     choirRestartCoordinator,
     (socket) => (socket as RelaySocket).readyState === WebSocket.OPEN,
   ) : null;
+if (choirSecondaryIngress && choirRestartCoordinator) {
+  const coordinator = choirRestartCoordinator;
+  // The duet room accepted this B frame; the room output holds it too, silent
+  // until syncDuetOutput() gives B a lag.
+  choirSecondaryIngress.onAcceptedFrame = (frame, sampleRate, participantId, nowMs) => {
+    if (coordinator.preview().secondaryId !== participantId) return;
+    if (!session.secondaryMic) {
+      session.attachSecondaryMic();
+      if (duetSecondaryGainDb !== null) session.setSecondaryMicGainDb(duetSecondaryGainDb);
+    }
+    session.ingestSecondaryMic(frame, sampleRate, nowMs);
+  };
+}
 /**
  * Shadow-mode authenticated invitation and consent control plane.
  * An accepted consent alone never grants a capture ticket or changes N=1.
@@ -436,6 +462,7 @@ choirConsent = choirRestartCoordinator && choirShadow
       participants.micOwnerId === id && micRuntime.mediaOwnerId === id
       && micRuntime.controlConnected()
       && participants.participant(id)?.connected === true,
+    holdsMic: id => participants.micOwnerId === id,
     participantConnected: id => participants.participant(id)?.connected === true,
     takeFrozenNow: () => takeController.lifecycle === 'recording'
       || takeController.lifecycle === 'finalizing',
@@ -447,7 +474,12 @@ choirConsent = choirRestartCoordinator && choirShadow
           sendJson(target, payload);
       }
     },
-    notifySocket: (raw, payload) => sendJson(raw as RelaySocket, payload),
+    notifySocket: (raw, payload) => {
+      if (payload.type === 'choir-secondary-consent-status' && payload.status === 'revoked')
+        logChoir('b-revoked', { reason: payload.reason,
+          participant: (raw as RelaySocket).participantId ? participantLogLabel((raw as RelaySocket).participantId!) : null });
+      sendJson(raw as RelaySocket, payload);
+    },
   }) : null;
 // One-use B-claim broker is exercised ONLY under the second explicit media
 // flag and a successful A/B authorization. N=1 PCM ownership is unchanged.
@@ -486,7 +518,7 @@ function tickChoirShadow(nowMs: number) {
   choirSecondaryTickets?.sweep(nowMs);
 }
 if (choirRestartCoordinator) {
-  console.log('[choir-shadow] server-owned restart observation only; Choir audio/UI disabled');
+  console.log(`[choir-shadow] enabled; second Mic ${relayConfig.choirMediaExperiment ? 'joins the room mix' : 'invitation only (no media)'}`);
 }
 const AUTO_CALIBRATE = relayConfig.autoCalibrate;
 const AUTO_CALIBRATION_RETRY_MS = relayConfig.autoCalibrationRetryMs;
@@ -1275,6 +1307,7 @@ function attachParticipantIdentity(
   // "invitation-only" does not enable Choir capture, mixing or playback.
   if (choirConsent) sendJson(socket, {
     type: 'choir-consent-available',
+    resumeSupported: true,
     mode: choirMediaEnabled ? 'media-experiment' : 'invitation-only',
   });
   return true;
@@ -1850,7 +1883,19 @@ function remoteStatusPayload() {
     ...status,
     // `micPage` null with a Mic connected is a page from before builds existed.
     build: { relay: relayBuild.current(), micPage: micRuntime.publisher?.pageBuild ?? null },
-    audio: { ...status.audio, listenerPlayback: monitorTransport.playbackHealth() },
+    audio: {
+      ...status.audio,
+      listenerPlayback: monitorTransport.playbackHealth(),
+      ...(choirRestartCoordinator ? {
+        duetSecondary: session.secondaryMic,
+        duetIngress: choirSecondaryIngress?.counts ?? null,
+        duetRoom: choirRestartCoordinator.preview(),
+        duetContent: choirContentPipeline
+          ? { ...choirContentPipeline.stats, lastFailureReason: choirContentPipeline.lastFailureReason }
+          : null,
+        duetYoutube: { lagSource: lastDuetLagSource, ...duetSampleSong.diagnostics(performance.now()) },
+      } : {}),
+    },
   };
 }
 
@@ -2101,6 +2146,7 @@ function productStatusFacts(nowMs: number): ProductStatusFacts {
     participantCount: participantSnapshot.participants.length,
     micOwnerId: participantSnapshot.micOwnerId,
     micOwnerNickname: micOwner?.nickname ?? null,
+    duet: duetView(nowMs),
     publisherControlConnected: micRuntime.controlConnected(),
     freshMicUplink: micRuntime.freshUplinkHealthPayload(nowMs),
     micAudibilityDegraded: mic.audibilityDegraded,
@@ -2460,12 +2506,108 @@ const mixerTimer = setInterval(() => {
     if (levelChanged) reportMicLevel('window');
   });
   reportMicTimelineFolds();
-  // Offline proof scheduler drains bounded canonical frames to numeric
-  // evidence only; NEVER forwards Choir mix buffers to users or Take.
+  beginJoinedChoirRoom(performance.now());
+  syncDuetOutput();
+  // The duet room's own rendered frames stay numeric proof evidence only; B
+  // reaches Listen and Take through the room output (syncDuetOutput above).
   const roomEpoch = choirSourceMirror?.roomEpoch;
   if (roomEpoch !== null && roomEpoch !== undefined)
     choirRestartCoordinator?.advanceDue(roomEpoch, performance.now());
 }, 5);
+
+/**
+ * What the room shows about a second singer: joined (waiting for a song),
+ * aligning (a duet room exists, B is not heard yet) or singing (B is in the
+ * room mix that Listen and Take carry).
+ */
+function duetView(nowMs: number): ProductDuet | null {
+  const joined = choirConsent?.activeJoin(nowMs) ?? null;
+  if (!joined || !choirRestartCoordinator) return null;
+  const singing = (session.secondaryMic?.audible === true) && (session.secondaryMic.blend > 0);
+  return {
+    secondaryId: joined.secondaryId,
+    secondaryNickname: participants.participant(joined.secondaryId)?.nickname ?? null,
+    state: singing ? 'singing' : choirRestartCoordinator.preview().roomEpoch !== null ? 'aligning' : 'joined',
+  };
+}
+
+/**
+ * Puts the duet room's B into the room output, which Listen and Take already
+ * carry. Both singers are measured against the same Robot backing in the
+ * duet room, so B's lag relative to A holds in any coordinates: B reads at
+ * A's advance plus that difference. B is silent unless the room is approved,
+ * A still owns the Mic and both have a Content lag; while a Take records, an
+ * audible B keeps its lag, as A's alignment does.
+ */
+/** One line per Choir step, so a real two-device run can be read back. */
+function logChoir(event: string, fields: Record<string, unknown> = {}) {
+  console.log('[choir]', JSON.stringify({ event, ...fields }));
+}
+
+/**
+ * B's YouTube-time alignment, as the main Mic's sample/song fallback: B's page
+ * reports which capture sample was recorded at which point of its local
+ * YouTube, the Robot reports the same for the backing, and the difference
+ * places B in the room output within seconds. Content later refines it.
+ */
+const duetSampleSong = new SampleSongFallback();
+let duetSampleSongOwner: string | null = null;
+
+function duetSampleSongLagMs(nowMs: number): number | null {
+  const videoId = (youtubeTimeline.statusPayload(nowMs) as Record<string, unknown>).videoId;
+  if (typeof videoId !== 'string') return null;
+  return duetSampleSong.estimate(nowMs, videoId, (side, a) => side === 'mic'
+    ? session.secondarySampleSongPosition(a.generation, a.sampleIndex, a.sampleRate)
+    : session.sampleSongPosition('backing', a.generation, a.sampleIndex, a.sampleRate),
+  session.sampleRate);
+}
+
+let lastDuetAudible = false;
+let lastDuetLagSource: string | null = null;
+function syncDuetOutput() {
+  const audible = session.secondaryMic?.audible === true;
+  if (audible !== lastDuetAudible) {
+    lastDuetAudible = audible;
+    logChoir(audible ? 'b-heard' : 'b-silent', { lagMs: session.secondaryMic?.lagMs ?? null, source: lastDuetLagSource });
+    broadcastProductStatus();
+  }
+  if (!choirRestartCoordinator || !session.secondaryMic) return;
+  const view = choirRestartCoordinator.preview();
+  const primaryId = view.primaryId;
+  const secondaryId = view.secondaryId;
+  if (!primaryId || !secondaryId || view.secondary === 'join-required') {
+    session.detachSecondaryMic();
+    return;
+  }
+  const primaryOwnsMic = participants.micOwnerId === primaryId && micRuntime.mediaOwnerId === primaryId;
+  const nowMs = performance.now();
+  const a = primaryOwnsMic ? choirRestartCoordinator.singerAlignment(primaryId) : null;
+  const b = primaryOwnsMic ? choirRestartCoordinator.singerAlignment(secondaryId) : null;
+  // Content for both singers is the measurement; until then, B's YouTube
+  // time against the Robot's places B at once.
+  const content = a && b ? session.requestedMicAdvanceMs + (b.advanceMs - a.advanceMs) : null;
+  const youtube = primaryOwnsMic && content === null ? duetSampleSongLagMs(nowMs) : null;
+  const lag = content ?? youtube;
+  if (lag === null) {
+    // A lapse in measurement keeps B where it was last placed, as the main
+    // Mic keeps its calibration. YouTube-time anchors arrive over the slower
+    // control path and miss their 1 s / three-agreement window now and then;
+    // silencing B on every miss left B audible for half a second at a time.
+    if (session.secondaryMic.targetLagMs === null) {
+      if (lastDuetLagSource !== null) logChoir('b-lag-source', { source: null, lagMs: null });
+      lastDuetLagSource = null;
+      session.setSecondaryMicLag(null);
+    }
+    return;
+  }
+  const source = content !== null ? 'content' : 'youtube-time';
+  if (source !== lastDuetLagSource) {
+    logChoir('b-lag-source', { source, lagMs: Math.round(lag) });
+    lastDuetLagSource = source;
+  }
+  if (takeBlocksCalibration() && session.secondaryMic.audible) return;
+  session.setSecondaryMicLag(lag);
+}
 
 function reportMicLevel(reason: 'window' | 'gain') {
   console.warn('[mic-level]', JSON.stringify({ reason, ...micLevel.status() }));
@@ -4076,13 +4218,15 @@ const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<Relay
     if (!Number.isFinite(delta) || Math.abs(delta) > 500 || Math.abs(Date.now() - at) > 1000) {
       sampleSongFallback.clear('backing'); return;
     }
-    sampleSongFallback.observe('backing', {
+    const backingAnchor = {
       videoId: String(observation.videoId), state: Number(observation.state),
       playbackRate: Number(observation.playbackRate),
       mediaSeconds: Number(observation.mediaSeconds) + delta / 1000 * Number(observation.playbackRate),
       generation: Number(payload.generation), sampleRate: Number(payload.sampleRate),
       sampleIndex: Number(payload.sampleIndex), uncertaintyMs: 75,
-    }, performance.now());
+    };
+    sampleSongFallback.observe('backing', backingAnchor, performance.now());
+    duetSampleSong.observe('backing', backingAnchor, performance.now());
     refreshLiveMicNetworkCompensation();
   },
   backingSampleBoundary: (socket, payload) => {
@@ -4796,52 +4940,21 @@ function handleChoirMediaMessage(socket: RelaySocket, payload: Record<string, un
   const nowMs = performance.now();
   if (type === 'choir-room-begin') {
     const secondaryId = normalizeParticipantId(payload.secondaryId);
-    const roomEpoch = choirRestartCoordinator.proposedRoomEpochForConsent;
-    const leaderStatus = youtubeTimeline.statusPayload(nowMs);
-    // An active authenticated N=1 v2 capture must belong to A.
-    // Its already-admitted PCM is mirrored into Choir's SEPARATE bounded
-    // proof room only; its production MixBus route remains untouched.
-    const actualPublisher = [...wss.clients].some(raw =>
-      (raw as RelaySocket).participantId === socket.participantId
-      && micRuntime.isPublisher(raw as RelaySocket));
-    const canStart = Boolean(secondaryId && roomEpoch !== null
-      && actualPublisher
-      && participants.micOwnerId === socket.participantId
-      && choirConsent.hasConsent(socket.participantId, secondaryId!, roomEpoch!, nowMs)
-      && Number.isSafeInteger(leaderStatus.revision)
-      && choirRestartCoordinator.approveTrustedRestart({
-        actorParticipantId: socket.participantId,
-        primaryId: socket.participantId,
-        secondaryId: secondaryId!,
-        expectedRetiredRoomEpoch: roomEpoch! - 1,
-        expectedPlaybackRevision: leaderStatus.revision,
-        nowMs,
-      }));
-    if (!canStart) {
-      sendJson(socket, { type: 'choir-media-rejected', reason: 'room-not-authorized' });
+    const result = secondaryId
+      ? beginChoirRoom(socket.participantId, secondaryId, socket.connectionIncarnation, nowMs)
+      : 'room-not-authorized';
+    if (typeof result === 'string') {
+      sendJson(socket, { type: 'choir-media-rejected', reason: result });
       return true;
     }
-    const status = choirRestartCoordinator.preview();
-    const ticket = choirRestartCoordinator.admitVerifiedSinger({
-      roomEpoch: status.roomEpoch!, songEpoch: status.songEpoch!,
-      verifiedParticipantId: socket.participantId,
-      transportId: `choir-primary:${socket.connectionIncarnation}`,
-      nowMs,
-    });
-    if (!ticket || !choirSourceMirror?.bindPrimary(ticket, nowMs)) {
-      choirRestartCoordinator.retireFailedPrimaryAdmission(nowMs);
-      sendJson(socket, { type: 'choir-media-rejected', reason: 'primary-join-failed' });
-      return true;
-    }
-    sendJson(socket, {
-      type: 'choir-room-ready', roomEpoch: ticket.roomEpoch,
-      songEpoch: ticket.songEpoch, primary: 'awaiting-content',
-      secondary: 'join-required',
-    });
+    sendJson(socket, result);
     return true;
   }
   if (type === 'choir-secondary-media-claim-request') {
     const claim = choirSecondaryTickets.issue(socket, nowMs);
+    logChoir(claim ? 'b-claim' : 'b-claim-refused', {
+      participant: participantLogLabel(socket.participantId), room: choirRestartCoordinator.preview().state,
+    });
     if (!claim) {
       sendJson(socket, { type: 'choir-media-rejected', reason: 'claim-not-authorized' });
       return true;
@@ -4864,6 +4977,12 @@ function handleChoirMediaMessage(socket: RelaySocket, payload: Record<string, un
     sendJson(socket, { type: 'choir-media-rejected', reason: 'claim-invalid-or-expired' });
     return true;
   }
+  logChoir('b-media-registered', {
+    participant: participantLogLabel(socket.participantId), roomEpoch: ticket.roomEpoch,
+    sampleRate: rate,
+  });
+  duetSecondaryGainDb = requestedMicGainDb(payload.micGainDb);
+  if (duetSecondaryGainDb !== null) session.setSecondaryMicGainDb(duetSecondaryGainDb);
   sendJson(socket, {
     type: 'choir-secondary-media-registered',
     roomEpoch: ticket.roomEpoch, songEpoch: ticket.songEpoch,
@@ -4873,9 +4992,162 @@ function handleChoirMediaMessage(socket: RelaySocket, payload: Record<string, un
   return true;
 }
 
+/**
+ * Approves a duet room for A (the Mic owner) and B, and admits A. `transport`
+ * names A's connection inside the room. Returns the ready message, or why not.
+ */
+function beginChoirRoom(primaryId: string, secondaryId: string, transport: number, nowMs: number):
+  Record<string, unknown> | 'room-not-authorized' | 'primary-join-failed' {
+  if (!choirRestartCoordinator || !choirConsent || !choirSourceMirror) return 'room-not-authorized';
+  const roomEpoch = choirRestartCoordinator.proposedRoomEpochForConsent;
+  const leaderStatus = youtubeTimeline.statusPayload(nowMs);
+  // An active authenticated N=1 v2 capture must belong to A.
+  // Its already-admitted PCM is mirrored into Choir's SEPARATE bounded
+  // proof room only; its production MixBus route remains untouched.
+  const actualPublisher = [...wss.clients].some(raw =>
+    (raw as RelaySocket).participantId === primaryId
+    && micRuntime.isPublisher(raw as RelaySocket));
+  const refusal = roomEpoch === null ? 'no-proposed-room'
+    : !actualPublisher ? 'mic-owner-not-publishing'
+      : participants.micOwnerId !== primaryId ? 'mic-owner-changed'
+        : !choirConsent.hasConsent(primaryId, secondaryId, roomEpoch, nowMs) ? 'join-scope'
+          : !Number.isSafeInteger(leaderStatus.revision) ? 'playback-revision'
+            : !choirRestartCoordinator.approveTrustedRestart({
+              actorParticipantId: primaryId,
+              primaryId,
+              secondaryId,
+              expectedRetiredRoomEpoch: roomEpoch - 1,
+              expectedPlaybackRevision: leaderStatus.revision,
+              nowMs,
+            }) ? choirRestartCoordinator.lastRefusal ?? 'restart' : null;
+  if (refusal !== null) {
+    lastRoomRefusal = refusal;
+    return 'room-not-authorized';
+  }
+  const status = choirRestartCoordinator.preview();
+  const ticket = choirRestartCoordinator.admitVerifiedSinger({
+    roomEpoch: status.roomEpoch!, songEpoch: status.songEpoch!,
+    verifiedParticipantId: primaryId,
+    transportId: `choir-primary:${transport}`,
+    nowMs,
+  });
+  if (!ticket || !choirSourceMirror.bindPrimary(ticket, nowMs)) {
+    choirRestartCoordinator.retireFailedPrimaryAdmission(nowMs);
+    return 'primary-join-failed';
+  }
+  return {
+    type: 'choir-room-ready', roomEpoch: ticket.roomEpoch,
+    songEpoch: ticket.songEpoch, primary: 'awaiting-content',
+    secondary: 'join-required',
+  };
+}
+
+/**
+ * A joined B needs no button press on A's side: once a song plays and no
+ * duet room exists, the server creates one for the current Mic owner and B,
+ * and tells B so its page claims the second-Mic media. A seek or song change
+ * retires the room; the next tick creates a fresh one the same way.
+ */
+let lastJoinedRoomAttemptMs = Number.NEGATIVE_INFINITY;
+/** Which check refused the last room, for the [choir] room log. */
+let lastRoomRefusal = '';
+let lastJoinedRoomOutcome = '';
+let lastRoomReadyResend = { roomEpoch: -1, atMs: Number.NEGATIVE_INFINITY };
+function sendToSecondary(secondaryId: string, payload: Record<string, unknown>) {
+  for (const raw of wss.clients) {
+    const target = raw as RelaySocket;
+    if (target.participantId === secondaryId && target.role === 'unknown') sendJson(target, payload);
+  }
+}
+function beginJoinedChoirRoom(nowMs: number) {
+  if (!choirMediaEnabled || !choirRestartCoordinator || !choirConsent) return;
+  if (nowMs - lastJoinedRoomAttemptMs < 250) return;
+  lastJoinedRoomAttemptMs = nowMs;
+  const joined = choirConsent.activeJoin(nowMs);
+  if (!joined) return;
+  const view = choirRestartCoordinator.preview();
+  if (view.roomEpoch !== null) {
+    // The room is up but B has not connected its media (a rejoin, a reload,
+    // a missed announcement): tell B again, at most every 3 s.
+    if (view.secondaryId === joined.secondaryId && view.secondary === 'join-required'
+      && (lastRoomReadyResend.roomEpoch !== view.roomEpoch || nowMs - lastRoomReadyResend.atMs >= 3_000)) {
+      lastRoomReadyResend = { roomEpoch: view.roomEpoch, atMs: nowMs };
+      sendToSecondary(joined.secondaryId, {
+        type: 'choir-room-ready', roomEpoch: view.roomEpoch, songEpoch: view.songEpoch,
+        primary: view.primary, secondary: view.secondary,
+      });
+    }
+    return;
+  }
+  const publisher = micRuntime.publisher as RelaySocket | null | undefined;
+  const outcome = choirRestartCoordinator.proposedRoomEpochForConsent === null ? 'waiting-for-song'
+    : !publisher || publisher.participantId !== joined.primaryId ? 'waiting-for-mic-owner-media'
+      : null;
+  const result = outcome ?? beginChoirRoom(joined.primaryId, joined.secondaryId, publisher!.connectionIncarnation, nowMs);
+  const label = result === 'room-not-authorized' ? `${result}:${lastRoomRefusal}`
+    : typeof result === 'string' ? result : 'room-started';
+  if (label !== lastJoinedRoomOutcome) {
+    lastJoinedRoomOutcome = label;
+    logChoir('room', { outcome: label, ...(typeof result === 'string' ? {} : { roomEpoch: result.roomEpoch }) });
+  }
+  if (typeof result === 'string') return;
+  lastRoomReadyResend = { roomEpoch: Number(result.roomEpoch), atMs: nowMs };
+  sendToSecondary(joined.secondaryId, result);
+}
+
+/**
+ * Reports from the joined B's page, never answered:
+ * - choir-secondary-song-anchor: which capture sample was recorded at which
+ *   point of B's local YouTube, for B's YouTube-time alignment;
+ * - choir-secondary-page: what B's page shows and plays (its local player
+ *   state), logged on change, so a silent or songless B can be explained;
+ * - choir-secondary-gain: B's own Mic gain, set on B's page as the main
+ *   Mic's is on the owner's.
+ */
+let lastSecondaryPageReport = '';
+function handleChoirSecondaryReport(socket: RelaySocket, payload: Record<string, unknown>): boolean {
+  const type = payload.type;
+  if (type !== 'choir-secondary-song-anchor' && type !== 'choir-secondary-page'
+    && type !== 'choir-secondary-gain') return false;
+  const joined = choirConsent?.activeJoin(performance.now()) ?? null;
+  if (!joined || socket.participantId !== joined.secondaryId || socket.role !== 'unknown') return true;
+  if (type === 'choir-secondary-gain') {
+    const gainDb = requestedMicGainDb(payload.micGainDb);
+    if (gainDb === null || gainDb === duetSecondaryGainDb) return true;
+    const previousGainDb = duetSecondaryGainDb;
+    duetSecondaryGainDb = gainDb;
+    session.setSecondaryMicGainDb(gainDb);
+    console.warn('[mic-gain]', JSON.stringify({ reason: 'second-mic',
+      participant: participantLogLabel(joined.secondaryId), previousGainDb, gainDb }));
+    return true;
+  }
+  if (type === 'choir-secondary-page') {
+    const report = JSON.stringify(payload.page ?? null).slice(0, 600);
+    if (report !== lastSecondaryPageReport) {
+      lastSecondaryPageReport = report;
+      logChoir('b-page', { participant: participantLogLabel(joined.secondaryId), page: payload.page ?? null });
+    }
+    return true;
+  }
+  const a = payload.captureAnchor as Record<string, unknown> | null;
+  if (!a || typeof a !== 'object') return true;
+  if (duetSampleSongOwner !== joined.secondaryId) {
+    duetSampleSong.clear('mic');
+    duetSampleSongOwner = joined.secondaryId;
+  }
+  duetSampleSong.observe('mic', {
+    videoId: String(payload.videoId), state: Number(payload.state),
+    playbackRate: Number(payload.playbackRate),
+    mediaSeconds: Number(payload.currentTime) + Number(a.mediaDeltaSeconds) * Number(payload.playbackRate),
+    generation: Number(a.generation), sampleRate: Number(a.sampleRate),
+    sampleIndex: Number(a.sampleIndex), uncertaintyMs: Number(a.uncertaintyMs),
+  }, performance.now());
+  return true;
+}
+
 function handleChoirConsentMessage(socket: RelaySocket, payload: Record<string, unknown>): boolean {
   const type = payload.type;
-  if (!['choir-secondary-invite', 'choir-secondary-accept',
+  if (!['choir-secondary-invite', 'choir-secondary-accept', 'choir-secondary-join',
     'choir-secondary-decline', 'choir-secondary-withdraw'].includes(String(type))) return false;
   // No anonymous/legacy/infrastructure, production Mic/backing or attached
   // Choir PCM-only sockets are eligible to mutate consent state.
@@ -4896,6 +5168,26 @@ function handleChoirConsentMessage(socket: RelaySocket, payload: Record<string, 
       && choirConsent.respond(socket, inviteId, type === 'choir-secondary-accept', nowMs);
   } else if (type === 'choir-secondary-withdraw') {
     accepted = choirConsent.withdraw(socket, nowMs);
+  } else if (type === 'choir-secondary-join') {
+    // The joiner never names the other singer: it is whoever holds the Mic.
+    accepted = participants.micOwnerId !== null
+      && micRuntime.mediaOwnerId === participants.micOwnerId
+      && (payload.resume !== true || payload.expectedPrimaryId === participants.micOwnerId)
+      && choirConsent.join(socket, participants.micOwnerId, nowMs, payload.resume === true);
+    if (accepted) {
+      // A song may already be playing: start now rather than on the next tick.
+      lastJoinedRoomAttemptMs = Number.NEGATIVE_INFINITY;
+      beginJoinedChoirRoom(nowMs);
+    }
+  }
+  if (type === 'choir-secondary-join' || type === 'choir-secondary-withdraw') {
+    logChoir(type === 'choir-secondary-join' ? (accepted ? 'b-joined' : 'b-join-refused') : 'b-left', {
+      participant: socket.participantId ? participantLogLabel(socket.participantId) : null,
+      micOwner: participants.micOwnerId ? participantLogLabel(participants.micOwnerId) : null,
+      ...(type === 'choir-secondary-withdraw' ? { reason: typeof payload.reason === 'string'
+        ? payload.reason.slice(0, 80) : 'unspecified' } : { resume: payload.resume === true }),
+      ...(accepted ? {} : { mediaOwnerMatches: micRuntime.mediaOwnerId === participants.micOwnerId }),
+    });
   }
   if (!accepted) sendJson(socket, { type: 'choir-consent-rejected', reason: 'invalid-or-stale' });
   else if (type === 'choir-secondary-invite')
@@ -4952,6 +5244,7 @@ wss.on('connection', (rawSocket, request) => {
     // protocols, preventing a B media Socket from claiming an N=1 role.
     if (handleChoirMediaMessage(socket, payload)) return;
     if (handleChoirConsentMessage(socket, payload)) return;
+    if (handleChoirSecondaryReport(socket, payload)) return;
     if (monitorTransport.acknowledge(socket, payload)) return;
     if (subscribeBroadcasts(socket, payload)) return;
     if (queryProtocol.dispatch(socket, payload)) return;
@@ -4970,8 +5263,10 @@ wss.on('connection', (rawSocket, request) => {
 
   socket.on('close', () => {
     choirSecondaryTickets?.disconnected(socket);
-    choirConsent?.disconnected(socket);
-    choirSecondaryIngress?.disconnect(socket, performance.now());
+    if (choirConsent?.disconnected(socket))
+      logChoir('consent-disconnected', { participant: socket.participantId ? participantLogLabel(socket.participantId) : null });
+    if (choirSecondaryIngress?.disconnect(socket, performance.now()))
+      logChoir('b-media-disconnected', { participant: socket.participantId ? participantLogLabel(socket.participantId) : null });
     playbackClosed(socket);
     let micTransportChanged = false;
 

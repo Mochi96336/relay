@@ -82,6 +82,22 @@ describe('Choir offline bridge consumes real authenticated SongSession authority
     }
   });
 
+  test('confirmed small clock phase drift keeps the existing B room', () => {
+    const songs = new SongSession();
+    const room = makeRoom();
+    const bridge = bridgeFor(songs, room);
+    songs.update(telemetry(), A, null, 0);
+    assert.equal(bridge.sync(0), 'initialized');
+    for (const at of [100, 200, 300]) {
+      songs.update(telemetry({ currentTime: 10.6 + at / 1000 }), A, null, at);
+      assert.equal(bridge.sync(at), 'stable');
+    }
+    assert.equal(songs.statusPayload(300).phaseCorrections, 1);
+    assert.notEqual(room.renderDue(320).state, 'resync-required');
+    songs.update(telemetry({ currentTime: 40 }), A, null, 400);
+    assert.equal(bridge.sync(400), 'invalidated', 'a real seek still fences old PCM');
+  });
+
   test('stale leader or explicit detach revokes Choir Content without any client epoch', () => {
     for (const detach of [true, false]) {
       const songs = new SongSession();

@@ -47,6 +47,16 @@ export class ChoirSecondaryPcmIngressExperiment {
   /** v2 replay/reorder horizon: no unbounded sequence maps. */
   private static readonly MAX_REORDER_SEQUENCES = 128;
 
+  /**
+   * Every frame the duet room accepted, after the same checks, so the room
+   * output can mix this singer too. Rejected frames never reach it.
+   */
+  /** What happened to B's frames, for /statusz: a silent B is otherwise a mystery. */
+  readonly counts = { accepted: 0, rejected: {} as Record<string, number>, lastRejected: null as string | null };
+
+  onAcceptedFrame: ((frame: { generation: number; firstSampleIndex: number; pcm: Buffer },
+    sampleRate: number, participantId: string, nowMs: number) => void) | null = null;
+
   constructor(
     private readonly coordinator: Pick<ChoirRoomRestartCoordinatorExperiment,
       'mayAcceptVerifiedTicket' | 'receiveVerifiedMic' | 'disconnectVerifiedSinger'>,
@@ -102,7 +112,11 @@ export class ChoirSecondaryPcmIngressExperiment {
     const bound = this.sockets.get(socket);
     if (!bound) return { intercepted: false };
     const rejected = (reason: Exclude<ChoirIngressResult, { intercepted: false }>['reason']):
-      ChoirIngressResult => ({ intercepted: true, accepted: false, reason });
+      ChoirIngressResult => {
+      this.counts.rejected[reason] = (this.counts.rejected[reason] ?? 0) + 1;
+      this.counts.lastRejected = reason;
+      return { intercepted: true, accepted: false, reason };
+    };
     if (!this.isSocketOpen(socket) || socket.role !== 'unknown'
       || socket.participantId !== bound.ticket.participantId)
       return rejected('socket-identity-changed');
@@ -182,6 +196,9 @@ export class ChoirSecondaryPcmIngressExperiment {
       return rejected('stale-authority');
     }
     bound.generation = frame.generation;
+    this.onAcceptedFrame?.({
+      generation: frame.generation, firstSampleIndex: frame.firstSampleIndex!, pcm: frame.pcm,
+    }, bound.sampleRate, bound.ticket.participantId, nowMs);
     {
       const latest = bound.latestSequence;
       if (latest === null || ((sequence - latest) >>> 0) < 0x8000_0000)
@@ -196,6 +213,7 @@ export class ChoirSecondaryPcmIngressExperiment {
           bound.seenSequences.delete(previous);
       }
     }
+    this.counts.accepted += 1;
     return { intercepted: true, accepted: true, reason: 'accepted' };
   }
 

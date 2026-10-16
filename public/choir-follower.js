@@ -6,6 +6,7 @@ const stage = document.querySelector('.song-stage');
 const host = document.querySelector('#choir-follower-player');
 const statusNode = document.querySelector('#choir-follower-status');
 const positionNode = document.querySelector('#choir-follower-position');
+const unmuteButton = document.querySelector('#choir-follower-unmute');
 const t = (key) => window.relayI18n?.t(key) ?? key;
 
 let eligible = false;
@@ -28,6 +29,20 @@ let readyTimer = null;
 let startAttempts = 0;
 let retryAtMs = 0;
 let attemptedRate = null;
+/**
+ * The local song starts muted, which every browser lets a script play, so B
+ * is in time (and aligned by YouTube time) at once. It is then unmuted; where
+ * the browser needs a tap for sound (iOS), it keeps playing muted and B is
+ * asked to tap the player. muted → unmuting → audible | tap-for-sound.
+ */
+let soundState = 'muted';
+/** YouTube's last error code, and when a failed video is tried again. */
+let lastErrorCode = null;
+let videoErrors = 0;
+let videoRetryAtMs = 0;
+let unmuteTimer = null;
+/** What B is asked to tap for sound: the button, or (if that was not enough) the video. */
+let tapSound = 'choir.followerTapSound';
 
 function setLocalPlayback(active) {
   if (active === localBackingAudibleRole) return;
@@ -38,7 +53,9 @@ function setLocalPlayback(active) {
 }
 function failInitialization() {
   resetPlayer();
-  retryAtMs = performance.now() + 5_000;
+  // Keep trying while B is in, more slowly each time: giving up after three
+  // slow loads left a joined B with no song for the rest of the session.
+  retryAtMs = performance.now() + Math.min(15_000, 5_000 * Math.max(1, startAttempts));
   setStatus('choir.followerVideoError');
 }
 
@@ -49,6 +66,7 @@ function setStatus(key) {
     statusNode.hidden = !key;
     statusNode.textContent = key ? t(key) : '';
   }
+  if (unmuteButton) unmuteButton.hidden = key !== 'choir.followerTapSound';
 }
 function formatTime(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) return '--:--';
@@ -59,6 +77,10 @@ function resetPlayer() {
   generation++;
   clearTimeout(readyTimer);
   readyTimer = null;
+  clearTimeout(unmuteTimer);
+  unmuteTimer = null;
+  soundState = 'muted';
+  tapSound = 'choir.followerTapSound';
   setLocalPlayback(false);
   attemptedRate = null;
   try { player?.pauseVideo(); } catch {}
@@ -141,7 +163,7 @@ function loadYouTubeAPI() {
 
 async function startPlayer() {
   if (!host || !eligible || role !== 'observer' || starting || player
-    || startAttempts >= 3 || performance.now() < retryAtMs) return;
+    || performance.now() < retryAtMs) return;
   startAttempts++;
   starting = true;
   const ownGeneration = ++generation;
@@ -151,12 +173,29 @@ async function startPlayer() {
   setStatus('choir.followerLoading');
   try {
     const YT = await loadYouTubeAPI();
-    if (!eligible || role !== 'observer' || ownGeneration !== generation) return;
+    const room = currentRoom();
+    if (!eligible || role !== 'observer' || ownGeneration !== generation || !room) {
+      if (ownGeneration === generation) {
+        clearTimeout(readyTimer);
+        readyTimer = null;
+        starting = false;
+      }
+      return;
+    }
     const mount = document.createElement('div');
     host.replaceChildren(mount);
+    // Created with the room's video, as the main Song player is: on iPhone a
+    // player made without one fails with error 2 (invalid parameter) and
+    // never plays. origin is the page's, again as the main player.
+    localVideoId = room.videoId;
+    lastSeekAtMs = performance.now();
     player = new YT.Player(mount, {
       width: '320', height: '180',
-      playerVars: { playsinline: 1, controls: 1, rel: 0, enablejsapi: 1 },
+      videoId: room.videoId,
+      playerVars: {
+        playsinline: 1, controls: 1, rel: 0, origin: location.origin,
+        start: Math.floor(room.positionSeconds),
+      },
       events: {
         onReady: () => {
           if (ownGeneration !== generation) return;
@@ -164,6 +203,8 @@ async function startPlayer() {
           readyTimer = null;
           playerReady = true;
           starting = false;
+          startAttempts = 0;
+          try { player.mute(); } catch { soundState = 'audible'; }
           tick();
         },
         onAutoplayBlocked: () => {
@@ -178,18 +219,26 @@ async function startPlayer() {
             try { player?.pauseVideo(); } catch {}
             return;
           }
-          setLocalPlayback(event.data === 1 && eligible && role === 'observer'
-            && Boolean(currentRoom()));
+          // Only ever turns Listen off here; tick() decides when it returns,
+          // so a buffering or paused moment does not flip Listen back on.
+          if (event.data === 1 && eligible && role === 'observer' && currentRoom()) setLocalPlayback(true);
           if (event.data === 1) {
+            videoErrors = 0;
             autoplayBlocked = false;
-            setStatus(null);
+            setStatus(soundState === 'tap-for-sound' ? tapSound : null);
           }
         },
-        onError: () => {
+        onError: (event) => {
           if (ownGeneration !== generation) return;
+          lastErrorCode = Number.isFinite(Number(event?.data)) ? Number(event.data) : null;
           if (!playerReady) { failInitialization(); return; }
           setLocalPlayback(false);
           failedVideoId = localVideoId;
+          // Often passing on a phone (5: the player broke, e.g. when the Mic
+          // changed the audio route): a fresh player tries again, more slowly
+          // each time, rather than leaving B songless for this video.
+          videoErrors++;
+          videoRetryAtMs = performance.now() + Math.min(15_000, 3_000 * videoErrors);
           setStatus('choir.followerVideoError');
           try { player?.pauseVideo(); } catch {}
         },
@@ -201,7 +250,60 @@ async function startPlayer() {
   }
 }
 
+/** What B's local player is doing, for the server log (a songless B is otherwise a guess). */
+function playerMuted() {
+  try { return player.isMuted() === true; } catch { return false; }
+}
+/**
+ * Unmutes the playing song. WebKit pauses an unmute it does not count as a
+ * tap: then it goes back to muted playback, so the song keeps time, and B is
+ * asked for a tap (tapSoundKey says where).
+ */
+function tryUnmute(tapSoundKey) {
+  soundState = 'unmuting';
+  const ownGeneration = generation;
+  try { player.unMute(); } catch {}
+  try { player.playVideo(); } catch {}
+  clearTimeout(unmuteTimer);
+  unmuteTimer = setTimeout(() => {
+    unmuteTimer = null;
+    if (ownGeneration !== generation || soundState !== 'unmuting') return;
+    // Buffering after a successful unmute is not an autoplay refusal.
+    // Re-muting here forced an already audible B to ask for another tap.
+    if (!playerMuted()) {
+      soundState = 'audible';
+      tick();
+      return;
+    }
+    soundState = 'tap-for-sound';
+    tapSound = tapSoundKey;
+    try { player.mute(); } catch {}
+    try { player.playVideo(); } catch {}
+    tick();
+  }, 400);
+}
+/** Once the muted song plays: turn it up, or ask for the tap the browser needs. */
+function reconcileSound(playerState) {
+  if (playerState !== 1) return;
+  if (soundState === 'muted') tryUnmute('choir.followerTapSound');
+  else if (soundState === 'tap-for-sound' && !playerMuted()) soundState = 'audible';
+}
+
+function publishReport() {
+  let playerState = null;
+  try { playerState = playerReady ? Number(player.getPlayerState()) : null; } catch {}
+  window.dispatchEvent(new CustomEvent('relay-choir-follower-report', {
+    detail: {
+      eligible, role, playerReady, starting, playerState, startAttempts,
+      autoplayBlocked, failedVideo: failedVideoId !== null, errorCode: lastErrorCode, videoErrors,
+      status: statusKey, sound: soundState,
+      localPlayback: localBackingAudibleRole, roomVideo: latestRoom?.videoId ?? null,
+    },
+  }));
+}
+
 function tick() {
+  publishReport();
   if (!eligible || role !== 'observer') return;
   const room = currentRoom();
   if (!room) {
@@ -211,7 +313,8 @@ function tick() {
     return;
   }
   if (failedVideoId === room.videoId) {
-    setStatus('choir.followerVideoError');
+    if (performance.now() >= videoRetryAtMs) resetPlayer();
+    else setStatus('choir.followerVideoError');
     return;
   }
   if (!playerReady) {
@@ -219,7 +322,9 @@ function tick() {
     return;
   }
   let local;
+  let sampledAtPerformanceMs = 0;
   try {
+    sampledAtPerformanceMs = performance.now();
     local = {
       ready: true,
       videoId: localVideoId,
@@ -232,7 +337,20 @@ function tick() {
     setStatus('choir.followerLoading');
     return;
   }
-  setLocalPlayback(local.playerState === 1);
+  // Listen yields while the local song is starting, not only once it plays:
+  // on iOS, Listen sounding again on every buffering or paused moment
+  // interrupts the video that is trying to start. It returns on failure.
+  setLocalPlayback((room.playing && !autoplayBlocked) || local.playerState === 1);
+  reconcileSound(local.playerState);
+  if (local.playerState === 1 && localVideoId === room.videoId) {
+    // Where B's local YouTube is, for B's YouTube-time alignment.
+    window.dispatchEvent(new CustomEvent('relay-choir-song-anchor', {
+      detail: {
+        videoId: localVideoId, state: 1, currentTime: local.positionSeconds,
+        playbackRate: local.playbackRate, sampledAtPerformanceMs,
+      },
+    }));
+  }
   const nowMs = performance.now();
   const action = decideFollowerAction(room, local, nowMs, lastSeekAtMs);
   try {
@@ -271,7 +389,10 @@ function tick() {
     setStatus('choir.followerVideoError');
     return;
   }
-  if (!room.playing || local.playerState === 1) {
+  if (room.playing && local.playerState === 1 && soundState === 'tap-for-sound') {
+    autoplayBlocked = false;
+    setStatus(tapSound);
+  } else if (!room.playing || local.playerState === 1) {
     autoplayBlocked = false;
     setStatus(null);
   } else if (autoplayBlocked || (localVideoId === room.videoId
@@ -290,6 +411,11 @@ function tick() {
   }
 }
 
+// A tap on the page, which iOS may count for the song's sound.
+unmuteButton?.addEventListener('click', () => {
+  if (!playerReady || soundState !== 'tap-for-sound') return;
+  tryUnmute('choir.followerTapVideo');
+});
 window.addEventListener('relay-request-choir-local-playback', () => {
   window.dispatchEvent(new CustomEvent('relay-choir-local-playback', {
     detail: { active: localBackingAudibleRole },
@@ -318,6 +444,7 @@ if (stage && host && positionNode && statusNode) {
   host.hidden = true;
   positionNode.hidden = true;
   statusNode.hidden = true;
+  if (unmuteButton) unmuteButton.hidden = true;
   setInterval(tick, 500);
   window.dispatchEvent(new Event('relay-request-choir-guest-state'));
 }

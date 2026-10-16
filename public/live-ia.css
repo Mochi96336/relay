@@ -133,6 +133,7 @@
 .performance-stage > .voice-input-evidence { order: 2; }
 .performance-stage > .mic-actions { order: 3; }
 .performance-stage > .takeover-row { order: 4; }
+.performance-stage > .choir-status { order: 4; }
 .performance-stage > .mic-live-control { order: 5; }
 .performance-stage > .take-strip { order: 6; }
 
@@ -151,7 +152,8 @@
   border-bottom: 1px solid #202227;
 }
 
-body[data-self-mic="live"] .mic-live-control {
+body[data-self-mic="live"] .mic-live-control,
+body[data-choir-guest="joined"] .mic-live-control {
   display: block;
 }
 

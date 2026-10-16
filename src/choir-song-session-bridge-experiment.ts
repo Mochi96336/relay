@@ -20,6 +20,7 @@ export class ChoirSongSessionBridgeExperiment {
     robotSourceGeneration: number;
     playbackRate: number;
     corrections: number;
+    phaseCorrections: number;
     lastNowMs: number;
     lastProjectedSeconds: number;
   } | null = null;
@@ -49,6 +50,7 @@ export class ChoirSongSessionBridgeExperiment {
     const videoId = state.videoId;
     const rate = state.playbackRate;
     const corrections = state.corrections;
+    const phaseCorrections = state.phaseCorrections ?? 0;
     const projected = state.serverTime;
     const participantId = state.playbackLeaderParticipantId;
     const transportId = state.playbackTransportId;
@@ -65,6 +67,7 @@ export class ChoirSongSessionBridgeExperiment {
       && Number.isSafeInteger(playbackGeneration) && (playbackGeneration as number) >= 0
       && typeof rate === 'number' && Number.isFinite(rate) && rate >= .25 && rate <= 4
       && Number.isSafeInteger(corrections) && (corrections as number) >= 0
+      && Number.isSafeInteger(phaseCorrections) && (phaseCorrections as number) >= 0
       && typeof projected === 'number' && Number.isFinite(projected)
       && projected >= 0;
     if (!valid) {
@@ -80,6 +83,7 @@ export class ChoirSongSessionBridgeExperiment {
       robotSourceGeneration: robotGeneration,
       playbackRate: rate as number,
       corrections: corrections as number,
+      phaseCorrections: phaseCorrections as number,
       lastNowMs: nowMs,
       lastProjectedSeconds: projected as number,
     };
@@ -88,15 +92,24 @@ export class ChoirSongSessionBridgeExperiment {
       const elapsedMs = nowMs - last.lastNowMs;
       const expectedSeconds = last.lastProjectedSeconds
         + elapsedMs * last.playbackRate / 1_000;
-      const discontinuity = Math.abs(next.lastProjectedSeconds - expectedSeconds) > .4;
-      if (elapsedMs < 0 || next.revision !== last.revision
+      const phaseDelta = next.phaseCorrections - last.phaseCorrections;
+      const projectionDelta = Math.abs(next.lastProjectedSeconds - expectedSeconds);
+      // SongSession's confirmed sub-second phase drift is a clock refinement,
+      // not a seek. It increments both correction and revision counters; using
+      // either counter alone retired B on every ordinary clock adjustment.
+      const softPhaseCorrection = phaseDelta > 0
+        && next.corrections - last.corrections === phaseDelta
+        && next.revision - last.revision === phaseDelta
+        && projectionDelta <= .75;
+      const discontinuity = projectionDelta > .4 && !softPhaseCorrection;
+      if (elapsedMs < 0 || (next.revision !== last.revision && !softPhaseCorrection)
         || next.videoId !== last.videoId
         || next.playbackParticipantId !== last.playbackParticipantId
         || next.playbackTransportId !== last.playbackTransportId
         || next.playbackGeneration !== last.playbackGeneration
         || next.robotSourceGeneration !== last.robotSourceGeneration
         || Math.abs(next.playbackRate - last.playbackRate) > 0.0001
-        || next.corrections !== last.corrections || discontinuity) {
+        || (next.corrections !== last.corrections && !softPhaseCorrection) || discontinuity) {
         return this.fail(nowMs);
       }
       this.accepted = next;

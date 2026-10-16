@@ -91,6 +91,8 @@ window.relayIdentityReady = (async () => {
   let sessionAuthorityFresh = false;
   let choirConsentAvailable = false;
   let choirMediaEnabled = false;
+  let choirAnnouncedOnConnection = false;
+  let choirResumeSupported = false;
   let takeoverOwnerId = null;
   let startAfterTakeover = false;
   let takeoverFailure = null;
@@ -185,6 +187,10 @@ window.relayIdentityReady = (async () => {
 
   window.addEventListener('relay-request-mic-action-state', publishMicActionState);
   window.addEventListener('relay-request-presence-state', publishPresenceState);
+  // The second-Mic modules can finish loading after the server already said
+  // whether Choir is on; a missed announcement left B's media client off, so
+  // B joined but never sent audio. They ask for it again on load.
+  window.addEventListener('relay-request-choir-media-mode', announceChoirConsentAvailable);
 
   function cancelSpeculativePlaybackPrewarm() {
     window.dispatchEvent(new CustomEvent('relay:playback-prewarm-cancel'));
@@ -211,9 +217,20 @@ window.relayIdentityReady = (async () => {
     return true;
   }
 
+  /**
+   * Availability first, media mode last: a listener that resets on
+   * "unavailable" must end on the current mode, whatever order the server's
+   * Choir announcement and session freshness arrived in.
+   */
   function announceChoirConsentAvailable() {
+    // Feature support is separate from a transient control reconnect.
+    // Freshness still gates every command; it must not stop B capture.
+    const available = choirConsentAvailable;
     window.dispatchEvent(new CustomEvent('relay-choir-consent-availability', {
-      detail: { available: choirConsentAvailable && sessionAuthorityFresh },
+      detail: { available, resumeSupported: choirResumeSupported },
+    }));
+    window.dispatchEvent(new CustomEvent('relay-choir-media-mode', {
+      detail: { enabled: available && choirMediaEnabled },
     }));
   }
 
@@ -224,17 +241,41 @@ window.relayIdentityReady = (async () => {
     const payload = event.detail;
     if (!choirConsentAvailable || !sessionAuthorityFresh
       || !payload || ![
-        'choir-secondary-invite', 'choir-secondary-accept',
+        'choir-secondary-invite', 'choir-secondary-accept', 'choir-secondary-join',
+        'choir-secondary-song-anchor', 'choir-secondary-page', 'choir-secondary-gain',
         'choir-secondary-decline', 'choir-secondary-withdraw',
         'choir-room-begin', 'choir-secondary-media-claim-request',
       ].includes(payload.type)) return;
-    if (['choir-room-begin', 'choir-secondary-media-claim-request']
+    if (['choir-room-begin', 'choir-secondary-media-claim-request', 'choir-secondary-join',
+      'choir-secondary-song-anchor', 'choir-secondary-page', 'choir-secondary-gain']
       .includes(payload.type) && !choirMediaEnabled) return;
+    if (payload.type === 'choir-secondary-join') {
+      send({ type: payload.type, ...(payload.resume === true
+        ? { resume: true, expectedPrimaryId: payload.expectedPrimaryId } : {}) });
+      return;
+    }
+    if (payload.type === 'choir-secondary-gain') {
+      send({ type: payload.type, micGainDb: payload.micGainDb });
+      return;
+    }
+    if (payload.type === 'choir-secondary-song-anchor') {
+      send({
+        type: payload.type, videoId: payload.videoId, state: payload.state,
+        currentTime: payload.currentTime, playbackRate: payload.playbackRate,
+        captureAnchor: payload.captureAnchor,
+      });
+      return;
+    }
+    if (payload.type === 'choir-secondary-page') {
+      send({ type: payload.type, page: payload.page });
+      return;
+    }
     if (payload.type === 'choir-secondary-invite') {
       if (typeof payload.secondaryId !== 'string') return;
       send({ type: payload.type, secondaryId: payload.secondaryId });
-    } else if (payload.type === 'choir-secondary-withdraw'
-      || payload.type === 'choir-secondary-media-claim-request') {
+    } else if (payload.type === 'choir-secondary-withdraw') {
+      send({ type: payload.type, reason: typeof payload.reason === 'string' ? payload.reason.slice(0, 80) : 'unspecified' });
+    } else if (payload.type === 'choir-secondary-media-claim-request') {
       send({ type: payload.type });
     } else if (payload.type === 'choir-room-begin') {
       if (typeof payload.secondaryId !== 'string') return;
@@ -295,6 +336,8 @@ window.relayIdentityReady = (async () => {
 
   function handleMessage(message) {
     if (message.type === 'choir-consent-available') {
+      choirAnnouncedOnConnection = true;
+      choirResumeSupported = message.resumeSupported === true;
       choirConsentAvailable = message.mode === 'invitation-only'
         || message.mode === 'media-experiment';
       choirMediaEnabled = message.mode === 'media-experiment';
@@ -334,6 +377,12 @@ window.relayIdentityReady = (async () => {
       && typeof nextIncarnation === 'string'
       && previousIncarnation !== nextIncarnation
     ) {
+      if (!choirAnnouncedOnConnection) {
+        choirConsentAvailable = false;
+        choirMediaEnabled = false;
+        choirResumeSupported = false;
+        announceChoirConsentAvailable();
+      }
       hideTakeover({ cancelPrewarm: true });
     }
     latestSession = message;
@@ -354,11 +403,7 @@ window.relayIdentityReady = (async () => {
   async function connect() {
     if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return;
     sessionAuthorityFresh = false;
-    choirConsentAvailable = false;
-    choirMediaEnabled = false;
-    window.dispatchEvent(new CustomEvent('relay-choir-media-mode', {
-      detail: { enabled: false },
-    }));
+    choirAnnouncedOnConnection = false;
     announceChoirConsentAvailable();
     publishMicActionState();
     publishPresenceState();
@@ -389,11 +434,6 @@ window.relayIdentityReady = (async () => {
       if (socket !== next) return;
       socket = null;
       sessionAuthorityFresh = false;
-      choirConsentAvailable = false;
-      choirMediaEnabled = false;
-      window.dispatchEvent(new CustomEvent('relay-choir-media-mode', {
-        detail: { enabled: false },
-      }));
       announceChoirConsentAvailable();
       publishMicActionState();
       publishPresenceState();

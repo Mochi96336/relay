@@ -53,7 +53,8 @@
 .performance-stage > .recent-take { margin-top: 8px; }
 /* Previous Take is a review row, not a tab or file-manager underline. */
 .performance-stage .take-link { min-height: 44px; margin-top: 0; border-bottom: 0; display: inline-flex; align-items: center; }
-body[data-self-mic="live"] .mic-live-control { margin-top: 8px; }
+body[data-self-mic="live"] .mic-live-control,
+body[data-choir-guest="joined"] .mic-live-control { margin-top: 8px; }
 .live-actions { margin-top:22px; padding-top:14px; }
 /* Room sound's persistent rail geometry is intentionally absent here.
    live-p0-layout.css owns that contract; room-sound-ui.css owns state paint. */

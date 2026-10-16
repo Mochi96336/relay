@@ -275,6 +275,14 @@ export class ChoirFreshRoomHandshakeExperiment {
     return true;
   }
 
+  /** A Content-verified singer's lag in this room, or null. */
+  singerAlignment(participantId: string) {
+    const c = this.current;
+    const ticket = c?.tickets.get(participantId);
+    if (!c || !ticket || !c.contentVerified.has(participantId)) return null;
+    return c.room.singerAlignment(ticket.transportId);
+  }
+
   snapshot(): ChoirFreshRoomSnapshot {
     const c = this.current;
     const admittedIds = c ? [...c.tickets.keys()] : [];

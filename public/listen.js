@@ -19,6 +19,7 @@ await window.relayIdentityReady;
 import { shouldForceMuteListen } from './playback-recovery.js';
 import { createReconnectBackoff } from './reconnect-backoff.js';
 import { wsUrl } from './ws-url.js';
+import { openAudioSocket } from './open-audio-socket.js';
 
 const toggle = document.querySelector('#listen-toggle');
 const gainControl = document.querySelector('#listen-gain');
@@ -52,6 +53,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   // this page once decoding has failed: the page then rejoins on PCM.
   let opusOffer = null;
   let opusRefused = false;
+  let directSocketFailed = false;
   const listenOpusDecoder = createListenOpusDecoder({
     onPcm: (pcm, firstSampleIndex) => enqueuePlayback(pcm, firstSampleIndex),
     onError: (error) => {
@@ -338,22 +340,18 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       || pendingSocket
       || socket
     ) return;
-    // Carries the room audio.
-    const next = new WebSocket(wsUrl({ compress: false }));
-    pendingSocket = next;
-    next.binaryType = 'arraybuffer';
-    try {
-      await new Promise((resolve, reject) => {
-        next.addEventListener('open', resolve, { once: true });
-        next.addEventListener('error', () => reject(new Error('Listen WebSocket connection failed.')), { once: true });
-        next.addEventListener('close', () => reject(new Error('Listen WebSocket closed before opening.')), { once: true });
-      });
-    } catch (error) {
-      try { next.close(); } catch {}
-      throw error;
-    } finally {
-      if (pendingSocket === next) pendingSocket = null;
-    }
+    // Prefer the same direct route as the microphones. The tunnel can buffer
+    // audio beyond Relay's socket, which only Listen's ACKs can detect.
+    const tunnelUrl = wsUrl({ compress: false });
+    const directUrl = directSocketFailed ? tunnelUrl : wsUrl({ compress: false, direct: true });
+    let opening = null;
+    const next = await openAudioSocket({
+      directUrl, tunnelUrl,
+      onPending: candidate => { opening = candidate; pendingSocket = candidate; },
+      onDirectFailure: () => { directSocketFailed = true; },
+      stillWanted: () => connectEpoch === transportEpoch && transportEnabled && monitorTransportWanted(),
+    }).finally(() => { if (pendingSocket === opening) pendingSocket = null; });
+    window.relayListenTransport = next.url === directUrl && directUrl !== tunnelUrl ? 'direct' : 'tunnel';
 
     if (connectEpoch !== transportEpoch || !transportEnabled || !monitorTransportWanted()) {
       next.close();

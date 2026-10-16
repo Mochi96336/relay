@@ -23,6 +23,7 @@ let generation = 0;
 let apiPromise = null;
 let autoplayBlocked = false;
 let statusKey = null;
+let localBackingAudibleRole = false;
 
 function setStatus(key) {
   if (statusKey === key) return;
@@ -59,6 +60,12 @@ function currentRoom() {
 function showFollower() {
   const visible = eligible && role === 'observer'
     && /^[A-Za-z0-9_-]{11}$/.test(latestRoom?.videoId ?? '');
+  if (visible !== localBackingAudibleRole) {
+    localBackingAudibleRole = visible;
+    window.dispatchEvent(new CustomEvent('relay-choir-local-playback', {
+      detail: { active: visible },
+    }));
+  }
   if (host) host.hidden = !visible;
   if (positionNode) positionNode.hidden = !visible;
   if (stage) stage.dataset.choirFollower = visible ? 'active' : 'off';
@@ -241,6 +248,11 @@ function tick() {
   }
 }
 
+window.addEventListener('relay-request-choir-local-playback', () => {
+  window.dispatchEvent(new CustomEvent('relay-choir-local-playback', {
+    detail: { active: localBackingAudibleRole },
+  }));
+});
 window.addEventListener('relay-choir-guest-state', (event) => {
   eligible = event.detail?.enabled === true;
   showFollower();
@@ -257,7 +269,15 @@ window.addEventListener('relay-locale-changed', () => {
   statusKey = null;
   setStatus(previous);
 });
-window.addEventListener('pagehide', resetPlayer);
+window.addEventListener('pagehide', () => {
+  if (localBackingAudibleRole) {
+    localBackingAudibleRole = false;
+    window.dispatchEvent(new CustomEvent('relay-choir-local-playback', {
+      detail: { active: false },
+    }));
+  }
+  resetPlayer();
+});
 if (stage && host && positionNode && statusNode) {
   host.hidden = true;
   positionNode.hidden = true;

@@ -11,7 +11,7 @@ test('second Mic controls live in the Mic row, hidden in an ordinary N=1 page', 
   const app = await file('../public/choir-consent-ui.js');
   const server = await file('../src/server.ts');
   assert.match(html, /<div class="mic-actions">[\s\S]*?id="choir-invite-open"[^>]*hidden[\s\S]*?id="choir-withdraw"[^>]*hidden[\s\S]*?<\/div>/);
-  assert.match(html, /id="choir-consent-status"[^>]*hidden/);
+  assert.doesNotMatch(html, /choir-consent-status/);
   assert.doesNotMatch(html, /choir-consent-panel|choir-dismiss|choir-accept|choir-secondary-person/,
     'no extra card, no owner kick, no invitation controls');
   assert.match(html, /src="\/choir-consent-ui\.js"/);
@@ -47,8 +47,7 @@ test('a joined B sets its own Mic gain, as the Mic owner does', async () => {
 
 test('the second Mic copy exists in both locales and the old invitation copy is gone', async () => {
   const i18n = await file('../public/i18n.js');
-  for (const key of ['choir.invite', 'choir.takeOver', 'choir.withdraw', 'choir.joinRejected',
-    'choir.micFailed', 'choir.revoked', 'choir.replaced']) {
+  for (const key of ['choir.invite', 'choir.takeOver', 'choir.withdraw']) {
     assert.equal(i18n.match(new RegExp(`'${key.replace('.', '\\.')}':`, 'g'))?.length, 2, key);
   }
   assert.doesNotMatch(i18n, /'choir\.(previewOnly|invitationFrom|panelTitle|beginRoom|connectMedia|dismiss)':/);

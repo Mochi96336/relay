@@ -7,14 +7,12 @@ import './choir-secondary-media-client.js';
 /**
  * The second Mic's controls, in the Mic row like Take Mic: + 副 Mic to join
  * whoever holds the Mic, 接手副 Mic when someone else is the second singer
- * (it can be taken over, as the Mic can), and 離開副 Mic once in. Progress is
- * in the heading (live-status.js); this module only adds one line when
- * something went wrong.
+ * (it can be taken over, as the Mic can), and 離開副 Mic once in. Progress
+ * stays in the heading (live-status.js); the Mic row contains only controls.
  */
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const joinButton = document.querySelector('#choir-invite-open');
 const leaveButton = document.querySelector('#choir-withdraw');
-const statusCopy = document.querySelector('#choir-consent-status');
 
 let available = false;
 let session = null;
@@ -24,7 +22,6 @@ let joined = false;
 let pending = false;
 /** The second singer the room has now (from product status), or null. */
 let duetSecondaryId = null;
-let statusKey = null;
 let pendingTimer = null;
 let lastReport = '';
 let lastReportAtMs = Number.NEGATIVE_INFINITY;
@@ -46,7 +43,7 @@ function publishCommand(type, fields = {}) {
   return true;
 }
 function render() {
-  if (!joinButton || !leaveButton || !statusCopy) return;
+  if (!joinButton || !leaveButton) return;
   const takeOver = typeof duetSecondaryId === 'string' && duetSecondaryId !== myId();
   joinButton.hidden = !canJoin();
   joinButton.disabled = pending;
@@ -55,19 +52,16 @@ function render() {
   joinButton.dataset.i18n = takeOver ? 'choir.takeOver' : 'choir.invite';
   joinButton.textContent = t(joinButton.dataset.i18n);
   leaveButton.hidden = !(available && authorityFresh && joined);
-  statusCopy.textContent = statusKey ? t(statusKey) : '';
-  statusCopy.hidden = !statusKey;
   if (joined) document.body.dataset.choirGuest = 'joined';
   else delete document.body.dataset.choirGuest;
   window.dispatchEvent(new CustomEvent('relay-choir-guest-state', {
     detail: { enabled: available && authorityFresh && joined && mediaEnabled },
   }));
 }
-function leftWith(key) {
+function resetJoin() {
   clearTimeout(pendingTimer);
   joined = false;
   pending = false;
-  statusKey = key;
   render();
 }
 
@@ -99,7 +93,7 @@ window.addEventListener('relay-choir-consent-message', (event) => {
   if (!available || !authorityFresh) return;
   const message = event.detail;
   if (message?.type === 'choir-consent-rejected') {
-    leftWith('choir.joinRejected');
+    resetJoin();
     return;
   }
   if (message?.type !== 'choir-secondary-consent-status' || message.secondaryId !== myId()) return;
@@ -107,12 +101,11 @@ window.addEventListener('relay-choir-consent-message', (event) => {
     clearTimeout(pendingTimer);
     joined = true;
     pending = false;
-    statusKey = null;
     render();
   } else if (message.status === 'withdrawn') {
-    leftWith(null);
+    resetJoin();
   } else if (message.status === 'revoked') {
-    leftWith(message.reason === 'replaced' ? 'choir.replaced' : 'choir.revoked');
+    resetJoin();
   }
 });
 window.addEventListener('relay-choir-media-connection', (event) => {
@@ -121,7 +114,7 @@ window.addEventListener('relay-choir-media-connection', (event) => {
   // not open needs the singer. Leave rather than sit joined but silent.
   if (event.detail?.state !== 'capture-failed') return;
   publishCommand('choir-secondary-withdraw');
-  leftWith('choir.micFailed');
+  resetJoin();
 });
 // What B's page shows and plays, for the server log: on change (at most once
 // a second) and every 10 s while joined.
@@ -143,10 +136,9 @@ joinButton?.addEventListener('click', () => {
   // microphone. Capture starts now and connects once the server has a room.
   window.dispatchEvent(new Event('relay-choir-start-secondary-capture'));
   pending = publishCommand('choir-secondary-join');
-  statusKey = null;
   clearTimeout(pendingTimer);
   // An unanswered join must not leave the button disabled.
-  pendingTimer = setTimeout(() => { if (pending && !joined) leftWith('choir.joinRejected'); }, 8_000);
+  pendingTimer = setTimeout(() => { if (pending && !joined) resetJoin(); }, 8_000);
   render();
 });
 leaveButton?.addEventListener('click', () => {

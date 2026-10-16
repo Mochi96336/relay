@@ -59,7 +59,6 @@ test('normal N=1 shows no second Mic controls without explicit server availabili
   await openFixture(page, 'owner', 'owner');
   await expect(page.locator('#choir-invite-open')).toBeHidden();
   await expect(page.locator('#choir-withdraw')).toBeHidden();
-  await expect(page.locator('#choir-consent-status')).toBeHidden();
   await expect.poll(() => page.evaluate(() =>
     document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
@@ -71,7 +70,6 @@ test('only someone other than the Mic owner sees + Second Mic, and one tap joins
   // The Mic owner has nothing to manage: no card and no way to remove B.
   await duet(page, 'singerB');
   await expect(page.locator('#choir-invite-open')).toBeHidden();
-  await expect(page.locator('#choir-consent-status')).toBeHidden();
 
   await openFixture(page, 'singerB', null);
   await enable(page);
@@ -95,7 +93,6 @@ test('only someone other than the Mic owner sees + Second Mic, and one tap joins
 
   await consent(page, accepted);
   // Joined: the heading carries the duet's progress; the Mic row only offers leaving.
-  await expect(page.locator('#choir-consent-status')).toBeHidden();
   await expect(page.locator('#choir-withdraw')).toBeVisible();
   await expect(open).toBeHidden();
   await expect(page.locator('#start-publisher')).toBeHidden();
@@ -130,7 +127,7 @@ test('only someone other than the Mic owner sees + Second Mic, and one tap joins
     document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
-test('while someone else sings second, the button takes over, and the one replaced is told why', async ({ page }) => {
+test('while someone else sings second, the button takes over without an extra status row', async ({ page }) => {
   await openFixture(page, 'singerC', 'owner');
   await enable(page);
   await duet(page, 'singerB');
@@ -149,8 +146,6 @@ test('while someone else sings second, the button takes over, and the one replac
   await consent(page, accepted);
   await expect(page.locator('#choir-withdraw')).toBeVisible();
   await consent(page, { type: 'choir-secondary-consent-status', status: 'revoked', secondaryId: 'singerB', reason: 'replaced' });
-  await expect(page.locator('#choir-consent-status')).toBeVisible();
-  await expect(page.locator('#choir-consent-status')).toHaveText('副 Mic 被別人接手了。');
   await expect(page.locator('#choir-withdraw')).toBeHidden();
   // B can take it straight back.
   await duet(page, 'singerC');
@@ -158,20 +153,18 @@ test('while someone else sings second, the button takes over, and the one replac
   await expect(page.locator('#choir-invite-open')).toBeEnabled();
 });
 
-test('a refused or ended second Mic says why in one line, and joining again clears it', async ({ page }) => {
+test('a refused or ended second Mic restores its join button without an extra status row', async ({ page }) => {
   await openFixture(page, 'singerB', 'owner');
   await enable(page);
   const open = page.locator('#choir-invite-open');
+  await expect(page.locator('#choir-consent-status')).toHaveCount(0);
   await open.click();
   await consent(page, { type: 'choir-consent-rejected', reason: 'invalid-or-stale' });
-  await expect(page.locator('#choir-consent-status')).toContainText('目前無法加入');
   await expect(open).toBeEnabled();
 
   await open.click();
-  await expect(page.locator('#choir-consent-status')).toBeHidden();
   await consent(page, accepted);
   await consent(page, { type: 'choir-secondary-consent-status', status: 'revoked', secondaryId: 'singerB', reason: 'scope-or-authority-changed' });
-  await expect(page.locator('#choir-consent-status')).toContainText('副 Mic 已結束');
   await expect(page.locator('#choir-withdraw')).toBeHidden();
   await expect(open).toBeVisible();
 

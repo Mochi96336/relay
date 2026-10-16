@@ -398,7 +398,20 @@ export function describeTiming({ product, readiness, source, timing, timeline } 
     const value = (v) => finite(v) === null ? '—' : signedMs(Number(v));
     rows.push(row('mixerTarget', t('diag.timing.mixerTarget'), value(timing.calibratedMicLagTargetMs ?? timing.requestedMicAdvanceMs), t('diag.timing.mixerTargetNote')));
     if (timing.activeCalibrationKind === 'content') {
-      rows.push(row('contentTarget', t('diag.timing.contentTarget'), value(timing.desiredCalibratedMicLagMs), t('diag.timing.contentTargetNote')));
+      // Measured lag plus how far the Robot's player moved since, so the two
+      // numbers on the page visibly add up. While the Robot is quiet the mixer
+      // holds its last converted value; show that one, marked as held.
+      const measured = finite(timing.micLagMs);
+      const live = finite(timing.desiredCalibratedMicLagMs);
+      const held = live === null && timing.mixerCalibrationAuthority?.kind === 'content'
+        ? finite(timing.calibratedMicLagTargetMs) : null;
+      const converted = live ?? held;
+      const formula = measured !== null && converted !== null
+        ? t('diag.timing.contentTargetFormula', {
+          measured: signedMs(measured), shift: signedMs(converted - measured), live: signedMs(converted),
+        }) + (live === null ? ` · ${t('diag.timing.contentTargetHeld')}` : '')
+        : value(live);
+      rows.push(row('contentTarget', t('diag.timing.contentTarget'), formula, t('diag.timing.contentTargetNote')));
     }
     const boot = timing.bootCalibration;
     if (boot) {

@@ -276,12 +276,6 @@
                      sit closed under the readable rows instead of doubling the tab's length. -->
                 <details class="diagnostics-advanced">
                   <summary class="diagnostics-subheading" data-i18n="diag.cal.heading">Audio comparison</summary>
-                  <dl class="diagnostic-ledger">
-                    <div class="diagnostic-pair">
-                      <dt data-i18n="diag.cal.applied">Voice delay compensation (now / target)</dt>
-                      <dd data-tone="neutral"><span id="diag-calibration-applied" class="diagnostic-value">—</span><span class="diagnostic-note" data-i18n="diag.cal.appliedNote">When the target changes, the current value approaches it gradually to avoid an abrupt shift.</span></dd>
-                    </div>
-                  </dl>
                   <p class="diagnostic-group" data-i18n="diag.cal.group.probe">At Mic start: test tone</p>
                   <dl class="diagnostic-ledger">
                     <div class="diagnostic-pair">
@@ -296,12 +290,7 @@
                       <dt data-i18n="diag.cal.pathDifference">Path difference</dt>
                       <dd data-tone="neutral"><span id="diag-path-difference" class="diagnostic-value">—</span><span class="diagnostic-note" data-i18n="diag.cal.pathDifferenceNote">The Mic path delay minus the song path delay.</span></dd>
                     </div>
-                    <div class="diagnostic-pair">
-                      <dt data-i18n="diag.cal.effective">Test tone result</dt>
-                      <dd data-tone="neutral"><span id="diag-path-effective" class="diagnostic-value">—</span><span class="diagnostic-note" data-i18n="diag.cal.effectiveNote">The path difference plus the current Robot player position.</span></dd>
-                    </div>
                   </dl>
-                  <dl id="diag-boot-stored-ledger" class="diagnostic-ledger"></dl>
                   <p class="diagnostic-group" data-i18n="diag.cal.group.content">During playback: content comparison</p>
                   <dl class="diagnostic-ledger">
                     <div class="diagnostic-pair">
@@ -333,7 +322,6 @@
                       <dd data-tone="neutral"><span id="diag-content-segments" class="diagnostic-value">—</span><span class="diagnostic-note" data-i18n="diag.cal.contentSegmentsNote">Delays measured per segment in this comparison; a large spread indicates an unstable result.</span></dd>
                     </div>
                   </dl>
-                  <dl id="diag-content-target-ledger" class="diagnostic-ledger"></dl>
                   <p class="diagnostic-group" data-i18n="diag.cal.group.validation">After calibration: ongoing validation</p>
                   <dl class="diagnostic-ledger">
                     <div class="diagnostic-pair">

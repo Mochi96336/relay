@@ -284,6 +284,65 @@ function clampCause(shortfall) {
   return null;
 }
 
+/**
+ * How the voice delay compensation adds up, as one line for whichever method
+ * owns it. `result` is what the method asks for now; the mixer may still be
+ * holding or easing toward it, which the caller says beside the line.
+ */
+function timingFormula(timing, timeline, source, t) {
+  if (!timing) return null;
+  const ms = (v) => signedMs(Number(v));
+  const rate = finite(timeline?.playbackRate) > 0 ? Number(timeline.playbackRate) : 1;
+  const playing = timeline?.connected === true && Number(timeline.state) === 1;
+  const robotRoute = source?.robotRoute === true || timing.robotRoute === true;
+  const freshShift = timing.robotDeltaFresh === true && finite(timing.robotPlayerOffsetMs) !== null
+    ? Number(timing.robotPlayerOffsetMs) / rate : null;
+
+  if ((source?.timingMode ?? timing.timingMode) !== 'acoustic-calibration') {
+    const estimate = finite(timing.fallbackNetworkMs);
+    if (estimate === null) return null;
+    const key = timing.sampleSongFallback?.active ? 'diag.timing.formula.sampleSong' : 'diag.timing.formula.transport';
+    return { text: t(key, { result: ms(estimate) }), result: estimate };
+  }
+
+  // The same method the Method row names.
+  const kind = source?.activeCalibrationKind ?? timing.activeCalibrationKind ?? timing.calibrationKind;
+  if (kind === 'content') {
+    const measured = finite(timing.micLagMs);
+    if (measured === null) return null;
+    if (!robotRoute) return { text: t('diag.timing.formula.measured', { result: ms(measured) }), result: measured };
+    const live = finite(timing.desiredCalibratedMicLagMs);
+    const held = live === null && timing.mixerCalibrationAuthority?.kind === 'content'
+      ? finite(timing.calibratedMicLagTargetMs) : null;
+    const result = live ?? held;
+    if (result === null) return null;
+    return {
+      text: t('diag.timing.formula.content', { measured: ms(measured), shift: ms(result - measured), result: ms(result) }),
+      result,
+      held: live === null,
+    };
+  }
+
+  const boot = timing.bootCalibration;
+  const mic = finite(boot?.micLatencyMs), song = finite(boot?.backingLatencyMs);
+  if (kind !== 'boot-probe' || mic === null || song === null) return null;
+  const name = typeof timing.bootCalibrationMic?.nickname === 'string'
+    ? t('diag.cal.pathMicOf', { name: timing.bootCalibrationMic.nickname }) : 'Mic';
+  const path = { mic: name, micMs: `${Math.round(mic)} ms`, songMs: `${Math.round(song)} ms` };
+  if (!robotRoute || !playing) {
+    return { text: t('diag.timing.formula.bootPath', { ...path, result: ms(mic - song) }), result: mic - song };
+  }
+  const storedShift = finite(boot.deltaMs) === null ? null : Number(boot.deltaMs) / rate;
+  const shift = freshShift ?? storedShift;
+  if (shift === null) return null;
+  const result = mic - song + shift;
+  return {
+    text: t('diag.timing.formula.boot', { ...path, shift: ms(shift), result: ms(result) }),
+    result,
+    held: freshShift === null,
+  };
+}
+
 export function describeTiming({ product, readiness, source, timing, timeline } = {}, t = english) {
   const rows = [];
   const shortfall = source ? readAheadShortfall(source) : null;
@@ -350,6 +409,13 @@ export function describeTiming({ product, readiness, source, timing, timeline } 
     if (Math.abs(fineTune) >= 0.5) {
       rows.push(row('fineTune', t('diag.timing.fineTune'), signedMs(fineTune), t('diag.timing.fineTune.note'), 'warn'));
     }
+    const formula = timingFormula(timing, timeline, source, t);
+    if (formula) {
+      const note = applied !== null && Math.abs(formula.result - (applied + fineTune)) >= 1
+        ? t('diag.timing.formula.settling')
+        : formula.held ? t('diag.timing.formula.held') : '';
+      rows.push(row('formula', t('diag.timing.formula'), formula.text, note));
+    }
   }
 
   const player = readiness?.components?.player;
@@ -396,32 +462,6 @@ export function describeTiming({ product, readiness, source, timing, timeline } 
   }
   if (timing) {
     const value = (v) => finite(v) === null ? '—' : signedMs(Number(v));
-    rows.push(row('mixerTarget', t('diag.timing.mixerTarget'), value(timing.calibratedMicLagTargetMs ?? timing.requestedMicAdvanceMs), t('diag.timing.mixerTargetNote')));
-    if (timing.activeCalibrationKind === 'content') {
-      // Measured lag plus how far the Robot's player moved since, so the two
-      // numbers on the page visibly add up. While the Robot is quiet the mixer
-      // holds its last converted value; show that one, marked as held.
-      const measured = finite(timing.micLagMs);
-      const live = finite(timing.desiredCalibratedMicLagMs);
-      const held = live === null && timing.mixerCalibrationAuthority?.kind === 'content'
-        ? finite(timing.calibratedMicLagTargetMs) : null;
-      const converted = live ?? held;
-      const formula = measured !== null && converted !== null
-        ? t('diag.timing.contentTargetFormula', {
-          measured: signedMs(measured), shift: signedMs(converted - measured), live: signedMs(converted),
-        }) + (live === null ? ` · ${t('diag.timing.contentTargetHeld')}` : '')
-        : value(live);
-      rows.push(row('contentTarget', t('diag.timing.contentTarget'), formula, t('diag.timing.contentTargetNote')));
-    }
-    const boot = timing.bootCalibration;
-    if (boot) {
-      rows.push(row('bootStored', t('diag.timing.bootStored'), value(boot.advanceMs), t('diag.timing.bootStoredNote')));
-      const rate = finite(timeline?.playbackRate);
-      const delta = finite(timing.robotPlayerOffsetMs);
-      const mic = finite(boot.micLatencyMs), backing = finite(boot.backingLatencyMs);
-      rows.push(row('bootLive', t('diag.timing.bootLive'), timeline?.connected === true && timing.robotDeltaFresh && rate > 0 && delta !== null && mic !== null && backing !== null
-        ? value(mic - backing + delta / rate) : '—', t('diag.timing.bootLiveNote')));
-    }
     const fallback = timing.sampleSongFallback;
     if (fallback) {
       rows.push(row('shadow', t('diag.timing.shadow'), value(fallback.candidateMs),

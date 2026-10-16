@@ -352,11 +352,16 @@ test('double opt-in A/B room issues real one-use v2 B Media Epoch but no N=1 aud
     // Pace the real network clock; sending 7s at once would fabricate an
     // unrepresentative future capture timeline.
     const { mic, backing } = laggedMultibandMusicPair(
-      7.5, 48_000, 120, { singerGain: .18 },
+      12, 48_000, 120, { singerGain: .18 },
     );
     const frameSamples = 960;
     const frameBytes = frameSamples * 2;
+    // Keep real PCM and playback-owner telemetry alive until BOTH sequential
+    // Worker jobs complete. Stopping at 7.5s made B depend on CPU speed: A's
+    // job could finish just as the remaining source window/authority expired.
+    // The finite fixture still bounds the test if either job never completes.
     for (let i = 0; i < mic.byteLength / frameBytes; i++) {
+      if (relay.stderr().includes('"state":"duet-ready"')) break;
       const start = i * frameBytes;
       const end = start + frameBytes;
       publisher.sendAudioPacket(mic.subarray(start, end));

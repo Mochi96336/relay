@@ -120,6 +120,16 @@ With a normal publicly trusted certificate, leave `RELAY_WEBTRANSPORT_PIN_CERT` 
 
 The WebTransport URL carries a random, capture-scoped media ticket issued only after publisher registration. A fresh capture or ownership change rotates it. A same-capture control reconnect preserves it until the existing microphone reconnect grace expires. This ticket is a narrow media capability, not a replacement for `RELAY_KEY` or participant ownership.
 
+### Optional direct Mic socket
+
+The Mic's control socket, and its WebSocket fallback audio, normally go through the HTTPS tunnel. From HiNet, Cloudflare routes that tunnel through San Jose, so a Taiwan Mic waits about 310 ms per control round trip even though its direct path is about 13 ms. With `RELAY_DIRECT_SOCKET_PORT` set, Relay also serves its WebSocket over TLS on that TCP port, using the WebTransport host name and certificate:
+
+```bash
+RELAY_DIRECT_SOCKET_PORT=4433   # TCP; may be the same number as the UDP WebTransport port
+```
+
+Forward that TCP port on the router to the Pi, and keep the media host DNS-only in Cloudflare. The Mic page tries `wss://<media host>:<port>/ws` first. If that socket does not open within 2.5 seconds, the page uses the tunnel socket for the rest of that page load. The page only names the direct socket while it is actually listening. `RELAY_KEY` and participant authentication apply to it exactly as on the tunnel. Status, Listen and the page itself stay on the tunnel.
+
 ## Optional Opus for Listen
 
 Listen pages receive the room mix as 48 kHz mono PCM, about 800 kbps per listener. With `RELAY_LISTEN_OPUS=1`, Relay also encodes each mix frame once with Opus (`RELAY_LISTEN_OPUS_BITRATE`, default 96000 bps) and sends it to every Listen page whose browser can decode Opus through WebCodecs; other pages keep PCM, and a page whose decoder fails rejoins on PCM by itself. It is off by default. The codec comes from the `@evan/opus` package: prebuilt native code on x64 and arm64 Linux, WebAssembly elsewhere. If it cannot be loaded, Relay logs a warning and every listener stays on PCM.

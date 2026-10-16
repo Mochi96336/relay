@@ -129,6 +129,7 @@ import {
   WebTransportMediaRuntime,
   webTransportMediaConfig,
 } from './webtransport-media-server.js';
+import { createDirectSocketServer, directSocketConfig } from './direct-socket.js';
 
 type RelayConfig = ReturnType<typeof loadRelayConfig>;
 
@@ -205,7 +206,19 @@ const AUDIO_TRANSPORT_CONFIG = loadAudioTransportConfig();
 const PLAYBACK_MIC_INTENT_MS = 10_000;
 const TAKE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
+const directMediaConfig = webTransportMediaConfig();
+const directSocket = directSocketConfig(directMediaConfig);
+let directSocketServer: ReturnType<typeof createDirectSocketServer> | null = null;
+if (directSocket) {
+  try {
+    directSocketServer = createDirectSocketServer(directSocket);
+  } catch (error) {
+    console.warn('Relay direct socket is unavailable; Mics keep the tunnel socket.', error);
+  }
+}
+
 const server = createRelayHttpServer({
+  directSocketUrl: () => (directSocketServer?.listening && directSocket ? directSocket.publicUrl.toString() : null),
   publicDir,
   build: () => relayBuild.current(),
   takeDir,
@@ -215,7 +228,7 @@ const server = createRelayHttpServer({
   readiness: () => readinessPayload(),
   micOpusTrial: relayConfig.micOpusTrial,
 });
-const wss = createRelayWebSocketServer(server, {
+const wss = createRelayWebSocketServer(directSocketServer ? [server, directSocketServer] : server, {
   relayKey,
   heartbeatMs: HEARTBEAT_MS,
   statusDeflate: relayConfig.statusDeflate,
@@ -4635,7 +4648,6 @@ if (relayConfig.listenOpus) {
   }
 }
 
-const directMediaConfig = webTransportMediaConfig();
 if (directMediaConfig) {
   try {
     await webTransportMedia.start(directMediaConfig, {
@@ -4665,6 +4677,20 @@ server.listen(port, '0.0.0.0', () => {
   console.log('For a phone, expose this HTTP server through an HTTPS tunnel before using the microphone.');
 });
 
+if (directSocketServer && directSocket) {
+  const directServer = directSocketServer;
+  directServer.once('error', (error) => {
+    // Pages only learn the direct URL while it listens, so they keep the tunnel.
+    console.warn('Relay direct socket failed to listen; Mics keep the tunnel socket.', error);
+  });
+  directServer.listen(directSocket.bindPort, directSocket.bindHost, () => {
+    console.log(
+      `Relay direct socket listening on tcp://${directSocket.bindHost}:${directSocket.bindPort}`
+      + ` and advertised as ${directSocket.publicUrl.toString()}`,
+    );
+  });
+}
+
 let shutdownPromise: Promise<void> | null = null;
 
 async function gracefulShutdown(signal: NodeJS.Signals) {
@@ -4687,6 +4713,9 @@ async function gracefulShutdown(signal: NodeJS.Signals) {
     for (const client of wss.clients) client.terminate();
     // relay-socket-server owns its heartbeat and retires it when WSS closes.
     await new Promise<void>((resolve) => wss.close(() => resolve()));
+    if (directSocketServer?.listening) {
+      await new Promise<void>((resolve) => directSocketServer!.close(() => resolve()));
+    }
     if (server.listening) {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => error ? reject(error) : resolve());

@@ -12,7 +12,7 @@ on:
       - 'test/pcm-ingest.test.ts'
       - 'test/audio-session-golden.test.ts'
       - 'test/mic-read-plan.test.ts'
-      - 'docs/CHOIR_*.md'
+      - 'CHOIR.md'
       - '.github/workflows/choir-experiment.yml'
   push:
     branches:

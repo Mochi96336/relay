@@ -58,6 +58,15 @@ export type AudioPacketRetransmitStats = {
   retriedPackets: number;
   /** Smoothed time from sending a first request to its repeat arriving. */
   repairRoundTripMs: number | null;
+  /** Requested sequences whose repeat arrived after the hole was given up. */
+  lateRepairPackets: number;
+  /**
+   * Smoothed time from the first request to a late repeat arriving. Repairs
+   * that make it in time are capped by the hold, so only these show how far
+   * away a Mic whose repairs never land really is.
+   */
+  lateRepairRoundTripMs: number | null;
+  lateRepairMaxMs: number | null;
 };
 
 /** One sequence to ask for, and which attempt this is (0 = first). */
@@ -69,10 +78,13 @@ type RetransmitRequestState = {
   /** Waiting for the caller to send it. */
   queued: boolean;
   dispatchedAtMs: number | null;
+  firstDispatchedAtMs: number | null;
 };
 
 /** Upper bound on sequences requested per detected hole. */
 const MAX_RETRANSMIT_REQUESTS_PER_HOLE = 32;
+/** Given-up requests remembered so a late repeat can still be timed. */
+const MAX_ABANDONED_REPAIRS = 128;
 /** A quarter of a 100 packet/s datagram stream: isolated loss, not congestion. */
 export const DEFAULT_RETRANSMIT_REQUESTS_PER_SECOND = 25;
 const DEFAULT_RETRANSMIT_REQUEST_DELAY_MS = 20;
@@ -237,6 +249,11 @@ export class AudioPacketReceiver {
   /** Smoothed first-attempt repair round trip (request sent to repeat received). */
   private repairRoundTripMs: number | null = null;
   private repairRoundTripVariationMs = 0;
+  /** Sequences given up while a request was out, to first request time. */
+  private readonly abandonedRepairs = new Map<number, number>();
+  private lateRepairPackets = 0;
+  private lateRepairRoundTripMs: number | null = null;
+  private lateRepairMaxMs: number | null = null;
   readonly retransmitRequestsPerSecond: number;
   private retransmitTokens = 0;
   private retransmitTokensAtMs: number | null = null;
@@ -388,7 +405,10 @@ export class AudioPacketReceiver {
     if (distance >= HALF_SEQUENCE_SPACE) {
       const finalized = this.finalized.get(packet.sequence);
       if (finalized === 'emitted') this.counters.duplicatePackets += 1;
-      else if (finalized === 'lost' || finalized === 'invalid') this.counters.latePackets += 1;
+      else if (finalized === 'lost' || finalized === 'invalid') {
+        this.counters.latePackets += 1;
+        this.noteLateRepair(packet.sequence, nowMs);
+      }
       else this.counters.replayPackets += 1;
       this.rememberContinuity();
       return [];
@@ -440,6 +460,9 @@ export class AudioPacketReceiver {
     return {
       ...this.retransmitCounters,
       repairRoundTripMs: this.repairRoundTripMs === null ? null : Math.round(this.repairRoundTripMs),
+      lateRepairPackets: this.lateRepairPackets,
+      lateRepairRoundTripMs: this.lateRepairRoundTripMs === null ? null : Math.round(this.lateRepairRoundTripMs),
+      lateRepairMaxMs: this.lateRepairMaxMs === null ? null : Math.round(this.lateRepairMaxMs),
     };
   }
 
@@ -483,6 +506,7 @@ export class AudioPacketReceiver {
       state.attempts += 1;
       state.queued = false;
       state.dispatchedAtMs = nowMs;
+      state.firstDispatchedAtMs ??= nowMs;
     }
   }
 
@@ -528,6 +552,23 @@ export class AudioPacketReceiver {
     this.repairRoundTripVariationMs = this.repairRoundTripVariationMs * 0.75
       + Math.abs(this.repairRoundTripMs - sample) * 0.25;
     this.repairRoundTripMs = this.repairRoundTripMs * 0.875 + sample * 0.125;
+  }
+
+  /**
+   * Times from the first request, even after a retry: a repeat that misses
+   * the hold is evidence of distance either way, and the longest wait is the
+   * honest bound.
+   */
+  private noteLateRepair(sequence: number, nowMs: number) {
+    const requestedAtMs = this.abandonedRepairs.get(sequence);
+    if (requestedAtMs === undefined) return;
+    this.abandonedRepairs.delete(sequence);
+    const sample = Math.max(0, nowMs - requestedAtMs);
+    this.lateRepairPackets += 1;
+    this.lateRepairMaxMs = Math.max(this.lateRepairMaxMs ?? 0, sample);
+    this.lateRepairRoundTripMs = this.lateRepairRoundTripMs === null
+      ? sample
+      : this.lateRepairRoundTripMs * 0.875 + sample * 0.125;
   }
 
   /**
@@ -663,7 +704,7 @@ export class AudioPacketReceiver {
       }
       this.retransmitCandidates.delete(candidate);
       this.retransmitTokens -= 1;
-      this.retransmitRequested.set(candidate, { attempts: 0, queued: true, dispatchedAtMs: null });
+      this.retransmitRequested.set(candidate, { attempts: 0, queued: true, dispatchedAtMs: null, firstDispatchedAtMs: null });
     }
 
     // A request whose repeat has not arrived within the retry timeout was
@@ -840,6 +881,13 @@ export class AudioPacketReceiver {
   private markExpectedLost() {
     if (this.expectedSequence === null) return;
     const sequence = this.expectedSequence;
+    const requestedAtMs = this.retransmitRequested.get(sequence)?.firstDispatchedAtMs ?? null;
+    if (requestedAtMs !== null) {
+      this.abandonedRepairs.set(sequence, requestedAtMs);
+      if (this.abandonedRepairs.size > MAX_ABANDONED_REPAIRS) {
+        this.abandonedRepairs.delete(this.abandonedRepairs.keys().next().value as number);
+      }
+    }
     this.retireRetransmitTracking(sequence);
     this.counters.lostPackets += 1;
     this.rememberFinalized(sequence, 'lost');

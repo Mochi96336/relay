@@ -27,7 +27,9 @@ export async function openAudioSocket({
         socket.addEventListener('open', opened);
         socket.addEventListener('error', failed);
         socket.addEventListener('close', failed);
-        timer = setTimeout(failed, timeoutMs);
+        // Only bound the optional direct probe. The tunnel may need longer
+        // on a slow network; browser errors or revoked intent still close it.
+        if (urls[index] !== tunnelUrl) timer = setTimeout(failed, timeoutMs);
       });
       if (!stillWanted()) throw new Error('Audio connection cancelled.');
       return socket;

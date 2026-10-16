@@ -142,6 +142,12 @@ window.addEventListener('relay-choir-consent-message', (event) => {
   }
   if (message?.type !== 'choir-secondary-consent-status' || message.secondaryId !== myId()) return;
   if (message.status === 'accepted') {
+    // A reply can arrive after the permission attempt failed or timed out.
+    // Only a still-active user intent may revive the second microphone.
+    if (!joinScope) {
+      publishCommand('choir-secondary-withdraw', { reason: 'join-cancelled' });
+      return;
+    }
     clearTimeout(pendingTimer);
     joined = true;
     recovering = false;
@@ -156,7 +162,7 @@ window.addEventListener('relay-choir-consent-message', (event) => {
   }
 });
 window.addEventListener('relay-choir-media-connection', (event) => {
-  if (!mediaEnabled || !joined) return;
+  if (!mediaEnabled || !joinScope || (!joined && !pending)) return;
   // Media reconnects on its own for each room; only a microphone that will
   // not open needs the singer. Leave rather than sit joined but silent.
   if (event.detail?.state !== 'capture-failed') return;

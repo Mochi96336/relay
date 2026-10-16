@@ -54,3 +54,21 @@ test('revoked playback intent cannot open a fallback socket', async () => {
   assert.equal(f.sockets.length, 1);
   assert.equal(f.failures(), 0);
 });
+
+test('a slow tunnel handshake is not subject to the direct probe timeout', async () => {
+  class SlowSocket extends EventTarget {
+    closed = false;
+    constructor(readonly url: string) {
+      super();
+      setTimeout(() => this.dispatchEvent(new Event('open')), 30);
+    }
+    close() { this.closed = true; this.dispatchEvent(new Event('close')); }
+  }
+  const socket = await openAudioSocket({
+    directUrl: 'wss://relay.example/ws', tunnelUrl: 'wss://relay.example/ws',
+    onPending: () => {}, onDirectFailure: () => assert.fail('no direct route'),
+    stillWanted: () => true, timeoutMs: 5,
+    WebSocketClass: SlowSocket as unknown as typeof WebSocket,
+  });
+  assert.equal((socket as unknown as SlowSocket).closed, false);
+});

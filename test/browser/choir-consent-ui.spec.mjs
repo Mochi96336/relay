@@ -299,3 +299,59 @@ test('B stops capture after the control recovery deadline', async ({ page }) => 
   await presence(page, true);
   expect(await page.evaluate(() => window.__choirSent.some(m => m.resume))).toBe(false);
 });
+
+test('capture failure while joining cannot be revived by a late accepted reply', async ({ page }) => {
+  await openFixture(page, 'singerB', 'owner');
+  await enable(page);
+  await page.locator('#choir-invite-open').click();
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('relay-choir-media-connection', {
+    detail: { state: 'capture-failed', reason: 'input-gap' },
+  })));
+  expect(await page.evaluate(() => window.__choirSent.at(-1))).toEqual({
+    type: 'choir-secondary-withdraw', reason: 'capture-failed:input-gap',
+  });
+  await consent(page, accepted);
+  await expect(page.locator('#choir-withdraw')).toBeHidden();
+  await expect(page.locator('#choir-invite-open')).toBeEnabled();
+  expect(await page.evaluate(() => window.__choirSent.at(-1))).toEqual({
+    type: 'choir-secondary-withdraw', reason: 'join-cancelled',
+  });
+});
+
+test('a timed out join cannot be revived by a late accepted reply', async ({ page }) => {
+  await openFixture(page, 'singerB', 'owner');
+  await enable(page);
+  await page.clock.install();
+  await page.locator('#choir-invite-open').click();
+  await page.clock.fastForward(8_001);
+  await consent(page, accepted);
+  await expect(page.locator('#choir-withdraw')).toBeHidden();
+  await expect(page.locator('#choir-invite-open')).toBeEnabled();
+});
+
+test('a cancelled permission request cannot block or cancel a newer capture attempt', async ({ page }) => {
+  await openFixture(page, 'singerB', 'owner');
+  await enable(page);
+  const result = await page.evaluate(async () => {
+    const { ChoirSecondaryCapture } = await import('/choir-secondary-capture.js');
+    let attempts = 0;
+    let rejectOld;
+    ChoirSecondaryCapture.prototype.prepare = function () {
+      attempts++;
+      return attempts === 1 ? new Promise((_, reject) => { rejectOld = reject; }) : new Promise(() => {});
+    };
+    const notify = type => window.dispatchEvent(new Event(type));
+    notify('relay-choir-start-secondary-capture');
+    notify('relay-choir-stop-secondary-capture');
+    notify('relay-choir-start-secondary-capture');
+    let failures = 0;
+    window.addEventListener('relay-choir-media-connection', event => {
+      if (event.detail?.state === 'capture-failed') failures++;
+    });
+    rejectOld(new Error('old permission request was cancelled'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    notify('relay-choir-start-secondary-capture');
+    return { attempts, failures };
+  });
+  expect(result).toEqual({ attempts: 2, failures: 0 });
+});

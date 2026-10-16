@@ -24,6 +24,8 @@ let claimTimer = null;
 /** The latest room the server announced, waiting for capture to be ready. */
 let roomReady = false;
 let announcedRoomEpoch = null;
+let preparing = false;
+let prepareAttempt = 0;
 const capture = new ChoirSecondaryCapture((reason) => {
   disconnect();
   notify('capture-failed', reason);
@@ -36,6 +38,8 @@ function notify(state, reason = null) {
 }
 /** Stops everything: B left, was refused, or capture failed. */
 function disconnect() {
+  ++prepareAttempt;
+  preparing = false;
   roomReady = false;
   announcedRoomEpoch = null;
   closeMedia();
@@ -93,24 +97,25 @@ window.addEventListener('relay-choir-consent-message', (event) => {
     || msg?.type === 'choir-consent-rejected') disconnect();
 });
 
-let preparing = false;
 window.addEventListener('relay-choir-start-secondary-capture', async () => {
   // The singer's own tap starts capture even if this module has not heard
   // Choir's mode yet (it can load after presence announced it). Media is
   // claimed only once the mode and a room are both known.
   if (preparing || capture.rate !== null) return;
   preparing = true;
+  const currentPrepare = ++prepareAttempt;
   // The user's physical click initiates getUserMedia (not a server reply).
   // This path is NEVER started by an automatic invitation or login.
   try {
     const sourceRate = await capture.prepare();
-    if (!sourceRate) return;
+    if (currentPrepare !== prepareAttempt || !sourceRate) return;
     requestClaim();
   } catch {
+    if (currentPrepare !== prepareAttempt) return;
     disconnect();
     notify('capture-failed');
   } finally {
-    preparing = false;
+    if (currentPrepare === prepareAttempt) preparing = false;
   }
 });
 
@@ -138,7 +143,8 @@ window.addEventListener('relay-choir-media-message', (event) => {
     || !awaitingClaim || capture.rate === null) return;
   const { claimToken, roomEpoch } = event.detail;
   if (typeof claimToken !== 'string' || !/^[0-9a-f]{64}$/.test(claimToken)
-    || !Number.isSafeInteger(roomEpoch) || roomEpoch < 1) return;
+    || !Number.isSafeInteger(roomEpoch) || roomEpoch < 1
+    || roomEpoch !== announcedRoomEpoch) return;
   awaitingClaim = false;
   if (claimTimer !== null) clearTimeout(claimTimer);
   claimTimer = null;

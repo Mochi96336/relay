@@ -399,44 +399,60 @@ describe('locales', () => {
   });
 });
 
-it('Timing keeps reported YT positions and calibration coordinates distinct without RTT/2', () => {
-  const timing = {
-    activeCalibrationKind: 'content', robotRoute: true, robotDeltaFresh: true,
-    calibratedMicLagTargetMs: -160, desiredCalibratedMicLagMs: -184, micLagMs: -70,
+it('Timing shows one compensation and one line that adds up to it', () => {
+  const timeline = { connected: true, serverTime: 90.5, playbackRate: .5, state: 1 };
+  const content = {
+    activeCalibrationKind: 'content', robotRoute: true, robotDeltaFresh: true, robotPlayerOffsetMs: -300,
+    micLagMs: -70, desiredCalibratedMicLagMs: -184, calibratedMicLagTargetMs: -184,
     mixerCalibrationAuthority: { kind: 'content' },
-    robotPlayerOffsetMs: -300, robotOffsetTimingEvidence: { playerSeconds: 90.1 },
-    bootCalibration: { advanceMs: -180, micLatencyMs: 225, backingLatencyMs: 100 },
     sampleSongFallback: { candidateMs: -286, active: false },
   };
-  const rows = byKey(describeTiming({ source: source(), timing,
-    timeline: { connected: true, youtubeTime: 90.4, serverTime: 90.5, playbackRate: .5, state: 1, transportEstimateMs: 12 },
+  const rows = byKey(describeTiming({
+    source: source({ activeCalibrationKind: 'content', appliedMicAdvanceMs: -184, requestedMicAdvanceMs: -184 }), timing: content, timeline,
   }, en));
+  assert.equal(rows.offset.value, '-184 ms');
+  assert.equal(rows.formula.value, 'measured -70 ms + player offset -114 ms = -184 ms');
+  assert.equal(rows.formula.note, '');
   // Phone, room and Robot positions agree to milliseconds; one row, room clock.
-  assert.equal(rows.youtubePhone, undefined);
-  assert.equal(rows.youtubeServer, undefined);
-  assert.equal(rows.youtubeRobot, undefined);
   assert.equal(rows.youtubeRate.value, 'Playing · 0.5× · 1:30');
-  assert.equal(rows.bootLive.value, '-475 ms');
-  assert.equal(rows.bootStored.value, '-180 ms');
-  assert.equal(rows.contentTarget.value, '-70 ms + player offset -114 ms = -184 ms');
-  assert.equal(rows.mixerTarget.value, '-160 ms');
+  for (const gone of ['youtubePhone', 'youtubeServer', 'youtubeRobot', 'mixerTarget', 'contentTarget', 'bootStored', 'bootLive']) {
+    assert.equal(rows[gone], undefined, gone);
+  }
   assert.equal(rows.shadow.value, '-286 ms');
-  assert.equal(rows.rttHalf, undefined);
-  const stale = byKey(describeTiming({ source: source(), timing: { ...timing, robotDeltaFresh: false },
-    timeline: { connected: true, playbackRate: 1 },
+
+  // The mixer has not followed a small change yet: one number, one line, and why they differ.
+  const settling = byKey(describeTiming({
+    source: source({ activeCalibrationKind: 'content', appliedMicAdvanceMs: -162, requestedMicAdvanceMs: -162 }),
+    timing: { ...content, desiredCalibratedMicLagMs: -157, micLagMs: -150 }, timeline,
   }, zh));
-  assert.equal(stale.bootLive.value, '—');
-  // The Robot went quiet: the mixer holds its last converted value, and says so.
-  const held = byKey(describeTiming({ source: source(),
-    timing: { ...timing, robotDeltaFresh: false, desiredCalibratedMicLagMs: null },
-    timeline: { connected: true, playbackRate: 1 },
+  assert.equal(settling.offset.value, '-162 ms');
+  assert.equal(settling.formula.value, '量測 -150 ms + 播放器偏移 -7 ms = -157 ms');
+  assert.match(settling.formula.note, /跟得慢/);
+
+  // The Robot went quiet: the mixer keeps the last converted value, and says so.
+  const held = byKey(describeTiming({
+    source: source({ activeCalibrationKind: 'content', appliedMicAdvanceMs: -160, requestedMicAdvanceMs: -160 }),
+    timing: { ...content, robotDeltaFresh: false, desiredCalibratedMicLagMs: null, calibratedMicLagTargetMs: -160 },
+    timeline,
   }, zh));
-  assert.equal(held.contentTarget.value, '-70 ms + 播放器偏移 -90 ms = -160 ms · Robot 暫停回報，沿用');
-  const noAuthority = byKey(describeTiming({ source: source(),
-    timing: { ...timing, desiredCalibratedMicLagMs: null, mixerCalibrationAuthority: { kind: 'boot-probe' } },
-    timeline: { connected: true, playbackRate: 1 },
+  assert.equal(held.formula.value, '量測 -70 ms + 播放器偏移 -90 ms = -160 ms');
+  assert.match(held.formula.note, /沿用/);
+
+  // Test tone: whose Mic, minus the song path, plus where the Robot's player is.
+  const boot = byKey(describeTiming({
+    source: source({ appliedMicAdvanceMs: -159, requestedMicAdvanceMs: -159 }),
+    timing: { activeCalibrationKind: 'boot-probe', robotRoute: true, robotDeltaFresh: true, robotPlayerOffsetMs: -259,
+      bootCalibration: { micLatencyMs: 190, backingLatencyMs: 90, deltaMs: -291 }, bootCalibrationMic: { nickname: 'Mochi' } },
+    timeline: { ...timeline, playbackRate: 1 },
+  }, zh));
+  assert.equal(boot.formula.value, 'Mochi 的 Mic 190 ms − 歌曲 90 ms + 播放器偏移 -259 ms = -159 ms');
+  assert.equal(boot.formula.note, '');
+  const noSong = byKey(describeTiming({
+    source: source({ appliedMicAdvanceMs: 100, requestedMicAdvanceMs: 100 }),
+    timing: { activeCalibrationKind: 'boot-probe', robotRoute: true, bootCalibration: { micLatencyMs: 190, backingLatencyMs: 90 } },
+    timeline: { connected: true, state: 2, playbackRate: 1 },
   }, en));
-  assert.equal(noAuthority.contentTarget.value, '—', 'a target owned by another method is not shown as content');
+  assert.equal(noSong.formula.value, 'Mic 190 ms − song 90 ms = +100 ms');
 });
 
 it('Timing names sample/song when it actually controls fallback', () => {
@@ -445,10 +461,15 @@ it('Timing names sample/song when it actually controls fallback', () => {
   }, en));
   assert.equal(rows.method.value, 'Sample / YouTube time estimate');
   assert.match(rows.shadow.note, /Active fallback/);
+  const estimate = byKey(describeTiming({
+    source: source({ timingMode: 'network-estimate', appliedMicAdvanceMs: 143, requestedMicAdvanceMs: 143 }),
+    timing: { fallbackNetworkMs: 143, sampleSongFallback: { active: false } },
+  }, zh));
+  assert.equal(estimate.formula.value, '網路估計 +143 ms');
 });
 
 
-it('Timing hides expired YT state and Boot projection but retains historical measurements', () => {
+it('Timing hides expired YT state', () => {
   const rows = byKey(describeTiming({ source: source(),
     timeline: { connected: false, youtubeTime: 90, serverTime: 90, state: 1, playbackRate: 1 },
     timing: { robotRoute: true, robotDeltaFresh: true, robotPlayerOffsetMs: 200,
@@ -456,7 +477,4 @@ it('Timing hides expired YT state and Boot projection but retains historical mea
       bootCalibration: { advanceMs: 100, micLatencyMs: 200, backingLatencyMs: 100 } },
   }, en));
   assert.equal(rows.youtubeRate.value, 'Not connected');
-  assert.equal(rows.bootLive.value, '—');
-  assert.equal(rows.bootStored.value, '+100 ms');
-  assert.equal(rows.mixerTarget.value, '+20 ms');
 });

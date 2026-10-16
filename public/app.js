@@ -696,16 +696,45 @@ function updateSingerControls() {
   setSingerControlsEnabled(publisherCommandAuthority().actionable);
 }
 
-function connectSocket() {
+/**
+ * The direct socket skips the tunnel's detour (direct-socket.ts). A network
+ * that blocks its port blocks it every time, so after one failure this page
+ * stays on the tunnel instead of paying the wait on each reconnect.
+ */
+const DIRECT_SOCKET_OPEN_TIMEOUT_MS = 2_500;
+let directSocketFailed = false;
+
+async function connectSocket() {
+  // Carries the Mic's PCM whenever WebTransport is unavailable.
+  const tunnelUrl = wsUrl({ compress: false });
+  const directUrl = wsUrl({ compress: false, direct: true });
+  if (!directSocketFailed && directUrl !== tunnelUrl) {
+    try {
+      return await openSocket(directUrl, DIRECT_SOCKET_OPEN_TIMEOUT_MS);
+    } catch {
+      directSocketFailed = true;
+    }
+  }
+  return openSocket(tunnelUrl);
+}
+
+function openSocket(url, timeoutMs = null) {
   return new Promise((resolve, reject) => {
-    // Carries the Mic's PCM whenever WebTransport is unavailable.
-    const ws = new WebSocket(wsUrl({ compress: false }));
+    const ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
+    const timer = timeoutMs === null ? null : setTimeout(() => {
+      try { ws.close(); } catch {}
+      reject(new Error('WebSocket connection timed out.'));
+    }, timeoutMs);
     ws.addEventListener('open', () => {
+      clearTimeout(timer);
       sendParticipantAuthentication(ws);
       resolve(ws);
     }, { once: true });
-    ws.addEventListener('error', () => reject(new Error('WebSocket connection failed.')), { once: true });
+    ws.addEventListener('error', () => {
+      clearTimeout(timer);
+      reject(new Error('WebSocket connection failed.'));
+    }, { once: true });
   });
 }
 

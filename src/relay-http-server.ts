@@ -20,6 +20,8 @@ export type RelayHttpServerOptions = {
   observationStatusV1: () => unknown;
   readiness: () => RelayHttpReadiness;
   micOpusTrial?: boolean;
+  /** Where a Mic may open its socket without the tunnel (direct-socket.ts), read per request. */
+  directSocketUrl?: () => string | null;
 };
 
 /**
@@ -64,10 +66,11 @@ export function createRelayHttpServer(options: RelayHttpServerOptions): Server {
     try {
       const html = await readFile(path.join(options.publicDir, 'index.html'), 'utf8');
       res.setHeader('Cache-Control', 'no-cache');
-      res.type('html').send(html.replace(
-        '<head>',
-        `<head>\n    <meta name="relay-build" content="${typeof options.build === 'function' ? options.build() : options.build}" />`,
-      ));
+      const build = typeof options.build === 'function' ? options.build() : options.build;
+      const directSocketUrl = options.directSocketUrl?.() ?? null;
+      const meta = [`<meta name="relay-build" content="${build}" />`];
+      if (directSocketUrl) meta.push(`<meta name="relay-direct-socket" content="${escapeAttribute(directSocketUrl)}" />`);
+      res.type('html').send(html.replace('<head>', `<head>\n    ${meta.join('\n    ')}`));
     } catch (error) {
       next(error);
     }
@@ -96,4 +99,8 @@ export function createRelayHttpServer(options: RelayHttpServerOptions): Server {
   });
 
   return createServer(app);
+}
+
+function escapeAttribute(value: string) {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }

@@ -19,7 +19,8 @@ test('second Mic controls live in the Mic row, hidden in an ordinary N=1 page', 
   assert.match(app, /joinButton\.hidden = !canJoin\(\)/);
   assert.match(app, /session\.micOwnerId !== myId\(\)/);
   // Like the Mic, the second Mic can be taken over.
-  assert.match(app, /t\(takeOver \? 'choir\.takeOver' : 'choir\.invite'\)/);
+  // The label's data-i18n key changes with it, so a re-translation keeps it.
+  assert.match(app, /joinButton\.dataset\.i18n = takeOver \? 'choir\.takeOver' : 'choir\.invite'/);
   assert.match(presence, /choirConsentAvailable = false/);
   assert.match(presence, /relay-choir-consent-command/);
   assert.match(server, /if \(choirConsent\) sendJson\(socket, \{\s*type: 'choir-consent-available'/);

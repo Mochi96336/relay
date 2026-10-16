@@ -50,7 +50,10 @@ function render() {
   const takeOver = typeof duetSecondaryId === 'string' && duetSecondaryId !== myId();
   joinButton.hidden = !canJoin();
   joinButton.disabled = pending;
-  joinButton.textContent = t(takeOver ? 'choir.takeOver' : 'choir.invite');
+  // Also the data-i18n key: applyStatic() rewrites every [data-i18n]
+  // node, and would put + 副 Mic back over 接手副 Mic.
+  joinButton.dataset.i18n = takeOver ? 'choir.takeOver' : 'choir.invite';
+  joinButton.textContent = t(joinButton.dataset.i18n);
   leaveButton.hidden = !(available && authorityFresh && joined);
   statusCopy.textContent = statusKey ? t(statusKey) : '';
   statusCopy.hidden = !statusKey;

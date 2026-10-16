@@ -104,6 +104,9 @@ test('while someone else sings second, the button takes over, and the one replac
   const open = page.locator('#choir-invite-open');
   await expect(open).toBeVisible();
   await expect(open).toHaveText('接手副 Mic');
+  // A re-translation of the page keeps the takeover label.
+  await page.evaluate(() => window.relayI18n.applyStatic());
+  await expect(open).toHaveText('接手副 Mic');
   await open.click();
   expect((await page.evaluate(() => window.__choirSent)).at(-1)).toEqual({ type: 'choir-secondary-join' });
 

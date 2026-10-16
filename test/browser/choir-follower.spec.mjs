@@ -148,16 +148,24 @@ test('where a tap is needed for sound (iOS), the song keeps time muted and B is 
     detail: { enabled: true },
   })));
   const status = page.locator('#choir-follower-status');
-  await expect(status).toHaveText('歌曲正在靜音播放：點一下 YouTube 播放器開啟聲音。');
+  await expect(status).toHaveText('歌曲正在靜音播放。');
+  const unmute = page.locator('#choir-follower-unmute');
+  await expect(unmute).toBeVisible();
+  await expect(unmute).toHaveText('開啟歌曲聲音');
   // Back to muted playback, so B's YouTube time still aligns B in the room.
   await expect.poll(() => page.evaluate(() => ({
     state: window.__localFollower.state, muted: window.__localFollower.muted,
   }))).toEqual({ state: 1, muted: true });
   const anchors = await page.evaluate(() => window.__songAnchors);
   await expect.poll(() => page.evaluate(() => window.__songAnchors)).toBeGreaterThan(anchors);
-  // B taps the player's sound on.
+  // The page's button is not enough for this browser: it says to tap the video.
+  await unmute.click();
+  await expect(status).toHaveText('還是靜音：請直接點影片畫面開啟聲音。');
+  await expect.poll(() => page.evaluate(() => window.__localFollower.state)).toBe(1);
+  // B taps the video's sound on.
   await page.evaluate(() => { window.__localFollower.muted = false; });
   await expect(status).toBeHidden();
+  await expect(unmute).toBeHidden();
   const calls = (await page.evaluate(() => window.__followerCalls)).map(x => x[0]);
-  expect(calls.filter(x => x === 'unmute')).toHaveLength(1);
+  expect(calls.filter(x => x === 'unmute')).toHaveLength(2);
 });

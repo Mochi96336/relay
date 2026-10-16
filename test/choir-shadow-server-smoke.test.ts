@@ -635,27 +635,37 @@ test('without Content, B is placed by its YouTube time against the Robot', async
     const loopSong = songAt(startedAt);
     let duet: any = null;
     let audio: any = null;
-    for (let i = 0; Date.now() - startedAt < 8_000; i++) {
-      // Wall-clock pacing, so the 20 ms frames keep up with real time.
+    let i = 0;
+    // Wall-clock pacing, so the 20 ms frames keep up with real time.
+    let bAnchors = true;
+    // One 20 ms frame of every source; every 240 ms, A's and the Robot's
+    // song positions, and B's while bAnchors is on.
+    const step = async () => {
       while (Date.now() - startedAt < i * 20) await sleep(2);
       publisher.sendAudioPacket(silence);
       robotBacking.sendPcm(backingPcm);
       bMedia.sendBinary(encodeAudioPacket({ source: 'mic', generation: 7,
         firstSampleIndex: frame * i, sequence: i, pcm: silence }));
-      if (i % 12 !== 11) continue;
+      if (i % 12 !== 11) return;
       const cursor = frame * (i + 1);
       const at = Date.now();
       // Where the song was when this sample was captured.
       const robotSeconds = loopSong + cursor / 48_000;
       const anchor = (generation: number) => ({ generation, sampleRate: 48_000,
         sampleIndex: cursor, mediaDeltaSeconds: 0, uncertaintyMs: 40 });
-      a.send(telemetry(1, robotSeconds, anchor(1)));
+      // A's player reports real time, as the server projects it (a lagging
+      // test loop must not look like a Seek); its anchor says where the song
+      // was at the sample.
+      a.send(telemetry(1, songAt(at), { ...anchor(1), mediaDeltaSeconds: robotSeconds - songAt(at) }));
       robotControl.send({ type: 'robot-player-offset', offsetMs: 0, songObservation: {
         videoId, state: 1, mediaSeconds: robotSeconds, playbackRate: 1, observedAtUnixMs: at } });
       robotBacking.send({ type: 'backing-song-clock', generation: 9, sampleRate: 48_000,
         sampleIndex: cursor, observedAtUnixMs: at });
-      b.send({ type: 'choir-secondary-song-anchor', videoId, state: 1, playbackRate: 1,
+      if (bAnchors) b.send({ type: 'choir-secondary-song-anchor', videoId, state: 1, playbackRate: 1,
         currentTime: robotSeconds - .15, captureAnchor: anchor(7) });
+    };
+    for (; Date.now() - startedAt < 8_000; i++) {
+      await step();
       if (i % 48 !== 47) continue;
       audio = (await (await fetch(relay.httpUrl('/statusz'))).json()).audio;
       duet = audio?.duetSecondary ?? null;
@@ -673,6 +683,15 @@ test('without Content, B is placed by its YouTube time against the Robot', async
     assert.equal(typeof aLagMs, 'number', JSON.stringify(timing.sampleSongFallback));
     assert.ok(Math.abs(duet.targetLagMs - (aLagMs + 150)) < 40,
       `B ${duet.targetLagMs} ms against A ${aLagMs} ms: ${JSON.stringify(duet)}`);
+    // The anchors stop (they come over the slower control path and lapse now
+    // and then): B keeps its place in the mix instead of going silent.
+    bAnchors = false;
+    for (const until = Date.now() + 1_500; Date.now() < until; i++) await step();
+    const after = (await (await fetch(relay.httpUrl('/statusz'))).json()).audio;
+    const held = after?.duetSecondary;
+    assert.equal(held?.audible, true, `B stays in the mix through a lapse: ${JSON.stringify({
+      held, room: after?.duetRoom, ingress: after?.duetIngress })}\n${relay.stdout().split('\n').filter((l) => l.startsWith('[choir]')).slice(-8).join('\n')}`);
+    assert.equal(held.targetLagMs, duet.targetLagMs);
   } finally {
     for (const client of clients) client.close();
     await relay.stop();

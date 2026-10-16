@@ -6,6 +6,7 @@ const stage = document.querySelector('.song-stage');
 const host = document.querySelector('#choir-follower-player');
 const statusNode = document.querySelector('#choir-follower-status');
 const positionNode = document.querySelector('#choir-follower-position');
+const unmuteButton = document.querySelector('#choir-follower-unmute');
 const t = (key) => window.relayI18n?.t(key) ?? key;
 
 let eligible = false;
@@ -40,6 +41,8 @@ let lastErrorCode = null;
 let videoErrors = 0;
 let videoRetryAtMs = 0;
 let unmuteTimer = null;
+/** What B is asked to tap for sound: the button, or (if that was not enough) the video. */
+let tapSound = 'choir.followerTapSound';
 
 function setLocalPlayback(active) {
   if (active === localBackingAudibleRole) return;
@@ -63,6 +66,7 @@ function setStatus(key) {
     statusNode.hidden = !key;
     statusNode.textContent = key ? t(key) : '';
   }
+  if (unmuteButton) unmuteButton.hidden = key !== 'choir.followerTapSound';
 }
 function formatTime(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) return '--:--';
@@ -76,6 +80,7 @@ function resetPlayer() {
   clearTimeout(unmuteTimer);
   unmuteTimer = null;
   soundState = 'muted';
+  tapSound = 'choir.followerTapSound';
   setLocalPlayback(false);
   attemptedRate = null;
   try { player?.pauseVideo(); } catch {}
@@ -220,7 +225,7 @@ async function startPlayer() {
           if (event.data === 1) {
             videoErrors = 0;
             autoplayBlocked = false;
-            setStatus(soundState === 'tap-for-sound' ? 'choir.followerTapSound' : null);
+            setStatus(soundState === 'tap-for-sound' ? tapSound : null);
           }
         },
         onError: (event) => {
@@ -249,32 +254,39 @@ async function startPlayer() {
 function playerMuted() {
   try { return player.isMuted() === true; } catch { return false; }
 }
+/**
+ * Unmutes the playing song. WebKit pauses an unmute it does not count as a
+ * tap: then it goes back to muted playback, so the song keeps time, and B is
+ * asked for a tap (tapSoundKey says where).
+ */
+function tryUnmute(tapSoundKey) {
+  soundState = 'unmuting';
+  const ownGeneration = generation;
+  try { player.unMute(); } catch {}
+  try { player.playVideo(); } catch {}
+  clearTimeout(unmuteTimer);
+  unmuteTimer = setTimeout(() => {
+    unmuteTimer = null;
+    if (ownGeneration !== generation || soundState !== 'unmuting') return;
+    let state = null;
+    try { state = Number(player.getPlayerState()); } catch {}
+    if (state === 1 && !playerMuted()) {
+      soundState = 'audible';
+      tick();
+      return;
+    }
+    soundState = 'tap-for-sound';
+    tapSound = tapSoundKey;
+    try { player.mute(); } catch {}
+    try { player.playVideo(); } catch {}
+    tick();
+  }, 400);
+}
 /** Once the muted song plays: turn it up, or ask for the tap the browser needs. */
 function reconcileSound(playerState) {
   if (playerState !== 1) return;
-  if (soundState === 'muted') {
-    soundState = 'unmuting';
-    const ownGeneration = generation;
-    try { player.unMute(); } catch {}
-    // WebKit pauses a scripted unmute without a fresh tap. Back to muted
-    // playback then: the song keeps time and B taps the player for sound.
-    unmuteTimer = setTimeout(() => {
-      unmuteTimer = null;
-      if (ownGeneration !== generation || soundState !== 'unmuting') return;
-      let state = null;
-      try { state = Number(player.getPlayerState()); } catch {}
-      if (state === 1 && !playerMuted()) {
-        soundState = 'audible';
-        return;
-      }
-      soundState = 'tap-for-sound';
-      try { player.mute(); } catch {}
-      try { player.playVideo(); } catch {}
-      tick();
-    }, 400);
-  } else if (soundState === 'tap-for-sound' && !playerMuted()) {
-    soundState = 'audible';
-  }
+  if (soundState === 'muted') tryUnmute('choir.followerTapSound');
+  else if (soundState === 'tap-for-sound' && !playerMuted()) soundState = 'audible';
 }
 
 function publishReport() {
@@ -379,7 +391,7 @@ function tick() {
   }
   if (room.playing && local.playerState === 1 && soundState === 'tap-for-sound') {
     autoplayBlocked = false;
-    setStatus('choir.followerTapSound');
+    setStatus(tapSound);
   } else if (!room.playing || local.playerState === 1) {
     autoplayBlocked = false;
     setStatus(null);
@@ -399,6 +411,11 @@ function tick() {
   }
 }
 
+// A tap on the page, which iOS may count for the song's sound.
+unmuteButton?.addEventListener('click', () => {
+  if (!playerReady || soundState !== 'tap-for-sound') return;
+  tryUnmute('choir.followerTapVideo');
+});
 window.addEventListener('relay-request-choir-local-playback', () => {
   window.dispatchEvent(new CustomEvent('relay-choir-local-playback', {
     detail: { active: localBackingAudibleRole },
@@ -427,6 +444,7 @@ if (stage && host && positionNode && statusNode) {
   host.hidden = true;
   positionNode.hidden = true;
   statusNode.hidden = true;
+  if (unmuteButton) unmuteButton.hidden = true;
   setInterval(tick, 500);
   window.dispatchEvent(new Event('relay-request-choir-guest-state'));
 }

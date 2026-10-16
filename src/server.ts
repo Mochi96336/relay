@@ -2574,14 +2574,22 @@ function syncDuetOutput() {
   const content = a && b ? session.requestedMicAdvanceMs + (b.advanceMs - a.advanceMs) : null;
   const youtube = primaryOwnsMic && content === null ? duetSampleSongLagMs(nowMs) : null;
   const lag = content ?? youtube;
-  const source = content !== null ? 'content' : youtube !== null ? 'youtube-time' : null;
-  if (source !== lastDuetLagSource) {
-    logChoir('b-lag-source', { source, lagMs: lag === null ? null : Math.round(lag) });
-    lastDuetLagSource = source;
-  }
   if (lag === null) {
-    session.setSecondaryMicLag(null);
+    // A lapse in measurement keeps B where it was last placed, as the main
+    // Mic keeps its calibration. YouTube-time anchors arrive over the slower
+    // control path and miss their 1 s / three-agreement window now and then;
+    // silencing B on every miss left B audible for half a second at a time.
+    if (session.secondaryMic.targetLagMs === null) {
+      if (lastDuetLagSource !== null) logChoir('b-lag-source', { source: null, lagMs: null });
+      lastDuetLagSource = null;
+      session.setSecondaryMicLag(null);
+    }
     return;
+  }
+  const source = content !== null ? 'content' : 'youtube-time';
+  if (source !== lastDuetLagSource) {
+    logChoir('b-lag-source', { source, lagMs: Math.round(lag) });
+    lastDuetLagSource = source;
   }
   if (takeBlocksCalibration() && session.secondaryMic.audible) return;
   session.setSecondaryMicLag(lag);

@@ -35,7 +35,9 @@
       'choir.revoked': 'The second Mic ended: the Mic changed hands or someone disconnected.',
       'choir.followerLoading': 'Preparing local YouTube player…',
       'choir.followerTapPlay': 'Tap Play in the YouTube player if your browser requires it.',
-      'choir.followerTapSound': 'The song is playing muted: tap the YouTube player to turn its sound on.',
+      'choir.followerTapSound': 'The song is playing muted.',
+      'choir.followerTapVideo': 'Still muted: tap the video itself to turn the sound on.',
+      'choir.followerUnmute': 'Turn on song sound',
       'choir.followerRoomStale': 'Room clock unavailable; local playback paused.',
       'choir.followerVideoError': 'YouTube could not play this video on this device.',
 
@@ -322,7 +324,9 @@
       'choir.revoked': '副 Mic 已結束：拿 Mic 的人換了，或有人斷線了。',
       'choir.followerLoading': '正在準備本地 YouTube 播放器…',
       'choir.followerTapPlay': '若瀏覽器要求操作，請在 YouTube 播放器內點播放。',
-      'choir.followerTapSound': '歌曲正在靜音播放：點一下 YouTube 播放器開啟聲音。',
+      'choir.followerTapSound': '歌曲正在靜音播放。',
+      'choir.followerTapVideo': '還是靜音：請直接點影片畫面開啟聲音。',
+      'choir.followerUnmute': '開啟歌曲聲音',
       'choir.followerRoomStale': '房間時間線失效，本地播放已暫停。',
       'choir.followerVideoError': '這台裝置無法播放該 YouTube 影片。',
 

@@ -137,7 +137,10 @@ test('Relay asks a capable page to repeat a lost Mic packet and splices it back 
   });
   assert.equal(status.audio.receiverTransport.lostPackets, 0, 'the repeat arrived before the hole was given up');
   const { repairRoundTripMs, ...retransmit } = status.audio.receiverRetransmit;
-  assert.deepEqual(retransmit, { requestedPackets: 1, recoveredPackets: 1, budgetDeniedPackets: 0, retriedPackets: 0 });
+  assert.deepEqual(retransmit, {
+    requestedPackets: 1, recoveredPackets: 1, budgetDeniedPackets: 0, retriedPackets: 0,
+    lateRepairPackets: 0, lateRepairRoundTripMs: null, lateRepairMaxMs: null,
+  });
   assert.equal(typeof repairRoundTripMs, 'number', 'the repair round trip is measured');
   assert.equal(status.audio.timeline.micGapMs, 0, 'the mix never saw a hole');
   assert.ok('lastWindow' in status.audio.micAudibility, 'statusz carries the audibility monitor');

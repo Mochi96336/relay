@@ -8,6 +8,10 @@ async function openFollowerFixture(page, { blocked = false } = {}) {
   await expect.poll(() => page.evaluate(() => window.__relayVisualReady === true)).toBe(true);
   await page.evaluate(async (blocked) => {
     window.__followerCalls = [];
+    window.__choirLocalAudibility = [];
+    window.addEventListener('relay-choir-local-playback', event => {
+      window.__choirLocalAudibility.push(event.detail?.active);
+    });
     window.YT = {
       Player: class {
         constructor(_element, config) {
@@ -62,6 +66,7 @@ test('B keeps ordinary Song layout and follows automatically after consent', asy
     detail: { enabled: true },
   })));
   await expect(page.locator('#choir-follower-player')).toBeVisible();
+  expect((await page.evaluate(() => window.__choirLocalAudibility)).at(-1)).toBe(true);
   await expect(page.locator('#song-observer')).toBeHidden();
   await expect(page.locator('.youtube-player-shell')).toBeVisible();
   await expect(page.locator('#youtube-player')).toBeHidden();
@@ -83,6 +88,7 @@ test('B keeps ordinary Song layout and follows automatically after consent', asy
   })));
   await expect(page.locator('#choir-follower-player')).toBeHidden();
   await expect(page.locator('#song-observer')).toBeVisible();
+  expect((await page.evaluate(() => window.__choirLocalAudibility)).at(-1)).toBe(false);
   expect((await page.evaluate(() => window.__followerCalls)).some(x => x[0] === 'destroy')).toBe(true);
 });
 

@@ -31,7 +31,7 @@ test('Listen follows server playback health and activity instead of holder ident
     /return userMuted[\s\S]*\|\| micForcedMuted[\s\S]*\|\| roomMicForcedMuted[\s\S]*\|\| playbackForcedMuted[\s\S]*\|\| takeReviewForcedMuted;/,
   );
   assert.match(listen, /window\.addEventListener\('relay:playback-view'/);
-  assert.match(listen, /setPlaybackForcedMute\(shouldForceMuteListen\(\{/);
+  assert.match(listen, /roomPlaybackRoleForcedMute = shouldForceMuteListen\(\{[\s\S]*?setPlaybackForcedMute\(roomPlaybackRoleForcedMute\)/);
   assert.match(listen, /role: event\.detail\?\.role/);
   assert.match(listen, /timeline: event\.detail\?\.timeline/);
   assert.doesNotMatch(listen, /role === 'holder' \|\| role === 'preparing'/,

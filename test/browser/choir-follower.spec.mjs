@@ -39,6 +39,7 @@ async function openFollowerFixture(page, { blocked = false, unmutePauses = false
         }
         playVideo() {
           window.__followerCalls.push(['play']);
+          if (unmuteBuffers && !this.muted) { this.state = 3; return; }
           if (blocked) this.config.events.onAutoplayBlocked();
           else { this.state = 1; this.config.events.onStateChange({ data: 1 }); }
         }

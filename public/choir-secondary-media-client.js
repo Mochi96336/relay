@@ -1,6 +1,7 @@
 import { sendParticipantAuthentication } from './participant-auth.js';
 import { wsUrl } from './ws-url.js';
 import { ChoirSecondaryCapture } from './choir-secondary-capture.js';
+import { MIC_GAIN_KEY, storedNumber } from './device-preferences.js';
 
 /**
  * The second singer's publisher. B's own click on + Second Mic prepares a
@@ -116,12 +117,38 @@ window.addEventListener('relay-choir-media-message', (event) => {
   awaitingClaim = false;
   if (claimTimer !== null) clearTimeout(claimTimer);
   claimTimer = null;
-  const sourceRate = capture.rate;
-  const socket = new WebSocket(wsUrl({ compress: false }));
+  connectMedia(claimToken, roomEpoch, capture.rate, !directSocketFailed);
+});
+
+/**
+ * B's media socket. Like the main Mic's (app.js), it tries Relay's direct
+ * socket first, skipping the tunnel's detour, and stays on the tunnel for the
+ * rest of the page once the direct one fails. The claim is spent only when
+ * registration is sent, so a direct socket that never opened hands the same
+ * claim to the tunnel.
+ */
+const DIRECT_SOCKET_OPEN_TIMEOUT_MS = 2_500;
+let directSocketFailed = false;
+function connectMedia(claimToken, roomEpoch, sourceRate, direct) {
+  const tunnelUrl = wsUrl({ compress: false });
+  const directUrl = wsUrl({ compress: false, direct: true });
+  const viaDirect = direct && directUrl !== tunnelUrl;
+  const socket = new WebSocket(viaDirect ? directUrl : tunnelUrl);
   mediaSocket = socket;
+  let opened = false;
   let used = false;
   let registered = false;
+  const fallBack = () => {
+    if (socket !== mediaSocket || opened || !viaDirect) return false;
+    directSocketFailed = true;
+    try { socket.close(); } catch {}
+    connectMedia(claimToken, roomEpoch, sourceRate, false);
+    return true;
+  };
+  const openTimer = viaDirect ? setTimeout(fallBack, DIRECT_SOCKET_OPEN_TIMEOUT_MS) : null;
   socket.addEventListener('open', () => {
+    opened = true;
+    clearTimeout(openTimer);
     if (socket !== mediaSocket || !enabled
       || !sendParticipantAuthentication(socket)) {
       socket.close();
@@ -137,9 +164,12 @@ window.addEventListener('relay-choir-media-message', (event) => {
         return;
       }
       used = true;
+      // This device's own last Mic gain, as the main Mic sends it.
+      const micGainDb = storedNumber(MIC_GAIN_KEY, 0, 40);
       socket.send(JSON.stringify({
         type: 'choir-secondary-media-register',
         claimToken, packetVersion: 2, sampleRate: sourceRate,
+        ...(micGainDb === null ? {} : { micGainDb }),
       }));
     } else if (message.type === 'choir-secondary-media-registered') {
       if (!used || registered || message.roomEpoch !== roomEpoch
@@ -159,6 +189,8 @@ window.addEventListener('relay-choir-media-message', (event) => {
     }
   });
   socket.addEventListener('close', () => {
+    clearTimeout(openTimer);
+    if (fallBack()) return;
     if (socket !== mediaSocket) return;
     // The room was retired (seek, song change) or the link dropped; keep the
     // microphone and reconnect when the server announces the next room.
@@ -166,6 +198,6 @@ window.addEventListener('relay-choir-media-message', (event) => {
     notify('disconnected');
   });
   socket.addEventListener('error', () => {
-    if (socket === mediaSocket) socket.close();
+    if (socket === mediaSocket && !fallBack()) socket.close();
   });
-});
+}

@@ -363,3 +363,17 @@ describe('a video the Robot cannot play', () => {
     assert.ok(!legacy.some((issue) => issue.cause === 'robot-video-unplayable'));
   });
 });
+
+describe('product status names a second singer', () => {
+  test('a joined B rides on room.duet, and nothing is added without one', () => {
+    const duet = { secondaryId: 'participant-b', secondaryNickname: 'Bea', state: 'aligning' as const };
+    const withDuet = buildProductViewModel({ ...productInput(), duet });
+    assert.deepEqual(withDuet.room.duet, duet);
+    assert.notEqual(withDuet.room.duet, duet, 'a copy, not the server-owned object');
+
+    const without = buildProductViewModel(productInput());
+    assert.equal('duet' in without.room, false, 'N=1 product status keeps its exact shape');
+    const noOwner = buildProductViewModel({ ...productInput(), micOwnerId: null, duet });
+    assert.equal('duet' in noOwner.room, false, 'no second singer without a Mic owner');
+  });
+});

@@ -22,6 +22,10 @@ let invitation = null;
 let acceptedAsGuest = false;
 let mediaEnabled = false;
 let pendingSend = false;
+/** Someone else is already the second singer (from product status). */
+let duetTaken = false;
+/** A join was tried: keep the panel open to say how it went until closed. */
+let joinFeedback = false;
 let statusKey = null;
 let statusVars = null;
 
@@ -36,7 +40,7 @@ function participant(id) {
 function canJoin() {
   return available && authorityFresh && mediaEnabled && Boolean(myId())
     && typeof session?.micOwnerId === 'string' && session.micOwnerId !== myId()
-    && session?.micConnected === true && !acceptedAsGuest;
+    && session?.micConnected === true && !acceptedAsGuest && !duetTaken;
 }
 function publishCommand(type, fields = {}) {
   if (!available || !authorityFresh) return false;
@@ -53,7 +57,7 @@ function render() {
   trigger.disabled = !canJoin() || pendingSend;
   const hasGuestInvitation = Boolean(invitation && !acceptedAsGuest);
   const show = available && authorityFresh
-    && (hasGuestInvitation || acceptedAsGuest || (pendingSend && Boolean(statusKey)));
+    && (hasGuestInvitation || acceptedAsGuest || joinFeedback);
   panel.hidden = !show;
   trigger.setAttribute('aria-expanded', String(!panel.hidden));
   host.hidden = true;
@@ -70,6 +74,8 @@ function render() {
     invitationCopy.textContent = '';
   }
   statusCopy.textContent = statusKey ? t(statusKey, statusVars ?? {}) : '';
+  if (acceptedAsGuest) document.body.dataset.choirGuest = 'joined';
+  else delete document.body.dataset.choirGuest;
   window.dispatchEvent(new CustomEvent('relay-choir-guest-state', {
     detail: { enabled: available && authorityFresh && acceptedAsGuest && mediaEnabled },
   }));
@@ -120,7 +126,9 @@ window.addEventListener('relay-choir-consent-message', (event) => {
       pendingSend = false;
       if (message.status === 'accepted') {
         acceptedAsGuest = message.secondaryId === myId();
-        statusKey = message.joined === true ? 'choir.joined' : 'choir.accepted';
+        // The heading shows a joined singer's progress from here on.
+        if (acceptedAsGuest) joinFeedback = false;
+        statusKey = message.joined === true ? null : 'choir.accepted';
       } else if (['withdrawn', 'revoked', 'declined'].includes(message.status)) {
         if (message.secondaryId === myId()) {
           acceptedAsGuest = false;
@@ -143,21 +151,22 @@ window.addEventListener('relay-choir-media-mode', (event) => {
   mediaEnabled = event.detail?.enabled === true;
   render();
 });
-window.addEventListener('relay-choir-media-message', (event) => {
-  if (!mediaEnabled || !authorityFresh) return;
-  const message = event.detail;
-  if (message?.type === 'choir-room-ready') statusKey = 'choir.roomReady';
-  else if (message?.type === 'choir-secondary-media-claim')
-    statusKey = 'choir.connecting';
-  else if (message?.type === 'choir-media-rejected')
-    statusKey = 'choir.mediaRejected';
-  else return;
+window.addEventListener('relay-choir-media-connection', (event) => {
+  if (!mediaEnabled || !authorityFresh || !acceptedAsGuest) return;
+  // Media reconnects on its own for each room; only a microphone that will
+  // not open needs the singer. Leave rather than sit joined but silent.
+  if (event.detail?.state !== 'capture-failed') return;
+  publishCommand('choir-secondary-withdraw');
+  acceptedAsGuest = false;
+  joinFeedback = true;
+  statusKey = 'choir.micFailed';
   render();
 });
-window.addEventListener('relay-choir-media-connection', (event) => {
-  if (!mediaEnabled || !authorityFresh) return;
-  statusKey = event.detail?.state === 'registered'
-    ? 'choir.mediaReady' : 'choir.mediaRejected';
+window.addEventListener('relay-product-status', (event) => {
+  const duet = event.detail?.room?.duet;
+  const taken = Boolean(duet && duet.secondaryId !== myId());
+  if (taken === duetTaken) return;
+  duetTaken = taken;
   render();
 });
 window.addEventListener('relay-locale-changed', render);
@@ -165,6 +174,7 @@ window.addEventListener('relay-request-choir-guest-state', render);
 
 trigger?.addEventListener('click', () => {
   if (!canJoin() || pendingSend) return;
+  joinFeedback = true;
   // Inside the click: iOS and other browsers require a user gesture for the
   // microphone. Capture starts now and connects once the server has a room.
   window.dispatchEvent(new Event('relay-choir-start-secondary-capture'));
@@ -192,6 +202,8 @@ withdrawButton?.addEventListener('click', () => {
   render();
 });
 closeButton?.addEventListener('click', () => {
+  joinFeedback = false;
+  statusKey = null;
   // B's invite remains visible until explicitly answered or revoked.
   render();
 });

@@ -85,6 +85,7 @@ import {
   type RemoteStatusFacts,
   type RobotPlayerError,
 } from './relay-status-projection.js';
+import type { ProductDuet } from './product-view-model.js';
 import { createRelayHttpServer } from './relay-http-server.js';
 import { createRelayBuildTracker, validPageBuild } from './relay-build.js';
 import { createRelayQueryProtocol } from './relay-query-protocol.js';
@@ -393,6 +394,8 @@ const choirRestartCoordinator = choirShadow
 // B's secondary byte path is only armed after explicit double-flag
 // A/B consent and server-issued Media Epoch registration. Never routes
 // those bytes into the production N=1 Mic, backing, monitor or recording.
+/** B's own remembered Mic gain, from its media registration; null keeps the default. */
+let duetSecondaryGainDb: number | null = null;
 const choirSecondaryIngress = choirRestartCoordinator
   ? new ChoirSecondaryPcmIngressExperiment(
     choirRestartCoordinator,
@@ -404,7 +407,10 @@ if (choirSecondaryIngress && choirRestartCoordinator) {
   // until syncDuetOutput() gives B a lag.
   choirSecondaryIngress.onAcceptedFrame = (frame, sampleRate, participantId, nowMs) => {
     if (coordinator.preview().secondaryId !== participantId) return;
-    session.attachSecondaryMic();
+    if (!session.secondaryMic) {
+      session.attachSecondaryMic();
+      if (duetSecondaryGainDb !== null) session.setSecondaryMicGainDb(duetSecondaryGainDb);
+    }
     session.ingestSecondaryMic(frame, sampleRate, nowMs);
   };
 }
@@ -496,7 +502,7 @@ function tickChoirShadow(nowMs: number) {
   choirSecondaryTickets?.sweep(nowMs);
 }
 if (choirRestartCoordinator) {
-  console.log('[choir-shadow] server-owned restart observation only; Choir audio/UI disabled');
+  console.log(`[choir-shadow] enabled; second Mic ${relayConfig.choirMediaExperiment ? 'joins the room mix' : 'invitation only (no media)'}`);
 }
 const AUTO_CALIBRATE = relayConfig.autoCalibrate;
 const AUTO_CALIBRATION_RETRY_MS = relayConfig.autoCalibrationRetryMs;
@@ -2115,6 +2121,7 @@ function productStatusFacts(nowMs: number): ProductStatusFacts {
     participantCount: participantSnapshot.participants.length,
     micOwnerId: participantSnapshot.micOwnerId,
     micOwnerNickname: micOwner?.nickname ?? null,
+    duet: duetView(nowMs),
     publisherControlConnected: micRuntime.controlConnected(),
     freshMicUplink: micRuntime.freshUplinkHealthPayload(nowMs),
     micAudibilityDegraded: mic.audibilityDegraded,
@@ -2484,6 +2491,22 @@ const mixerTimer = setInterval(() => {
 }, 5);
 
 /**
+ * What the room shows about a second singer: joined (waiting for a song),
+ * aligning (a duet room exists, B is not heard yet) or singing (B is in the
+ * room mix that Listen and Take carry).
+ */
+function duetView(nowMs: number): ProductDuet | null {
+  const joined = choirConsent?.activeJoin(nowMs) ?? null;
+  if (!joined || !choirRestartCoordinator) return null;
+  const singing = (session.secondaryMic?.audible === true) && (session.secondaryMic.blend > 0);
+  return {
+    secondaryId: joined.secondaryId,
+    secondaryNickname: participants.participant(joined.secondaryId)?.nickname ?? null,
+    state: singing ? 'singing' : choirRestartCoordinator.preview().roomEpoch !== null ? 'aligning' : 'joined',
+  };
+}
+
+/**
  * Puts the duet room's B into the room output, which Listen and Take already
  * carry. Both singers are measured against the same Robot backing in the
  * duet room, so B's lag relative to A holds in any coordinates: B reads at
@@ -2491,7 +2514,13 @@ const mixerTimer = setInterval(() => {
  * A still owns the Mic and both have a Content lag; while a Take records, an
  * audible B keeps its lag, as A's alignment does.
  */
+let lastDuetAudible = false;
 function syncDuetOutput() {
+  const audible = session.secondaryMic?.audible === true;
+  if (audible !== lastDuetAudible) {
+    lastDuetAudible = audible;
+    broadcastProductStatus();
+  }
   if (!choirRestartCoordinator || !session.secondaryMic) return;
   const view = choirRestartCoordinator.preview();
   const primaryId = view.primaryId;
@@ -4874,6 +4903,8 @@ function handleChoirMediaMessage(socket: RelaySocket, payload: Record<string, un
     sendJson(socket, { type: 'choir-media-rejected', reason: 'claim-invalid-or-expired' });
     return true;
   }
+  duetSecondaryGainDb = requestedMicGainDb(payload.micGainDb);
+  if (duetSecondaryGainDb !== null) session.setSecondaryMicGainDb(duetSecondaryGainDb);
   sendJson(socket, {
     type: 'choir-secondary-media-registered',
     roomEpoch: ticket.roomEpoch, songEpoch: ticket.songEpoch,

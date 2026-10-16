@@ -127,3 +127,25 @@ test('mobile B explicitly accepts and withdraws; disconnect hides stale authoriz
   await expect(page.locator('#choir-consent-panel')).toBeHidden();
   await expect(page.locator('#choir-withdraw')).toBeHidden();
 });
+
+test('a refused join stays on screen until closed, and + Second Mic hides while someone else is in', async ({ page }) => {
+  await openFixture(page, 'singerB', 'owner');
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('relay-choir-consent-availability', { detail: { available: true } }));
+    window.dispatchEvent(new CustomEvent('relay-choir-media-mode', { detail: { enabled: true } }));
+  });
+  await page.locator('#choir-invite-open').click();
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('relay-choir-consent-message', {
+    detail: { type: 'choir-consent-rejected', reason: 'invalid-or-stale' },
+  })));
+  await expect(page.locator('#choir-consent-panel')).toBeVisible();
+  await expect(page.locator('#choir-consent-status')).toContainText('目前無法加入');
+  await page.locator('#choir-consent-close').click();
+  await expect(page.locator('#choir-consent-panel')).toBeHidden();
+  await expect(page.locator('#choir-invite-open')).toBeVisible();
+
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('relay-product-status', {
+    detail: { type: 'product-status', room: { duet: { secondaryId: 'someone-else', state: 'singing' } } },
+  })));
+  await expect(page.locator('#choir-invite-open')).toBeHidden();
+});

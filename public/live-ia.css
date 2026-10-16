@@ -133,6 +133,7 @@
 .performance-stage > .voice-input-evidence { order: 2; }
 .performance-stage > .mic-actions { order: 3; }
 .performance-stage > .takeover-row { order: 4; }
+.performance-stage > .choir-consent-panel { order: 4; }
 .performance-stage > .mic-live-control { order: 5; }
 .performance-stage > .take-strip { order: 6; }
 

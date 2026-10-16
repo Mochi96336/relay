@@ -219,6 +219,15 @@ html body .performance-stage > #mic-takeover {
   margin-bottom: auto !important;
 }
 
+/* An open second-Mic panel belongs with the Mic actions it came from: it
+   claims the free space instead, so it sits right under them. */
+html body .performance-stage:has(> .choir-consent-panel:not([hidden])) > .mic-actions {
+  margin-bottom: 0 !important;
+}
+html body .performance-stage > .choir-consent-panel:not([hidden]) {
+  margin-bottom: auto !important;
+}
+
 /* Idle/ready: Record lives on the left and the existing Take-history entry on
    the right. When #65 hides Record because server readiness is false, a real
    history entry may still keep this row alive; history must never disappear

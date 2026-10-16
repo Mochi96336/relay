@@ -442,7 +442,7 @@ if (
     renderListeners(session);
     const timingRows = describeTiming(facts, t);
     const timingSummary = new Set(['alignment', 'method', 'offset', 'fineTune']);
-    const youtubeRows = new Set(['youtubePhone', 'youtubeServer', 'youtubeRobot', 'youtubeRate', 'robotDelta']);
+    const youtubeRows = new Set(['youtubeRate', 'robotDelta']);
     renderLedger('diag-timing-ledger', timingRows.filter((row) => timingSummary.has(row.key)));
     renderLedger('diag-youtube-ledger', timingRows.filter((row) => youtubeRows.has(row.key)
       || (!timeline && row.key === 'clock')));

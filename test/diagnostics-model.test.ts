@@ -411,10 +411,11 @@ it('Timing keeps reported YT positions and calibration coordinates distinct with
   const rows = byKey(describeTiming({ source: source(), timing,
     timeline: { connected: true, youtubeTime: 90.4, serverTime: 90.5, playbackRate: .5, state: 1, transportEstimateMs: 12 },
   }, en));
-  assert.equal(rows.youtubePhone.value, '90.400 s');
-  assert.equal(rows.youtubeServer.value, '90.500 s');
-  assert.equal(rows.youtubeRobot.value, '90.100 s');
-  assert.match(rows.youtubeRobot.note, /not projected/);
+  // Phone, room and Robot positions agree to milliseconds; one row, room clock.
+  assert.equal(rows.youtubePhone, undefined);
+  assert.equal(rows.youtubeServer, undefined);
+  assert.equal(rows.youtubeRobot, undefined);
+  assert.equal(rows.youtubeRate.value, 'Playing · 0.5× · 1:30');
   assert.equal(rows.bootLive.value, '-475 ms');
   assert.equal(rows.bootStored.value, '-180 ms');
   assert.equal(rows.contentTarget.value, '-70 ms + player offset -114 ms = -184 ms');
@@ -424,7 +425,6 @@ it('Timing keeps reported YT positions and calibration coordinates distinct with
   const stale = byKey(describeTiming({ source: source(), timing: { ...timing, robotDeltaFresh: false },
     timeline: { connected: true, playbackRate: 1 },
   }, zh));
-  assert.equal(stale.youtubeRobot.value, '—');
   assert.equal(stale.bootLive.value, '—');
   // The Robot went quiet: the mixer holds its last converted value, and says so.
   const held = byKey(describeTiming({ source: source(),
@@ -455,9 +455,6 @@ it('Timing hides expired YT state and Boot projection but retains historical mea
       robotOffsetTimingEvidence: { playerSeconds: 90 }, requestedMicAdvanceMs: 20,
       bootCalibration: { advanceMs: 100, micLatencyMs: 200, backingLatencyMs: 100 } },
   }, en));
-  assert.equal(rows.youtubePhone.value, '—');
-  assert.equal(rows.youtubeServer.value, '—');
-  assert.equal(rows.youtubeRobot.value, '—');
   assert.equal(rows.youtubeRate.value, 'Not connected');
   assert.equal(rows.bootLive.value, '—');
   assert.equal(rows.bootStored.value, '+100 ms');

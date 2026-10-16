@@ -66,10 +66,12 @@ import { MicLevelMonitor } from './mic-level-monitor.js';
 import { MicClockDriftEstimator } from './mic-clock-drift-estimator.js';
 import { MicCaptureDeliveryMonitor } from './mic-capture-delivery.js';
 import { MicUplinkBacklog } from './mic-uplink-backlog.js';
+import { MicWebTransportReport } from './mic-webtransport-report.js';
 import { ProductMicSteadiness } from './product-mic-steadiness.js';
 import { youtubeErrorMeansUnplayable } from '../shared/robot-player-errors.js';
 import { MicRuntime } from './mic-runtime.js';
 import { MicTransportGraceRuntime } from './mic-transport-grace-runtime.js';
+import { watchEventLoopStalls } from './event-loop-stall.js';
 import { TimingRuntime } from './timing-runtime.js';
 import { authorizeMicOwnerCommand, type MicOwnerCommand } from './command-authority.js';
 import { decodePcmFrame, type PcmFrame } from './pcm-frame.js';
@@ -84,7 +86,7 @@ import {
   type RobotPlayerError,
 } from './relay-status-projection.js';
 import { createRelayHttpServer } from './relay-http-server.js';
-import { computeRelayBuild, validPageBuild } from './relay-build.js';
+import { createRelayBuildTracker, validPageBuild } from './relay-build.js';
 import { createRelayQueryProtocol } from './relay-query-protocol.js';
 import { loadMonitorOpusEncoder } from './monitor-opus.js';
 import { createRelayCommandProtocol } from './relay-command-protocol.js';
@@ -135,13 +137,14 @@ import {
   WebTransportMediaRuntime,
   webTransportMediaConfig,
 } from './webtransport-media-server.js';
+import { createDirectSocketServer, directSocketConfig } from './direct-socket.js';
 
 type RelayConfig = ReturnType<typeof loadRelayConfig>;
 
 export async function startRelayServer(relayConfig: RelayConfig) {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(__dirname, '../public');
-const relayBuild = computeRelayBuild([publicDir, path.resolve(publicDir, '../shared')]);
+const relayBuild = createRelayBuildTracker([publicDir, path.resolve(publicDir, '../shared')]);
 const takeDir = path.resolve(relayConfig.takeDir);
 const port = relayConfig.port;
 const relayKey = relayConfig.relayKey;
@@ -211,9 +214,21 @@ const AUDIO_TRANSPORT_CONFIG = loadAudioTransportConfig();
 const PLAYBACK_MIC_INTENT_MS = 10_000;
 const TAKE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
+const directMediaConfig = webTransportMediaConfig();
+const directSocket = directSocketConfig(directMediaConfig);
+let directSocketServer: ReturnType<typeof createDirectSocketServer> | null = null;
+if (directSocket) {
+  try {
+    directSocketServer = createDirectSocketServer(directSocket);
+  } catch (error) {
+    console.warn('Relay direct socket is unavailable; Mics keep the tunnel socket.', error);
+  }
+}
+
 const server = createRelayHttpServer({
+  directSocketUrl: () => (directSocketServer?.listening && directSocket ? directSocket.publicUrl.toString() : null),
   publicDir,
-  build: relayBuild,
+  build: () => relayBuild.current(),
   takeDir,
   relayKey,
   remoteStatus: () => remoteStatusPayload(),
@@ -221,7 +236,7 @@ const server = createRelayHttpServer({
   readiness: () => readinessPayload(),
   micOpusTrial: relayConfig.micOpusTrial,
 });
-const wss = createRelayWebSocketServer(server, {
+const wss = createRelayWebSocketServer(directSocketServer ? [server, directSocketServer] : server, {
   relayKey,
   heartbeatMs: HEARTBEAT_MS,
   statusDeflate: relayConfig.statusDeflate,
@@ -1792,6 +1807,13 @@ function takeQualityFrameState(nowMs = performance.now()) {
     timingDivergenceMs: desiredMicLagMs === null || alignment.calibratedMicLagMs === null
       ? null
       : desiredMicLagMs - alignment.calibratedMicLagMs,
+    // Provenance only matters to a recording; skip reading it on every idle frame.
+    ...(takeBlocksCalibration()
+      ? {
+          appliedCalibrationKind: alignment.calibratedMicLagMs === null ? 'none' as const : appliedCalibrationKind(),
+          estimateSource: sampleSongSelected ? 'sample-song' as const : 'transport' as const,
+        }
+      : {}),
   };
 }
 
@@ -1827,7 +1849,7 @@ function remoteStatusPayload() {
   return {
     ...status,
     // `micPage` null with a Mic connected is a page from before builds existed.
-    build: { relay: relayBuild, micPage: micRuntime.publisher?.pageBuild ?? null },
+    build: { relay: relayBuild.current(), micPage: micRuntime.publisher?.pageBuild ?? null },
     audio: { ...status.audio, listenerPlayback: monitorTransport.playbackHealth() },
   };
 }
@@ -1954,6 +1976,7 @@ function timingCalibrationStatusPayload() {
     probeMaxAttempts: probe.maxAttempts,
     probeError: probe.error,
     bootCalibration: bootProbeRuntime.calibrationResult,
+    bootCalibrationMic: bootCalibrationMicLabel(),
     bootProbeTimingEvidence,
     completedBootProbeTimingEvidence,
     robotOffsetTimingEvidence,
@@ -1962,6 +1985,17 @@ function timingCalibrationStatusPayload() {
     autoCalibrate: AUTO_CALIBRATE,
     validation: contentCalibrationValidator.status(nowMs),
   };
+}
+
+/**
+ * Whose Mic the stored test-tone result measured. The result is bound to the
+ * capture it ran on, so while it still matches, that is the current owner.
+ */
+function bootCalibrationMicLabel() {
+  const ownerId = participants.micOwnerId;
+  if (!ownerId || !bootProbeRuntime.calibrationResult
+    || !bootProbeRuntime.completedContextMatches(bootProbeContext())) return null;
+  return { nickname: participants.participant(ownerId)?.nickname ?? null };
 }
 
 function mixSettingsPayload() {
@@ -2090,6 +2124,7 @@ function productStatusFacts(nowMs: number): ProductStatusFacts {
       bootProbeActive: bootProbeInProgress(nowMs),
       contentEvidenceReady: robotContentEvidenceMappingReady(nowMs),
       robotDeltaFresh: robotDeltaIsFresh(nowMs),
+      micProbeUnheard: probeStatus(nowMs).micProbeUnheard,
     },
   };
 }
@@ -2393,6 +2428,11 @@ function deliverMicPackets(packets: PcmFrame[]) {
   for (const packet of packets) processPublisherFrame(packet);
 }
 
+// A paused Relay looks, from a page, like the network holding Mic audio back.
+const stopEventLoopStallWatch = watchEventLoopStalls((record) => {
+  console.warn('[event-loop]', JSON.stringify(record));
+});
+
 const mixerTimer = setInterval(() => {
   if (micRuntime.audioTransport) {
     const nowMs = performance.now();
@@ -2470,23 +2510,12 @@ function noteMicTransit(nowMs: number) {
   session.noteMicTransitBacklog(transit.generation, transit.backlogMs);
 }
 
-let reportedMicWebTransportFailure: { generation: number; failure: string | null } | null = null;
+const micWebTransportReport = new MicWebTransportReport();
 
-/** Logs each new reason the page gives for a WebTransport attempt that did not take. */
+/** Logs each new reason a WebTransport attempt did not take, and the retry that then did. */
 function reportMicWebTransportFailure(health: AudioUplinkHealth) {
-  const failure = health.transport.webTransportLastFailure ?? null;
-  const previous = reportedMicWebTransportFailure;
-  if (previous?.generation === health.captureGeneration && previous.failure === failure) return;
-  reportedMicWebTransportFailure = { generation: health.captureGeneration, failure };
-  if (failure === null) return;
-  console.warn('[mic-webtransport]', JSON.stringify({
-    generation: health.captureGeneration,
-    failure,
-    path: health.transport.path,
-    attempts: health.transport.webTransportAttempts,
-    connections: health.transport.webTransportConnections,
-    retries: health.transport.webTransportRetries,
-  }));
+  const record = micWebTransportReport.observe(health);
+  if (record) console.warn('[mic-webtransport]', JSON.stringify(record));
 }
 
 /**
@@ -2598,6 +2627,13 @@ function reportMicDevice(health: AudioUplinkHealth) {
     },
     audioSessionType: health.capture?.audioSessionType ?? null,
     gainDb: session.micGainDb,
+    // A page keeps the scripts it loaded. On 2026-10-16 a Mic in Germany ran
+    // an app.js from before Opus and sent PCM at six times the bitrate; only
+    // missing fields gave it away. null: the page predates sending its build.
+    pageBuild: micRuntime.publisher?.pageBuild ?? null,
+    relayBuild: relayBuild.current(),
+    codec: health.transport.codec ?? null,
+    codecBitrate: health.transport.codecBitrate ?? null,
   }));
 }
 
@@ -3111,6 +3147,9 @@ function maybeFinishProbeAnalysis(nowMs: number) {
   }
 
   if (correlation < PROBE_MIN_CORRELATION) {
+    // The attempt ran and the chime was not in the capture: with headphones it
+    // never reaches the Mic, so trying again the same way will not find it.
+    bootProbeRuntime.markAttemptUnheard(analysis.target);
     failProbeAttempt(
       analysis.target,
       `correlation ${correlation.toFixed(3)} was below ${PROBE_MIN_CORRELATION.toFixed(3)}`,
@@ -3417,6 +3456,13 @@ function startTakeAtFrame(socket: RelaySocket, participantId: string, commandWal
     rejectTakeCommand(socket, 'start', result.reason);
     return;
   }
+  takeController.noteTimingAtStart({
+    appliedCalibrationKind: session.alignment.calibratedMicLagMs === null ? 'none' : appliedCalibrationKind(),
+    estimateSource: session.alignment.calibratedMicLagMs === null
+      ? (sampleSongSelected ? 'sample-song' : 'transport')
+      : null,
+    calibrationError: calibration.status().error ?? probeStatus(nowMs).error ?? null,
+  });
 
   // Background timing work may only be stood down after Take admission.
   // A rejected command must not discard either a validator confirmation
@@ -4203,7 +4249,7 @@ const authenticationProtocol = createRelayAuthenticationProtocol<RelaySocket>({
       type: 'participant-authenticated',
       participantId: authenticated.participantId,
       // A page whose build differs asks its user to reload (#487).
-      build: relayBuild,
+      build: relayBuild.current(),
     });
     return;
   },
@@ -4947,6 +4993,7 @@ wss.on('close', () => {
   clearMicMediaAuthority();
   clearInterval(mixerTimer);
   clearInterval(youtubeTimelineTimer);
+  stopEventLoopStallWatch();
 });
 
 server.on('error', (error: NodeJS.ErrnoException) => {
@@ -4970,7 +5017,6 @@ if (relayConfig.listenOpus) {
   }
 }
 
-const directMediaConfig = webTransportMediaConfig();
 if (directMediaConfig) {
   try {
     await webTransportMedia.start(directMediaConfig, {
@@ -5000,6 +5046,20 @@ server.listen(port, '0.0.0.0', () => {
   console.log('For a phone, expose this HTTP server through an HTTPS tunnel before using the microphone.');
 });
 
+if (directSocketServer && directSocket) {
+  const directServer = directSocketServer;
+  directServer.once('error', (error) => {
+    // Pages only learn the direct URL while it listens, so they keep the tunnel.
+    console.warn('Relay direct socket failed to listen; Mics keep the tunnel socket.', error);
+  });
+  directServer.listen(directSocket.bindPort, directSocket.bindHost, () => {
+    console.log(
+      `Relay direct socket listening on tcp://${directSocket.bindHost}:${directSocket.bindPort}`
+      + ` and advertised as ${directSocket.publicUrl.toString()}`,
+    );
+  });
+}
+
 let shutdownPromise: Promise<void> | null = null;
 
 async function gracefulShutdown(signal: NodeJS.Signals) {
@@ -5012,6 +5072,7 @@ async function gracefulShutdown(signal: NodeJS.Signals) {
     // closed at the last full mixed frame that production actually accepted.
     clearInterval(mixerTimer);
     clearInterval(youtubeTimelineTimer);
+    stopEventLoopStallWatch();
     micTransportGrace.cancel();
     backingRuntime.cancelGrace();
 
@@ -5021,6 +5082,9 @@ async function gracefulShutdown(signal: NodeJS.Signals) {
     for (const client of wss.clients) client.terminate();
     // relay-socket-server owns its heartbeat and retires it when WSS closes.
     await new Promise<void>((resolve) => wss.close(() => resolve()));
+    if (directSocketServer?.listening) {
+      await new Promise<void>((resolve) => directSocketServer!.close(() => resolve()));
+    }
     if (server.listening) {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => error ? reject(error) : resolve());

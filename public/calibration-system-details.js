@@ -16,11 +16,9 @@ function initialize() {
   if (!diagnosticsPanel) return;
 
   const nodes = {
-    applied: document.querySelector('#diag-calibration-applied'),
     pathState: document.querySelector('#diag-path-state'),
     pathCorrelations: document.querySelector('#diag-path-correlations'),
     pathDifference: document.querySelector('#diag-path-difference'),
-    effective: document.querySelector('#diag-path-effective'),
     contentState: document.querySelector('#diag-content-state'),
     contentProgress: document.querySelector('#diag-content-progress'),
     contentAgreement: document.querySelector('#diag-content-agreement'),
@@ -84,12 +82,6 @@ function initialize() {
     if (!timing || typeof timing !== 'object') return;
     latestTiming = timing;
 
-    const applied = finite(timing.appliedMicAdvanceMs);
-    const requested = finite(timing.calibratedMicLagTargetMs) ?? finite(timing.requestedMicAdvanceMs);
-    nodes.applied.textContent = applied === null && requested === null
-      ? '—'
-      : `${ms(applied)} / ${ms(requested)}`;
-
     const contentActive = timing.calibrationKind === 'content';
     nodes.contentState.textContent = contentActive ? named('phase', timing.state) : t('diag.cal.notRunning');
     const progress = finite(timing.progress);
@@ -152,16 +144,17 @@ function initialize() {
         : null;
       nodes.pathDifference.textContent = pathDifference === null
         ? '—'
-        : t('diag.cal.pathMicSong', { difference: ms(pathDifference), mic: ms(micLatency), song: ms(backingLatency) });
+        : t('diag.cal.pathMicSong', {
+          difference: ms(pathDifference),
+          micName: typeof timing.bootCalibrationMic?.nickname === 'string'
+            ? t('diag.cal.pathMicOf', { name: timing.bootCalibrationMic.nickname })
+            : 'Mic',
+          mic: ms(micLatency),
+          song: ms(backingLatency),
+        });
     } else {
       nodes.pathDifference.textContent = '—';
     }
-
-    const liveDelta = finite(timing.robotPlayerOffsetMs);
-    const rate = finite(latestTimeline?.playbackRate);
-    nodes.effective.textContent = boot && pathDifference !== null && liveDelta !== null && rate > 0 && latestTimeline?.connected === true && timing.robotDeltaFresh
-      ? t('diag.cal.effectiveValue', { ms: ms(pathDifference + liveDelta / rate), confidence: confidence(boot.confidence) })
-      : boot ? t('diag.cal.pathReady') : '—';
   }
 
   function request() {

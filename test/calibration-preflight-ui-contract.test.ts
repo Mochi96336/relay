@@ -45,7 +45,6 @@ test('System timing diagnostics expose content, validation, and path evidence se
     'Validation state',
     'Test tone detection',
     'Path difference',
-    'Test tone result',
   ]) {
     const key = keyFor(marker);
     assert.ok(key, `missing System calibration copy: ${marker}`);
@@ -53,9 +52,10 @@ test('System timing diagnostics expose content, validation, and path evidence se
   }
   assert.match(system, /value === null \|\| value === undefined \|\| value === ''/,
     'diagnostics must not coerce unknown/null timing evidence to numeric zero');
-  assert.equal(english['diag.cal.pathReady'], 'Path ready · waiting for playback');
-  assert.match(system, /t\('diag\.cal\.pathReady'\)/,
-    'path calibration must remain distinct from a complete player-relative alignment');
+  // Without a song the test tone is a path difference only; its line must not
+  // borrow a player offset and read as a complete player-relative alignment.
+  assert.equal(english['diag.timing.formula.bootPath'], '{mic} {micMs} − song {songMs} = {result}');
+  assert.doesNotMatch(english['diag.timing.formula.bootPath'], /\{shift\}/);
   assert.doesNotMatch(system, /'Not running'|'Waiting for playback'|'Calibration measurements'/,
     'calibration measurements follow the locale instead of hard-coding English');
 });

@@ -71,6 +71,16 @@ test('the page is served with its build and must be revalidated on every load', 
   });
 });
 
+test('the page names the direct socket only while Relay offers one', async () => {
+  let offered: string | null = null;
+  await withHttpServer({ directSocketUrl: () => offered }, async (baseUrl) => {
+    assert.doesNotMatch(await (await fetch(baseUrl + '/')).text(), /relay-direct-socket/);
+    offered = 'wss://media.example.test:4433/ws';
+    const html = await (await fetch(baseUrl + '/')).text();
+    assert.match(html, /<meta name="relay-build" content="fixturebuild" \/>\s*<meta name="relay-direct-socket" content="wss:\/\/media\.example\.test:4433\/ws" \/>/);
+  });
+});
+
 test('status and readiness callbacks stay lazy and authoritative in the caller', async () => {
   let sequence = 0;
   await withHttpServer({
@@ -140,4 +150,13 @@ test('server delegates only the physical HTTP surface to the adapter', async () 
     assert.equal(adapter.includes("from './" + moduleName + ".js'"), false);
   }
   assert.doesNotMatch(adapter, /buildReadiness|deriveRemoteStatusHealth|buildRelayObservationStatusV1/);
+});
+
+test('live status is never cacheable, so a CDN cannot replay an old snapshot', async () => {
+  await withHttpServer({ readiness: () => ({ ready: false }) }, async (baseUrl) => {
+    for (const route of ['/healthz', '/statusz', '/api/status/v1', '/readyz']) {
+      const response = await fetch(baseUrl + route);
+      assert.equal(response.headers.get('cache-control'), 'no-store', route);
+    }
+  });
 });

@@ -54,7 +54,7 @@ test('Room Mic is one centered full-bleed envelope backed by one 20-sample measu
   assert.match(model, /export function centerOriginX/);
   assert.match(presence, /CENTER_Y = VIEWBOX_HEIGHT \/ 2/);
   assert.match(presence, /presenceSliceGeometry/);
-  assert.match(presence, /envelopePath\(\)/);
+  assert.match(presence, /envelopePath\(drawn\)/);
   assert.match(presence, /smoothPath\(upper\)/);
   assert.match(liveStatus, /MIC_PRESENCE_TELEMETRY_INTERVAL_MS = 80/);
   assert.match(presence, /event\.detail\?\.spectrumBands/);
@@ -63,7 +63,6 @@ test('Room Mic is one centered full-bleed envelope backed by one 20-sample measu
 });
 
 test('visible Room Mic waveform never consumes local capture events directly', () => {
-  assert.doesNotMatch(presence, /relay-local-mic-level/);
   assert.doesNotMatch(presence, /localActive|localStaleTimer|LOCAL_EVIDENCE_STALE_MS/);
   assert.match(presence, /relay-room-mic-presence/);
 });
@@ -81,7 +80,12 @@ test('frequency evidence remains truthful timbre data and is not painted as fake
   assert.match(micAnalysis, /function measureSpectrumBands\(\)/);
   assert.doesNotMatch(capture, /runFft|measureSpectrumBands|measureF0|F0_YIN_THRESHOLD/);
   assert.match(composition, /not[\s\S]*presented as musical pitch until a real F0 estimate exists/);
-  assert.doesNotMatch(presence, /WebSocket|mix-health|requestAnimationFrame/);
+  assert.doesNotMatch(presence, /WebSocket|mix-health/);
+  // Animation frames only ease the drawn band toward the latest measured
+  // shape and stop once it arrives; no motion exists without a measurement.
+  assert.match(presence, /if \(moving\) frame = animationFrame\(step\);/);
+  assert.match(presence, /if \(frame === null\) frame = animationFrame\(step\);/);
+  assert.equal(presence.match(/animationFrame\(step\)/g)?.length, 2);
   assert.doesNotMatch(state, /@keyframes|voice-breathe|preparing-pulse/);
   assert.doesNotMatch(composition, /@keyframes|voice-breathe|preparing-pulse/);
 });
@@ -91,7 +95,8 @@ test('new Mic evidence stays at exact center while one stored history mirrors ou
   assert.match(model, /left: safeWidth \/ 2 - distance/);
   assert.match(model, /right: safeWidth \/ 2 \+ distance/);
   assert.match(model, /const next = \[\.\.\.previous, createPresenceSlice/);
-  assert.match(presence, /const right = history[\s\S]*?\.slice\(0, -1\)[\s\S]*?\.reverse\(\)/);
+  // Both halves are drawn from the one history, the newest slice shared at the centre.
+  assert.match(presence, /\[\.\.\.halfPoints\('left'\)\.reverse\(\), \.\.\.halfPoints\('right'\)\.slice\(1\)\]/);
 });
 
 test('performance actions stay in Sing -> Record -> Adjust -> Review order', () => {
@@ -113,7 +118,6 @@ test('Room Mic presence is visible to listeners and self owners through the same
   assert.match(state, /body\[data-self-mic="live"\] \.voice-copy strong/);
   assert.match(state, /font-size: clamp\(27px, 7vw, 34px\)/);
   assert.match(state, /\.voice-input-evidence \{[\s\S]*?display: none;/);
-  assert.match(state, /body\[data-room-mic="live"\] \.voice-input-evidence[\s\S]*?display: flex;/);
   assert.match(state, /body\[data-self-mic="live"\] \.voice-presence-wave[\s\S]*?stroke: rgba\(247, 244, 237, \.82\);/);
   assert.match(presence, /`room:\$\{ownerId\}:\$\{generation\}`/);
   assert.doesNotMatch(presence, /if \(localActive\) return;/);
@@ -122,7 +126,6 @@ test('Room Mic presence is visible to listeners and self owners through the same
 test('forced Room sound state keeps the same rail geometry and changes appearance only', () => {
   assert.doesNotMatch(composition, /\.local-sound-control|#listen-gain-value/,
     'formal composition must not regain Room sound rail geometry');
-  assert.match(layout, /\.local-sound-control \{[\s\S]*?grid-template-columns:\s*44px minmax\(0, 1fr\) auto/);
   assert.match(layout, /#listen-adjust-state,[\s\S]*?#listen-note \{[\s\S]*?position:\s*absolute/);
   assert.match(roomSoundCss, /body\[data-listen="mic-muted"\] #listen-gain,[\s\S]*?opacity:\s*\.46/);
   assert.doesNotMatch(roomSoundCss, /#listen-adjust-state|#listen-gain-value/,

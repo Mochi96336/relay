@@ -148,10 +148,11 @@ html body .live-actions .local-sound-control #listen-toggle {
 html body .live-actions .local-sound-control #listen-gain {
   grid-column: 2;
   grid-row: 1;
-  width: 100%;
+  /* Past its cell by 9px per side, like every .adjust-range (adjust.css). */
+  width: calc(100% + 18px);
   min-width: 0;
   height: 44px;
-  margin: 0;
+  margin: 0 -9px;
 }
 
 html body .live-actions .local-sound-control #listen-gain::-webkit-slider-runnable-track {
@@ -336,10 +337,11 @@ html body[data-self-mic="live"] .performance-stage > .mic-live-control .gain-rai
 }
 
 html body[data-self-mic="live"] .performance-stage > .mic-live-control #mic-gain {
-  width: 100%;
+  /* Past its box by 9px per side, like every .adjust-range (adjust.css). */
+  width: calc(100% + 18px);
   min-width: 0;
   height: 44px;
-  margin: 0;
+  margin: 0 -9px;
 }
 
 html body[data-self-mic="live"] .performance-stage > .mic-live-control #mic-gain::-webkit-slider-runnable-track,

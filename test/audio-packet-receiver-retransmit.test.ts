@@ -90,6 +90,9 @@ describe('AudioPacketReceiver retransmission', () => {
       budgetDeniedPackets: 0,
       retriedPackets: 0,
       repairRoundTripMs: 129,
+      lateRepairPackets: 0,
+      lateRepairRoundTripMs: null,
+      lateRepairMaxMs: null,
     });
   });
 
@@ -103,6 +106,44 @@ describe('AudioPacketReceiver retransmission', () => {
     assert.equal(r.stats().lostPackets, 1);
     assert.deepEqual(sequences(send(1, 210)), [], 'a repeat after the deadline is late, not re-inserted');
     assert.equal(r.stats().latePackets, 1);
+  });
+
+  it('times a repeat that arrives after its hole was given up', () => {
+    const { r, send } = receiver({ retransmitHoldMs: 200 });
+    r.setRetransmitHoldAllowed(true);
+    send(0, 0);
+    send(2, 1);
+    r.retransmitRequestsSent(r.pendingRetransmitRequests(), 1);
+    r.flush(151);
+    r.retransmitRequestsSent(r.pendingRetransmitRequests(), 151);
+    assert.deepEqual(sequences(r.flush(201)), [2]);
+
+    // A far Mic: the repeat lands 300 ms after the first request.
+    assert.deepEqual(sequences(send(1, 301)), []);
+    assert.deepEqual(r.retransmitStats(), {
+      requestedPackets: 1,
+      recoveredPackets: 0,
+      budgetDeniedPackets: 0,
+      retriedPackets: 1,
+      repairRoundTripMs: null,
+      lateRepairPackets: 1,
+      lateRepairRoundTripMs: 300,
+      lateRepairMaxMs: 300,
+    });
+
+    send(1, 320);
+    assert.equal(r.retransmitStats().lateRepairPackets, 1, 'the second repeat is not timed again');
+  });
+
+  it('does not time a late packet that was never requested', () => {
+    const { r, send } = receiver();
+    send(0, 0);
+    send(2, 1);
+    assert.deepEqual(sequences(r.flush(41)), [2]);
+    send(1, 60);
+    assert.equal(r.stats().latePackets, 1);
+    assert.equal(r.retransmitStats().lateRepairPackets, 0);
+    assert.equal(r.retransmitStats().lateRepairRoundTripMs, null);
   });
 
   it('releases a waiting hole at the ordinary deadline once the mix withdraws the hold', () => {
@@ -211,6 +252,9 @@ describe('AudioPacketReceiver retransmission', () => {
       budgetDeniedPackets: 0,
       retriedPackets: 0,
       repairRoundTripMs: 68,
+      lateRepairPackets: 0,
+      lateRepairRoundTripMs: null,
+      lateRepairMaxMs: null,
     });
   });
 

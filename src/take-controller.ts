@@ -7,6 +7,7 @@ import {
   type TakeQualityEventKind,
   type TakeQualityFrameState,
   type TakeQualityVerdict,
+  type TakeTimingAtStart,
 } from './take-quality.js';
 import {
   TakeSession,
@@ -401,6 +402,13 @@ export class TakeController {
       this.failWriter(writer, error);
       return false;
     }
+  }
+
+  /** The timing the recording starts with, kept beside its quality evidence. */
+  noteTimingAtStart(timing: TakeTimingAtStart) {
+    if (!this.session.recordingTakeId) return false;
+    this.quality?.noteTimingAtStart(timing);
+    return true;
   }
 
   noteQualityEvent(kind: TakeQualityEventKind) {

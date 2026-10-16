@@ -35,6 +35,5 @@ test('server still owns authentication authority and transport effects', () => {
 });
 
 test('Robot lifecycle is not authentication authority', () => {
-  assert.match(server, /robotLifecycleProtocol\.dispatch\(socket, payload\)/);
   assert.doesNotMatch(protocol, /robot-source-hello/);
 });

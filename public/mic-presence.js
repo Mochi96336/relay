@@ -17,9 +17,21 @@ if (meter && wave) {
   const VIEWBOX_WIDTH = 320;
   const VIEWBOX_HEIGHT = 56;
   const CENTER_Y = VIEWBOX_HEIGHT / 2;
-  const MAX_AMPLITUDE = 18;
-  const PITCH_MODULATION_DEPTH = 0.18;
+  const MAX_AMPLITUDE = 22;
+  // Lifts quiet and mid levels a little, so ordinary singing moves the band.
+  const LEVEL_CURVE = 0.85;
+  // Pitch shows as ripples along the edge, denser for higher notes
+  // (pitchLobeCount). Deep enough to see, and drawn with extra points between
+  // slices: at one point per slice a high note's ripples were lost between
+  // samples and every note looked alike.
+  // Kept shallow: pitch changes how dense the ripples are, not how big the band is.
+  const PITCH_MODULATION_DEPTH = 0.2;
+  // Enough points for about nine per ripple at the densest pitch.
+  const POINTS_PER_SLICE = 8;
   const ROOM_EVIDENCE_STALE_MS = 320;
+  // Room telemetry arrives every ~80 ms; the drawn band eases toward each new
+  // shape over about this long instead of jumping to it.
+  const EASE_MS = 70;
 
   let history = Array.from({ length: MIC_PRESENCE_SLICE_COUNT }, () => emptyPresenceSlice());
   let sourceKey = null;
@@ -27,6 +39,13 @@ if (meter && wave) {
   let roomAuthorityFresh = false;
   let authoritativeRoomOwnerId = null;
   let authoritativeRoomLive = false;
+  /** The points being drawn, easing toward the history's targets. */
+  let drawn = null;
+  let frame = null;
+  let lastFrameAt = null;
+  const animationFrame = typeof window.requestAnimationFrame === 'function'
+    ? window.requestAnimationFrame.bind(window)
+    : null;
 
   function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
@@ -51,29 +70,41 @@ if (meter && wave) {
     return path;
   }
 
-  function visualPoint(slice, index, side) {
-    const geometry = presenceSliceGeometry(slice);
-    const positions = centerOriginX(index, history.length, VIEWBOX_WIDTH);
-    const x = side === 'left' ? positions.left : positions.right;
-    const distance = Math.abs(x - VIEWBOX_WIDTH / 2) / (VIEWBOX_WIDTH / 2);
-    const pitchTexture = geometry.pitchStrength > 0
-      ? Math.sin(2 * Math.PI * geometry.density * distance) * geometry.pitchStrength * PITCH_MODULATION_DEPTH
-      : 0;
-    const amplitude = clamp(
-      geometry.amplitude * MAX_AMPLITUDE * (1 + pitchTexture),
-      0,
-      MAX_AMPLITUDE,
-    );
-    return { x, amplitude };
+  /** One half of the band, from the newest slice at the centre out to the oldest edge. */
+  function halfPoints(side) {
+    const slices = history.slice().reverse();
+    const last = slices.length - 1;
+    // centerOriginX places each slice; points between two slices interpolate.
+    const xOf = (index) => centerOriginX(last - index, history.length, VIEWBOX_WIDTH)[side];
+    const points = [];
+    let phase = 0;
+    for (let index = 0; index <= last; index += 1) {
+      const here = presenceSliceGeometry(slices[index]);
+      const next = index < last ? presenceSliceGeometry(slices[index + 1]) : here;
+      const steps = index < last ? POINTS_PER_SLICE : 1;
+      for (let step = 0; step < steps; step += 1) {
+        const t = step / POINTS_PER_SLICE;
+        const x = xOf(index) + ((index < last ? xOf(index + 1) : xOf(index)) - xOf(index)) * t;
+        const level = Math.pow(here.amplitude + (next.amplitude - here.amplitude) * t, LEVEL_CURVE);
+        const density = here.density + (next.density - here.density) * t;
+        const strength = here.pitchStrength + (next.pitchStrength - here.pitchStrength) * t;
+        const ripple = strength > 0 ? Math.sin(phase) * strength * PITCH_MODULATION_DEPTH : 0;
+        points.push({
+          x,
+          amplitude: clamp(level * MAX_AMPLITUDE * (1 + ripple), 0, CENTER_Y - 1),
+        });
+        phase += (2 * Math.PI * density) / (last * POINTS_PER_SLICE);
+      }
+    }
+    return points;
   }
 
-  function envelopePath() {
-    const left = history.map((slice, index) => visualPoint(slice, index, 'left'));
-    const right = history
-      .slice(0, -1)
-      .map((slice, index) => visualPoint(slice, index, 'right'))
-      .reverse();
-    const samples = [...left, ...right];
+  /** Left half from the oldest edge to the centre, then the right half back out. */
+  function targetPoints() {
+    return [...halfPoints('left').reverse(), ...halfPoints('right').slice(1)];
+  }
+
+  function envelopePath(samples) {
     const upper = samples.map((point) => ({ x: point.x, y: CENTER_Y - point.amplitude }));
     const lower = samples.map((point) => ({ x: point.x, y: CENTER_Y + point.amplitude })).reverse();
 
@@ -83,10 +114,41 @@ if (meter && wave) {
     return `${upperPath} L ${lower[0].x.toFixed(2)} ${lower[0].y.toFixed(2)} ${lowerPath.replace(/^M [^C]+/, '')} Z`;
   }
 
+  function draw() {
+    wave.setAttribute('d', envelopePath(drawn));
+  }
+
+  /** Moves the drawn band toward its target; stops once it has arrived. */
+  function step(now) {
+    frame = null;
+    const targets = targetPoints();
+    if (!drawn || drawn.length !== targets.length) drawn = targets.map((point) => ({ ...point, amplitude: 0 }));
+    const elapsed = lastFrameAt === null ? 16 : Math.min(100, now - lastFrameAt);
+    lastFrameAt = now;
+    const blend = 1 - Math.exp(-elapsed / EASE_MS);
+    let moving = false;
+    drawn = drawn.map((point, index) => {
+      const target = targets[index];
+      const amplitude = point.amplitude + (target.amplitude - point.amplitude) * blend;
+      const arrived = Math.abs(target.amplitude - amplitude) <= 0.05;
+      if (!arrived) moving = true;
+      return arrived ? target : { x: target.x, amplitude };
+    });
+    draw();
+    if (moving) frame = animationFrame(step);
+    else lastFrameAt = null;
+  }
+
   function render(active) {
     meter.dataset.active = active ? 'true' : 'false';
-    wave.setAttribute('d', envelopePath());
     wave.style.opacity = active ? '0.9' : '0';
+    if (!active || !animationFrame) {
+      // Cleared at once; without frames (tests, background tabs) drawn as is.
+      drawn = targetPoints();
+      draw();
+      return;
+    }
+    if (frame === null) frame = animationFrame(step);
   }
 
   function clearRoomStaleTimer() {

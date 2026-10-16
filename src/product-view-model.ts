@@ -92,6 +92,11 @@ export type ProductViewModelInput = {
     /** Whether a content-mode calibration can accept Robot backing evidence now. */
     contentEvidenceReady?: boolean;
     robotDeltaFresh: boolean;
+    /**
+     * The last boot measurement ended because the Mic never heard its chime,
+     * as with headphones. Another Realign the same way will not change that.
+     */
+    micProbeUnheard?: boolean;
   };
 };
 
@@ -118,6 +123,11 @@ export type ProductStatus = {
   };
   timing: {
     state: 'idle' | 'calibrating' | 'aligned' | 'fallback' | 'stale' | 'clamped';
+    /**
+     * The serving measurement is held while the Robot player position it was
+     * combined with is temporarily not reported. Still aligned; not a fallback.
+     */
+    syncHeld: boolean;
   };
   take: {
     lifecycle: TakeLifecycle;
@@ -155,11 +165,25 @@ function preparingCalibrationActive(input: ProductViewModelInput) {
   return calibrationActive(input) && input.timing.bootProbeActive === true;
 }
 
-/** Whether an acoustic measurement is the alignment the mixer is actually serving. */
+/**
+ * Whether an acoustic measurement is the alignment the mixer is actually serving.
+ *
+ * The mixer's own mode is the authority. A boot measurement whose Robot player
+ * delta went quiet is held, not revoked, once that delta has been established
+ * (calibration-applicability.ts), so the voice is still placed by the
+ * measurement. Requiring a fresh delta here again reported that room as having
+ * fallen back to the network estimate and asked for a Realign it did not need.
+ */
 function acousticAlignmentServing(input: ProductViewModelInput) {
   return input.timing.timingMode === 'acoustic-calibration'
-    && input.readiness.components.calibration.valid
-    && (!input.timing.requiresRobotPlayerDelta || input.timing.robotDeltaFresh);
+    && input.readiness.components.calibration.valid;
+}
+
+/** A held measurement: serving, but the Robot position it depends on is not current. */
+function alignmentSyncHeld(input: ProductViewModelInput) {
+  return acousticAlignmentServing(input)
+    && input.timing.requiresRobotPlayerDelta
+    && !input.timing.robotDeltaFresh;
 }
 
 function micState(input: ProductViewModelInput): RoomMicState {
@@ -284,6 +308,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
     performanceActive,
     timingState: timing,
     timingFrontierCorrectionActive: input.timing.frontierCorrectionActive === true,
+    timingProbeUnheard: input.timing.micProbeUnheard === true,
   });
   const attention = primaryAttention(issues);
   const health: ProductHealth = issues.some((issue) => issue.severity === 'critical')
@@ -339,7 +364,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
         handoffState: input.roomSong.handoffState,
       },
     },
-    timing: { state: timing },
+    timing: { state: timing, syncHeld: timing === 'aligned' && alignmentSyncHeld(input) },
     take: {
       lifecycle: input.take.lifecycle,
       takeId: input.take.takeId,

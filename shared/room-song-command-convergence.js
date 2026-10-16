@@ -61,7 +61,12 @@ export function roomSongCommandConvergence({
     if (state === 3) return 'intermediate';
     return 'none';
   }
-  if (desiredState === 2) return state === 2 ? 'complete' : 'none';
+  // A finished room is desired as paused at its end, and YouTube may report a
+  // player put there as ENDED rather than PAUSED. Requiring PAUSED left a page
+  // reloaded after the song finished restoring forever, ignoring every gesture.
+  if (desiredState === 2) {
+    return state === 2 || (desired.ended === true && state === 0) ? 'complete' : 'none';
+  }
   if (desiredState === 5) {
     if (state === 5 || state === 2) return 'complete';
     if (state === -1) return 'intermediate';

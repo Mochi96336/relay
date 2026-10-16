@@ -277,7 +277,7 @@ function normalizedDesiredState(value) {
   // Only a command that exists to move the player says so, and an older page or
   // a payload without the flag keeps the previous behaviour of positioning.
   const mustApplyPosition = desired.mustApplyPosition !== false;
-  return { videoId, positionSeconds, state, playbackRate, mustApplyPosition };
+  return { videoId, positionSeconds, state, playbackRate, mustApplyPosition, ended: desired.ended === true };
 }
 
 function projectedDesiredPosition(mutation, now = performance.now()) {
@@ -379,30 +379,35 @@ function roomCommandOwnsLocalAction(mutation, action) {
   return action === 'seek' && mutation.desired?.mustApplyPosition === true;
 }
 
-function localMutationForSnapshot(snapshot) {
-  if (!snapshot || !snapshot.previousVideoId) return null;
-  if (pendingHandoff) return null;
+function localMutationsForSnapshot(snapshot) {
+  if (!snapshot || !snapshot.previousVideoId) return [];
+  if (pendingHandoff) return [];
 
   const mutationContext = activeServerMutation();
-  if (mutationContext && mutationContext.source !== 'room-command') return null;
+  if (mutationContext && mutationContext.source !== 'room-command') return [];
 
   // Both intermediate and final effects of the active command are authorized.
   // Server completion is stricter: BUFFERING remains pending until PLAYING.
   if (mutationContext?.source === 'room-command' && snapshotMatchesDesired(snapshot, mutationContext)) {
-    return null;
+    return [];
   }
 
   if (snapshot.videoId !== snapshot.previousVideoId) {
     if (!roomCommandOwnsLocalAction(mutationContext, 'load')) {
-      return { action: 'load', videoId: snapshot.videoId, positionSeconds: Math.max(0, snapshot.currentTime) };
+      return [{ action: 'load', videoId: snapshot.videoId, positionSeconds: Math.max(0, snapshot.currentTime) }];
     }
   }
 
-  // Evaluate every changed dimension independently. An owned predecessor
-  // effect is skipped, not allowed to hide a simultaneous unowned mutation.
+  // Evaluate every changed dimension independently and send each one, in this
+  // order, as a chain the server folds together. One sample can hold two
+  // gestures: pressing Play on a finished song jumps back to the start and
+  // starts playing at once, and sending only the jump left the room ended
+  // while this player played on unauthorized. An owned predecessor effect is
+  // skipped, not allowed to hide a simultaneous unowned mutation.
+  const mutations = [];
   if (Math.abs(snapshot.timelineDeltaSeconds) > ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS) {
     if (!roomCommandOwnsLocalAction(mutationContext, 'seek')) {
-      return { action: 'seek', positionSeconds: Math.max(0, snapshot.currentTime) };
+      mutations.push({ action: 'seek', positionSeconds: Math.max(0, snapshot.currentTime) });
     }
   }
 
@@ -412,7 +417,7 @@ function localMutationForSnapshot(snapshot) {
     && Math.abs(snapshot.playbackRate - snapshot.previousPlaybackRate) > ROOM_SONG_RATE_TOLERANCE
   ) {
     if (!roomCommandOwnsLocalAction(mutationContext, 'rate')) {
-      return { action: 'rate', playbackRate: snapshot.playbackRate };
+      mutations.push({ action: 'rate', playbackRate: snapshot.playbackRate });
     }
   }
 
@@ -421,14 +426,13 @@ function localMutationForSnapshot(snapshot) {
     // finished song also passes through BUFFERING. song-playback-intent.js owns
     // the distinction.
     if (isNewPlayIntent(snapshot)) {
-      if (!roomCommandOwnsLocalAction(mutationContext, 'play')) return { action: 'play' };
-    }
-    if (snapshot.state === 2 && snapshot.previousState !== 2) {
-      if (!roomCommandOwnsLocalAction(mutationContext, 'pause')) return { action: 'pause' };
+      if (!roomCommandOwnsLocalAction(mutationContext, 'play')) mutations.push({ action: 'play' });
+    } else if (snapshot.state === 2 && snapshot.previousState !== 2) {
+      if (!roomCommandOwnsLocalAction(mutationContext, 'pause')) mutations.push({ action: 'pause' });
     }
   }
 
-  return null;
+  return mutations;
 }
 
 function renderSnapshot(snapshot) {
@@ -484,9 +488,9 @@ function renderSnapshot(snapshot) {
   // Detect a newer native control gesture even while an earlier command is
   // awaiting acceptance/proof. Stable intermediate telemetry stays suppressed
   // until the latest local intent has a server apply.
-  const mutation = localMutationForSnapshot(snapshot);
-  if (mutation) {
-    requestRoomSongCommand(mutation);
+  const mutations = localMutationsForSnapshot(snapshot);
+  if (mutations.length > 0) {
+    for (const mutation of mutations) requestRoomSongCommand(mutation);
     return;
   }
   if (localCommandPending) return;

@@ -38,6 +38,7 @@ export function reloadDesiredFromRoom(room) {
     positionSeconds: Number.isFinite(targetTime) ? Math.max(0, targetTime) : 0,
     state: state === 1 || state === 3 ? 1 : state === 5 ? 5 : 2,
     playbackRate: Number.isFinite(playbackRate) && playbackRate > 0 ? playbackRate : 1,
+    ended: state === 0,
   };
 }
 

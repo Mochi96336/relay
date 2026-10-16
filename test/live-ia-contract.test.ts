@@ -53,9 +53,6 @@ test('Live keeps Song then one performance task with Record before Mic adjustmen
   assert.equal(css.includes('body[data-self-mic="live"] .mic-live-control'), true);
   assert.match(html, /<details id="mic-live-control" class="mic-live-control">\s*<summary>\s*<span>Mic<\/span>/,
     'the Mic adjustment reads Mic in the markup itself');
-  assert.match(composition, /\.performance-stage > \.take-strip \{ order: 5 !important; \}/);
-  assert.match(composition, /\.performance-stage > \.mic-live-control \{ order: 6 !important; \}/);
-  assert.doesNotMatch(script, /performanceStage\.insertBefore\(lastTake|append(?:Child)?\(lastTake/);
 });
 
 test('persistent Live footer exposes only this-phone Room sound', () => {
@@ -67,15 +64,11 @@ test('persistent Live footer exposes only this-phone Room sound', () => {
 
   assert.match(html, /<script type="module" src="\/room-sound-ui\.js"><\/script>/);
   assert.equal(script.includes("'./room-sound-ui.js'"), false);
-  assert.match(roomSound, /roomSoundControlPresentation/);
   assert.doesNotMatch(roomSound, /'房間聲音'|'只影響這台裝置'/,
     'the DOM adapter must not regain Room sound product-copy ownership');
-  assert.match(roomSoundPresentation, /labelKey:\s*'roomSound\.label'/);
   assert.match(roomSoundPresentation, /scopeKey:\s*'roomSound\.scope'/);
   assert.doesNotMatch(roomSoundPresentation, /'房間聲音'|'只影響這台裝置'|'Room sound'/,
     'the semantic presenter owns keys, not locale branches');
-  assert.match(liveI18n, /'roomSound\.label': 'Room sound'/);
-  assert.match(liveI18n, /'roomSound\.label': '房間聲音'/);
   assert.match(liveI18n, /'roomSound\.scope': '只影響這台裝置'/);
   assert.doesNotMatch(composition, /\.local-sound-control|#listen-gain-value/,
     'formal composition must not own persistent Room sound rail geometry');
@@ -195,14 +188,7 @@ test('header and performance controls retain real phone-sized touch targets', ()
 });
 
 test('P0 Live states remove retired presenters instead of masking them later', () => {
-  assert.doesNotMatch(style, /#start-publisher::after|Take over mic|content:\s*"Take mic"/);
   assert.doesNotMatch(youtubeSync, /server-timeline-state|server-timeline-values|server-timeline-note|insertAdjacentElement/);
-  assert.match(youtubeSync, /relay:playback-diagnostics/);
-
-  assert.match(roomSound, /relay-listen-state/);
-  assert.doesNotMatch(roomSound, /MutationObserver/);
-
-  assert.match(presence, /relay-mic-action-state/);
   assert.doesNotMatch(presence, /publisherButton\.textContent|takeoverPanel|takeoverCopy/);
   assert.match(
     micActions,

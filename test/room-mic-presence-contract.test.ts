@@ -97,13 +97,13 @@ test('owner or generation change and stale Room Mic evidence clear the old visua
 });
 
 test('center-origin production renderer mirrors one history and never uses five bands as pitch', () => {
-  const visualPoint = functionCode(presence, 'visualPoint');
-  assert.match(visualPoint, /presenceSliceGeometry/);
-  assert.match(visualPoint, /centerOriginX/);
+  const halfPoints = functionCode(presence, 'halfPoints');
+  assert.match(halfPoints, /presenceSliceGeometry/);
+  assert.match(halfPoints, /centerOriginX/);
+  assert.match(halfPoints, /here\.density/, 'pitch density, not the five bands, shapes the ripple');
 
-  const envelopePath = functionCode(presence, 'envelopePath');
-  assert.match(envelopePath, /const left = history\.map\(\(slice, index\) => visualPoint\(slice, index, 'left'\)\)/);
-  assert.match(envelopePath, /const right = history[\s\S]*?\.slice\(0, -1\)[\s\S]*?visualPoint\(slice, index, 'right'\)[\s\S]*?\.reverse\(\)/);
-  assert.match(envelopePath, /const samples = \[\.\.\.left, \.\.\.right\]/);
+  const targetPoints = functionCode(presence, 'targetPoints');
+  assert.match(targetPoints, /halfPoints\('left'\)\.reverse\(\)/);
+  assert.match(targetPoints, /halfPoints\('right'\)\.slice\(1\)/);
   assert.doesNotMatch(presenceCode, /centroid/);
 });

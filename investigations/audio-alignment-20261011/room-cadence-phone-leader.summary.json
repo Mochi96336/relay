@@ -1,8 +1,0 @@
-{
-  "frames": 2250,
-  "discontinuities": 0,
-  "maxArrivalGapMs": 36.675145999999586,
-  "p99ArrivalGapMs": 25.021529999998165,
-  "over40ms": 0,
-  "over100ms": 0
-}

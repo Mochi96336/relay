@@ -223,11 +223,6 @@
         </section>
       </footer>
 
-      <div class="legacy-mix-compat" hidden aria-hidden="true">
-        <input id="song-level" type="range" min="100" max="100" step="1" value="100" disabled tabindex="-1" />
-        <output id="song-level-value" for="song-level">100%</output>
-      </div>
-
       <section id="system-attention" class="attention-region" aria-live="polite" hidden>
         <button id="attention-link" type="button" class="attention-link">
           <span id="attention-copy" data-i18n="system.attention">System needs attention</span><span>›</span>
@@ -284,7 +279,6 @@
 
               <div class="diagnostics-tabs" role="tablist" aria-label="Relay diagnostics" data-i18n-aria-label="diag.tabsAria">
                 <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="overview" aria-selected="true" data-i18n="diag.tab.overview">Overview</button>
-                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="session" aria-selected="false" data-i18n="diag.tab.session">Session</button>
                 <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="mic" aria-selected="false" data-i18n="diag.tab.mic">Mic</button>
                 <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="audio" aria-selected="false" data-i18n="diag.tab.audio">Audio</button>
                 <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="timing" aria-selected="false" data-i18n="diag.tab.timing">Timing</button>
@@ -296,10 +290,6 @@
                 <dl id="diag-overview-ledger" class="diagnostic-ledger"></dl>
               </section>
 
-              <section class="diagnostics-view" data-diagnostics-panel="session" hidden>
-                <dl id="diag-session-ledger" class="diagnostic-ledger"></dl>
-              </section>
-
               <section class="diagnostics-view" data-diagnostics-panel="mic" hidden>
                 <p class="diagnostics-intro" data-i18n="diag.micIntro">Whether the voice is actually reaching the room, and what the device, network and Relay are doing about it. Updates every second while open.</p>
                 <dl id="diag-mic-ledger" class="diagnostic-ledger"></dl>
@@ -308,7 +298,7 @@
               <section class="diagnostics-view" data-diagnostics-panel="audio" hidden>
                 <dl id="diag-audio-ledger" class="diagnostic-ledger"></dl>
                 <p class="diagnostic-group" data-i18n="diag.listen.heading">Room playback · by receiver</p>
-                <p class="diagnostics-intro" data-i18n="diag.listen.cumulative">Underruns and audio handling figures are cumulative, not a current fault verdict.</p>
+                <p id="diag-listeners-cumulative" class="diagnostics-intro" data-i18n="diag.listen.cumulative">Underruns, repeated audio, latency trimmed and overflow dropped are totals since this playback started, not a sign of a current fault.</p>
                 <div id="diag-listeners"></div>
               </section>
 
@@ -318,12 +308,6 @@
                      sit closed under the readable rows instead of doubling the tab's length. -->
                 <details class="diagnostics-advanced">
                   <summary class="diagnostics-subheading" data-i18n="diag.cal.heading">Audio comparison</summary>
-                  <dl class="diagnostic-ledger">
-                    <div class="diagnostic-pair">
-                      <dt data-i18n="diag.cal.applied">Voice delay compensation (now / target)</dt>
-                      <dd data-tone="neutral"><span id="diag-calibration-applied" class="diagnostic-value">—</span><span class="diagnostic-note" data-i18n="diag.cal.appliedNote">When the target changes, the current value approaches it gradually to avoid an abrupt shift.</span></dd>
-                    </div>
-                  </dl>
                   <p class="diagnostic-group" data-i18n="diag.cal.group.probe">At Mic start: test tone</p>
                   <dl class="diagnostic-ledger">
                     <div class="diagnostic-pair">
@@ -338,12 +322,7 @@
                       <dt data-i18n="diag.cal.pathDifference">Path difference</dt>
                       <dd data-tone="neutral"><span id="diag-path-difference" class="diagnostic-value">—</span><span class="diagnostic-note" data-i18n="diag.cal.pathDifferenceNote">The Mic path delay minus the song path delay.</span></dd>
                     </div>
-                    <div class="diagnostic-pair">
-                      <dt data-i18n="diag.cal.effective">Test tone result</dt>
-                      <dd data-tone="neutral"><span id="diag-path-effective" class="diagnostic-value">—</span><span class="diagnostic-note" data-i18n="diag.cal.effectiveNote">The path difference plus the current Robot player position.</span></dd>
-                    </div>
                   </dl>
-                  <dl id="diag-boot-stored-ledger" class="diagnostic-ledger"></dl>
                   <p class="diagnostic-group" data-i18n="diag.cal.group.content">During playback: content comparison</p>
                   <dl class="diagnostic-ledger">
                     <div class="diagnostic-pair">
@@ -375,7 +354,6 @@
                       <dd data-tone="neutral"><span id="diag-content-segments" class="diagnostic-value">—</span><span class="diagnostic-note" data-i18n="diag.cal.contentSegmentsNote">Delays measured per segment in this comparison; a large spread indicates an unstable result.</span></dd>
                     </div>
                   </dl>
-                  <dl id="diag-content-target-ledger" class="diagnostic-ledger"></dl>
                   <p class="diagnostic-group" data-i18n="diag.cal.group.validation">After calibration: ongoing validation</p>
                   <dl class="diagnostic-ledger">
                     <div class="diagnostic-pair">

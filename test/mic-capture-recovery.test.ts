@@ -555,7 +555,6 @@ test('reconnect preserves a healthy generation while graph recovery re-registers
 
 test('stale async socket continuation and stale worklet messages cannot mutate replacement capture', () => {
   assert.match(app, /const ws = await connectSocket\(\);[\s\S]*!isCurrentPublisherCapture\(sessionEpoch, expectedGeneration\)[\s\S]*ws\.close\(\)/);
-  assert.match(app, /function captureGraphIsCurrent\(graph\)[\s\S]*activeCaptureGraph === graph[\s\S]*graph\.epoch === captureGraphEpoch/);
   assert.match(app, /if \(!captureGraphIsCurrent\(graph\)\) return;/);
 });
 

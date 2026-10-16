@@ -38,6 +38,8 @@ export type ProductIssueCause =
   | 'mic-too-quiet'
   | 'timing-calibrating'
   | 'timing-fallback'
+  /** Falling back because the Mic never heard the boot chime (headphones, low speaker volume). */
+  | 'timing-probe-unheard'
   | 'timing-stale'
   | 'timing-clamped'
   | 'mic-frontier-lagging'
@@ -53,6 +55,10 @@ export type ProductRecovery =
   | 'raise-mic-gain'
   | 'retry-recording'
   | 'recalibrate'
+  /** Realign is refused while a Take records; the recording keeps the timing it started with. */
+  | 'recalibrate-after-take'
+  /** Realign helps only through speakers; with headphones the estimate stays. */
+  | 'recalibrate-speaker'
   | 'host-service'
   | 'change-song';
 
@@ -111,7 +117,19 @@ export type ProductIssueFacts = {
   timingState: 'idle' | 'calibrating' | 'aligned' | 'fallback' | 'stale' | 'clamped';
   /** The serving alignment is being held back by the live Mic frontier, not only by buffer affordability. */
   timingFrontierCorrectionActive?: boolean;
+  /** The last boot measurement ended because the Mic never heard its chime. */
+  timingProbeUnheard?: boolean;
 };
+
+/**
+ * A Take freezes timing: Realign is refused and background measurement stops
+ * until it ends, so "measure again" is only advice for after the recording.
+ */
+function recalibrateRecovery(facts: ProductIssueFacts): ProductRecovery {
+  return facts.takeLifecycle === 'recording' || facts.takeLifecycle === 'finalizing'
+    ? 'recalibrate-after-take'
+    : 'recalibrate';
+}
 
 function hostIssues(facts: ProductIssueFacts) {
   const issues: ProductIssue[] = [];
@@ -323,21 +341,28 @@ export function buildProductIssues(facts: ProductIssueFacts): ProductIssue[] {
       // cannot move the samples that have actually arrived. Restarting the Mic
       // creates a fresh capture epoch and deliberately clears that correction.
       // A pure buffer/calibration clamp still belongs to timing calibration.
-      recovery: facts.timingFrontierCorrectionActive === true ? 'retry-mic' : 'recalibrate',
+      recovery: facts.timingFrontierCorrectionActive === true ? 'retry-mic' : recalibrateRecovery(facts),
     });
   } else if (facts.performanceActive && ['calibrating', 'fallback', 'stale'].includes(facts.timingState)) {
+    const probeUnheard = facts.timingState === 'fallback' && facts.timingProbeUnheard === true;
     const cause = facts.timingState === 'calibrating'
       ? 'timing-calibrating'
       : facts.timingState === 'stale'
         ? 'timing-stale'
-        : 'timing-fallback';
+        : probeUnheard
+          ? 'timing-probe-unheard'
+          : 'timing-fallback';
     issues.push({
       code: 'timing-recovering',
       scope: 'timing',
       severity: 'warning',
       cause,
       affects: ['timing', 'recording'],
-      recovery: facts.timingState === 'calibrating' ? 'automatic' : 'recalibrate',
+      recovery: facts.timingState === 'calibrating'
+        ? 'automatic'
+        : probeUnheard && recalibrateRecovery(facts) === 'recalibrate'
+          ? 'recalibrate-speaker'
+          : recalibrateRecovery(facts),
     });
   }
 

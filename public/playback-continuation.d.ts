@@ -3,6 +3,8 @@ export type ReloadDesiredState = {
   positionSeconds: number;
   state: 1 | 2 | 5;
   playbackRate: number;
+  /** The room had finished: paused at its end, where the player may report ENDED. */
+  ended: boolean;
 };
 
 export type PlaybackContinuationDecision = {

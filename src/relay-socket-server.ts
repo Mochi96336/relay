@@ -1,4 +1,5 @@
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
+import type { Duplex } from 'node:stream';
 
 import WebSocket, { WebSocketServer } from 'ws';
 
@@ -502,8 +503,14 @@ export function createMonitorSocketTransport(
  * liveness, and heartbeat cleanup. Message meaning, identity/auth authority,
  * and disconnect domain effects stay in server orchestration.
  */
+/**
+ * Something that hands Relay WebSocket upgrades: the page server, and the
+ * optional direct TLS server that bypasses the tunnel (see direct-socket.ts).
+ */
+export type RelayUpgradeSource = Pick<HttpServer, 'on'>;
+
 export function createRelayWebSocketServer(
-  server: HttpServer,
+  servers: RelayUpgradeSource | readonly RelayUpgradeSource[],
   options: RelaySocketServerOptions,
 ) {
   const wss = new WebSocketServer({
@@ -514,7 +521,7 @@ export function createRelayWebSocketServer(
   const socketPath = options.path ?? '/ws';
   let connectionSequence = 0;
 
-  server.on('upgrade', (request, socket, head) => {
+  const onUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer) => {
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
     if (url.pathname !== socketPath) {
       socket.destroy();
@@ -535,7 +542,8 @@ export function createRelayWebSocketServer(
     wss.handleUpgrade(request, socket, head, (webSocket) => {
       wss.emit('connection', webSocket, request);
     });
-  });
+  };
+  for (const server of Array.isArray(servers) ? servers : [servers]) server.on('upgrade', onUpgrade);
 
   wss.on('connection', (rawSocket: WebSocket, _request: IncomingMessage) => {
     const socket = rawSocket as RelaySocket;

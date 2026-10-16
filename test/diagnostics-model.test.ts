@@ -92,15 +92,30 @@ describe('Overview', () => {
     );
   });
 
-  it('points at the System issues instead of repeating them', () => {
+  it('leaves overall health to the System panel heading instead of repeating it', () => {
     const rows = byKey(describeOverview({
       product: { health: 'degraded', lifecycle: 'live', issues: [{}, {}] },
     }, en));
-    assert.deepEqual(
-      [rows.health.value, rows.health.note, rows.health.tone],
-      ['Degraded', '2 problems are listed in System above.', 'warn'],
-    );
+    assert.equal(rows.health, undefined);
     assert.equal(rows.lifecycle.value, 'Live');
+  });
+
+  it('folds the room facts in, and shows Mic audio only while someone holds the Mic', () => {
+    const product = {
+      lifecycle: 'idle',
+      room: { participantCount: 2, mic: { state: 'free' }, song: { state: 'empty' } },
+      take: { lifecycle: 'idle' },
+    };
+    const free = describeOverview({ product, statusz: { source: { micConnected: false } } }, en);
+    assert.deepEqual(free.map((row) => row.key), ['lifecycle', 'people', 'mic', 'song', 'take', 'host', 'session']);
+    assert.equal(byKey(free).mic.value, 'Free');
+
+    const held = describeOverview({
+      product: { ...product, room: { ...product.room, mic: { state: 'live', ownerNickname: 'Mochi' } } },
+      statusz: { source: { micConnected: true, micStreaming: true } },
+    }, en);
+    assert.deepEqual(held.map((row) => row.key), ['lifecycle', 'people', 'mic', 'micAudio', 'song', 'take', 'host', 'session']);
+    assert.equal(byKey(held).mic.value, 'Mochi');
   });
 });
 
@@ -384,32 +399,60 @@ describe('locales', () => {
   });
 });
 
-it('Timing keeps reported YT positions and calibration coordinates distinct without RTT/2', () => {
-  const timing = {
-    activeCalibrationKind: 'content', robotRoute: true, robotDeltaFresh: true,
-    calibratedMicLagTargetMs: -160, desiredCalibratedMicLagMs: -184,
-    robotPlayerOffsetMs: -300, robotOffsetTimingEvidence: { playerSeconds: 90.1 },
-    bootCalibration: { advanceMs: -180, micLatencyMs: 225, backingLatencyMs: 100 },
+it('Timing shows one compensation and one line that adds up to it', () => {
+  const timeline = { connected: true, serverTime: 90.5, playbackRate: .5, state: 1 };
+  const content = {
+    activeCalibrationKind: 'content', robotRoute: true, robotDeltaFresh: true, robotPlayerOffsetMs: -300,
+    micLagMs: -70, desiredCalibratedMicLagMs: -184, calibratedMicLagTargetMs: -184,
+    mixerCalibrationAuthority: { kind: 'content' },
     sampleSongFallback: { candidateMs: -286, active: false },
   };
-  const rows = byKey(describeTiming({ source: source(), timing,
-    timeline: { connected: true, youtubeTime: 90.4, serverTime: 90.5, playbackRate: .5, state: 1, transportEstimateMs: 12 },
+  const rows = byKey(describeTiming({
+    source: source({ activeCalibrationKind: 'content', appliedMicAdvanceMs: -184, requestedMicAdvanceMs: -184 }), timing: content, timeline,
   }, en));
-  assert.equal(rows.youtubePhone.value, '90.400 s');
-  assert.equal(rows.youtubeServer.value, '90.500 s');
-  assert.equal(rows.youtubeRobot.value, '90.100 s');
-  assert.match(rows.youtubeRobot.note, /not projected/);
-  assert.equal(rows.bootLive.value, '-475 ms');
-  assert.equal(rows.bootStored.value, '-180 ms');
-  assert.equal(rows.contentTarget.value, '-184 ms');
-  assert.equal(rows.mixerTarget.value, '-160 ms');
+  assert.equal(rows.offset.value, '-184 ms');
+  assert.equal(rows.formula.value, 'measured -70 ms + player offset -114 ms = -184 ms');
+  assert.equal(rows.formula.note, '');
+  // Phone, room and Robot positions agree to milliseconds; one row, room clock.
+  assert.equal(rows.youtubeRate.value, 'Playing · 0.5× · 1:30');
+  for (const gone of ['youtubePhone', 'youtubeServer', 'youtubeRobot', 'mixerTarget', 'contentTarget', 'bootStored', 'bootLive']) {
+    assert.equal(rows[gone], undefined, gone);
+  }
   assert.equal(rows.shadow.value, '-286 ms');
-  assert.equal(rows.rttHalf, undefined);
-  const stale = byKey(describeTiming({ source: source(), timing: { ...timing, robotDeltaFresh: false },
-    timeline: { connected: true, playbackRate: 1 },
+
+  // The mixer has not followed a small change yet: one number, one line, and why they differ.
+  const settling = byKey(describeTiming({
+    source: source({ activeCalibrationKind: 'content', appliedMicAdvanceMs: -162, requestedMicAdvanceMs: -162 }),
+    timing: { ...content, desiredCalibratedMicLagMs: -157, micLagMs: -150 }, timeline,
   }, zh));
-  assert.equal(stale.youtubeRobot.value, '—');
-  assert.equal(stale.bootLive.value, '—');
+  assert.equal(settling.offset.value, '-162 ms');
+  assert.equal(settling.formula.value, '量測 -150 ms + 播放器偏移 -7 ms = -157 ms');
+  assert.match(settling.formula.note, /跟得慢/);
+
+  // The Robot went quiet: the mixer keeps the last converted value, and says so.
+  const held = byKey(describeTiming({
+    source: source({ activeCalibrationKind: 'content', appliedMicAdvanceMs: -160, requestedMicAdvanceMs: -160 }),
+    timing: { ...content, robotDeltaFresh: false, desiredCalibratedMicLagMs: null, calibratedMicLagTargetMs: -160 },
+    timeline,
+  }, zh));
+  assert.equal(held.formula.value, '量測 -70 ms + 播放器偏移 -90 ms = -160 ms');
+  assert.match(held.formula.note, /沿用/);
+
+  // Test tone: whose Mic, minus the song path, plus where the Robot's player is.
+  const boot = byKey(describeTiming({
+    source: source({ appliedMicAdvanceMs: -159, requestedMicAdvanceMs: -159 }),
+    timing: { activeCalibrationKind: 'boot-probe', robotRoute: true, robotDeltaFresh: true, robotPlayerOffsetMs: -259,
+      bootCalibration: { micLatencyMs: 190, backingLatencyMs: 90, deltaMs: -291 }, bootCalibrationMic: { nickname: 'Mochi' } },
+    timeline: { ...timeline, playbackRate: 1 },
+  }, zh));
+  assert.equal(boot.formula.value, 'Mochi 的 Mic 190 ms − 歌曲 90 ms + 播放器偏移 -259 ms = -159 ms');
+  assert.equal(boot.formula.note, '');
+  const noSong = byKey(describeTiming({
+    source: source({ appliedMicAdvanceMs: 100, requestedMicAdvanceMs: 100 }),
+    timing: { activeCalibrationKind: 'boot-probe', robotRoute: true, bootCalibration: { micLatencyMs: 190, backingLatencyMs: 90 } },
+    timeline: { connected: true, state: 2, playbackRate: 1 },
+  }, en));
+  assert.equal(noSong.formula.value, 'Mic 190 ms − song 90 ms = +100 ms');
 });
 
 it('Timing names sample/song when it actually controls fallback', () => {
@@ -418,21 +461,20 @@ it('Timing names sample/song when it actually controls fallback', () => {
   }, en));
   assert.equal(rows.method.value, 'Sample / YouTube time estimate');
   assert.match(rows.shadow.note, /Active fallback/);
+  const estimate = byKey(describeTiming({
+    source: source({ timingMode: 'network-estimate', appliedMicAdvanceMs: 143, requestedMicAdvanceMs: 143 }),
+    timing: { fallbackNetworkMs: 143, sampleSongFallback: { active: false } },
+  }, zh));
+  assert.equal(estimate.formula.value, '網路估計 +143 ms');
 });
 
 
-it('Timing hides expired YT state and Boot projection but retains historical measurements', () => {
+it('Timing hides expired YT state', () => {
   const rows = byKey(describeTiming({ source: source(),
     timeline: { connected: false, youtubeTime: 90, serverTime: 90, state: 1, playbackRate: 1 },
     timing: { robotRoute: true, robotDeltaFresh: true, robotPlayerOffsetMs: 200,
       robotOffsetTimingEvidence: { playerSeconds: 90 }, requestedMicAdvanceMs: 20,
       bootCalibration: { advanceMs: 100, micLatencyMs: 200, backingLatencyMs: 100 } },
   }, en));
-  assert.equal(rows.youtubePhone.value, '—');
-  assert.equal(rows.youtubeServer.value, '—');
-  assert.equal(rows.youtubeRobot.value, '—');
   assert.equal(rows.youtubeRate.value, 'Not connected');
-  assert.equal(rows.bootLive.value, '—');
-  assert.equal(rows.bootStored.value, '+100 ms');
-  assert.equal(rows.mixerTarget.value, '+20 ms');
 });

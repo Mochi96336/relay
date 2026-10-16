@@ -417,3 +417,48 @@ test('an unconfigured or nonsense tolerance falls back to the documented default
     assert.equal(result.evidence.timingDivergedSamples, 960);
   }
 });
+
+test('a Take records which timing placed each part of it and how hard the voice was held down', () => {
+  const tracker = new TakeQualityTracker({ sampleRate: RATE, timingDivergenceToleranceMs: 40 });
+  tracker.noteTimingAtStart({
+    appliedCalibrationKind: 'none',
+    estimateSource: 'sample-song',
+    calibrationError: 'Mic probe correlation 0.385 is below 0.5.',
+  });
+  // Later calls do not rewrite what the recording started with.
+  tracker.noteTimingAtStart({ appliedCalibrationKind: 'boot-probe', estimateSource: null, calibrationError: null });
+
+  const frame = RATE / 100;
+  tracker.observeFrame(frame, frameState({ timingMode: 'network-estimate', estimateSource: 'sample-song' }),
+    mixedFrame({ limitedSamples: frame, heavyLimitedSamples: frame / 2 }));
+  tracker.observeFrame(frame, frameState({ timingMode: 'network-estimate', estimateSource: 'transport' }), mixedFrame());
+  tracker.observeFrame(frame, frameState({ appliedCalibrationKind: 'boot-probe' }), mixedFrame());
+  tracker.observeFrame(frame, frameState({ appliedCalibrationKind: 'content' }), mixedFrame());
+
+  const { evidence: recorded, issues } = tracker.assessment();
+  assert.equal(recorded.networkEstimateSamples, 2 * frame);
+  assert.equal(recorded.sampleSongEstimateSamples, frame);
+  assert.equal(recorded.sampleSongEstimateMs, 10);
+  assert.equal(recorded.bootProbeAlignedSamples, frame);
+  assert.equal(recorded.contentAlignedSamples, frame);
+  assert.equal(recorded.limitedSamples, frame);
+  assert.equal(recorded.heavyLimitedSamples, frame / 2);
+  assert.equal(recorded.heavyLimitedMs, 5);
+  assert.deepEqual(recorded.timingAtStart, {
+    appliedCalibrationKind: 'none',
+    estimateSource: 'sample-song',
+    calibrationError: 'Mic probe correlation 0.385 is below 0.5.',
+  });
+  assert.match(
+    issues.find((issue) => issue.code === 'timing-fallback')?.message ?? '',
+    /\(10 ms sample\/song estimate, 10 ms transport estimate\)/,
+  );
+});
+
+test('a stored Take without timing provenance keeps its old fallback message', () => {
+  const assessed = assessTakeQuality(evidence({ networkEstimateSamples: RATE, networkEstimateMs: 1_000 }));
+  assert.equal(
+    assessed.issues.find((issue) => issue.code === 'timing-fallback')?.message,
+    'Part of the Take used network-estimate timing instead of an applicable acoustic calibration.',
+  );
+});

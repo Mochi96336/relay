@@ -268,9 +268,9 @@ function tryUnmute(tapSoundKey) {
   unmuteTimer = setTimeout(() => {
     unmuteTimer = null;
     if (ownGeneration !== generation || soundState !== 'unmuting') return;
-    let state = null;
-    try { state = Number(player.getPlayerState()); } catch {}
-    if (state === 1 && !playerMuted()) {
+    // Buffering after a successful unmute is not an autoplay refusal.
+    // Re-muting here forced an already audible B to ask for another tap.
+    if (!playerMuted()) {
       soundState = 'audible';
       tick();
       return;

@@ -3,14 +3,14 @@ import { expect, test } from '@playwright/test';
 const BASE = process.env.RELAY_INTERACTION_URL ?? 'http://127.0.0.1:4173/';
 test.use({ viewport: { width: 390, height: 844 } });
 
-async function openFollowerFixture(page, { blocked = false, unmutePauses = false } = {}) {
+async function openFollowerFixture(page, { blocked = false, unmutePauses = false, unmuteBuffers = false } = {}) {
   // Deterministic fixture: YouTube is mocked below; external assets must not
   // hold navigation open when the network is slow or unavailable.
   await page.route('**/*', route => new URL(route.request().url()).origin === new URL(BASE).origin
     ? route.continue() : route.abort());
   await page.goto(new URL('__live-visual.html', BASE).href);
   await expect.poll(() => page.evaluate(() => window.__relayVisualReady === true)).toBe(true);
-  await page.evaluate(async ({ blocked, unmutePauses }) => {
+  await page.evaluate(async ({ blocked, unmutePauses, unmuteBuffers }) => {
     window.__followerCalls = [];
     window.__songAnchors = 0;
     window.addEventListener('relay-choir-song-anchor', () => { window.__songAnchors++; });
@@ -48,7 +48,7 @@ async function openFollowerFixture(page, { blocked = false, unmutePauses = false
         unMute() {
           window.__followerCalls.push(['unmute']);
           if (unmutePauses) this.state = 2;
-          else this.muted = false;
+          else { this.muted = false; if (unmuteBuffers) this.state = 3; }
         }
         isMuted() { return this.muted; }
         seekTo(position) { window.__followerCalls.push(['seek', position]); this.position = position; }
@@ -71,7 +71,7 @@ async function openFollowerFixture(page, { blocked = false, unmutePauses = false
       }));
     };
     window.__emitFollowerRoom();
-  }, { blocked, unmutePauses });
+  }, { blocked, unmutePauses, unmuteBuffers });
 }
 
 test('B keeps ordinary Song layout and follows automatically after consent', async ({ page }) => {
@@ -168,4 +168,24 @@ test('where a tap is needed for sound (iOS), the song keeps time muted and B is 
   await expect(unmute).toBeHidden();
   const calls = (await page.evaluate(() => window.__followerCalls)).map(x => x[0]);
   expect(calls.filter(x => x === 'unmute')).toHaveLength(2);
+});
+
+
+test('a successful unmute followed by buffering never automatically mutes B again', async ({ page }) => {
+  await openFollowerFixture(page, { unmuteBuffers: true });
+  await page.evaluate(() => {
+    setInterval(() => window.__emitFollowerRoom(), 300);
+    window.dispatchEvent(new CustomEvent('relay-choir-guest-state', { detail: { enabled: true } }));
+  });
+  await expect.poll(() => page.evaluate(() => window.__localFollower.state)).toBe(3);
+  // Allow the unmute check to run while YouTube is still buffering.
+  await expect.poll(() => page.evaluate(() => window.__followerCalls
+    .filter(call => call[0] === 'unmute').length)).toBe(1);
+  await page.waitForTimeout(700);
+  expect(await page.evaluate(() => window.__localFollower.muted)).toBe(false);
+  expect(await page.evaluate(() => window.__followerCalls
+    .filter(call => call[0] === 'mute').length)).toBe(1);
+  await page.evaluate(() => { window.__localFollower.state = 1; });
+  await expect(page.locator('#choir-follower-unmute')).toBeHidden();
+  await expect(page.locator('#choir-follower-status')).toBeHidden();
 });

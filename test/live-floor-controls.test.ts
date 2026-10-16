@@ -62,7 +62,7 @@ test('Mic gain is the rail immediately above Room sound', async () => {
   assert.match(css, /\.live-actions[\s\S]*margin-top:\s*0 !important/);
   assert.match(
     liveIa,
-    /relay-microphone-local-state[\s\S]*micLiveControl\.open = event\.detail\?\.active === true/,
+    /micLiveControl\.open = primaryMicActive \|\| secondaryMicActive[\s\S]*relay-microphone-local-state[\s\S]*primaryMicActive = event\.detail\?\.active === true/,
     'the fixed Mic rail must be open while this phone owns the live microphone',
   );
   assert.doesNotMatch(

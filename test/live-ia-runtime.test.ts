@@ -44,7 +44,12 @@ class FakeDocument extends FakeTarget {
   }
 }
 
-class FakeWindow extends FakeTarget {}
+class FakeWindow extends FakeTarget {
+  dispatchEvent(event: Event) {
+    this.dispatch(event.type, (event as CustomEvent).detail);
+    return true;
+  }
+}
 
 test('System click opens the secondary sheet at runtime', async () => {
   const document = new FakeDocument();
@@ -59,6 +64,8 @@ test('System click opens the secondary sheet at runtime', async () => {
   document.nodes.set('#close-system', closeSystem);
   document.nodes.set('#system-panel', systemPanel);
   document.nodes.set('#room-more', moreMenu);
+  const micControl = new FakeTarget();
+  document.nodes.set('#mic-live-control', micControl);
 
   const globals = globalThis as any;
   const previous = {
@@ -79,6 +86,14 @@ test('System click opens the secondary sheet at runtime', async () => {
     moduleUrl.searchParams.set('runtime-test', `${Date.now()}-${Math.random()}`);
     await import(moduleUrl.href);
 
+    window.dispatch('relay-choir-guest-state', { enabled: true });
+    assert.equal(micControl.open, true);
+    window.dispatch('relay-microphone-local-state', { active: false });
+    assert.equal(micControl.open, true, 'B keeps the shared Mic rail open');
+    window.dispatch('relay-choir-guest-state', { enabled: false });
+    assert.equal(micControl.open, false);
+    window.dispatch('relay-microphone-local-state', { active: true });
+    assert.equal(micControl.open, true);
     assert.equal(systemPanel.open, false);
     openSystem.click();
     assert.equal(systemPanel.open, true);

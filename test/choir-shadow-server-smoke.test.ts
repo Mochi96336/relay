@@ -704,7 +704,14 @@ test('without Content, B is placed by its YouTube time against the Robot', async
     const held = after?.duetSecondary;
     assert.equal(held?.audible, true, `B stays in the mix through a lapse: ${JSON.stringify({
       held, room: after?.duetRoom, ingress: after?.duetIngress })}\n${relay.stdout().split('\n').filter((l) => l.startsWith('[choir]')).slice(-8).join('\n')}`);
-    assert.equal(held.targetLagMs, duet.targetLagMs);
+    // The last B anchor remains usable for its first second without new
+    // reports; A/Robot clock trim may still refine the estimate during that
+    // interval. Once it has expired, the target must stay exactly fixed.
+    const heldLag = held.targetLagMs;
+    for (const until = Date.now() + 500; Date.now() < until; i++) await step();
+    const settled = (await (await fetch(relay.httpUrl('/statusz'))).json()).audio?.duetSecondary;
+    assert.equal(settled?.audible, true);
+    assert.equal(settled.targetLagMs, heldLag);
   } finally {
     for (const client of clients) client.close();
     await relay.stop();

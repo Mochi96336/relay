@@ -389,6 +389,14 @@ const choirRestartCoordinator = choirShadow
       )),
     }),
     (retiredRoomEpoch) => {
+      const song = youtubeTimeline.statusPayload();
+      logChoir('room-retired', {
+        roomEpoch: retiredRoomEpoch, songState: song.state ?? null,
+        connected: song.connected, leaderFresh: song.leaderFresh,
+        revision: song.revision, corrections: song.corrections ?? null,
+        phaseCorrections: song.phaseCorrections ?? null,
+        ageMs: song.ageMs ?? null, robotGeneration: sourceRuntime.generation,
+      });
       choirSourceMirror?.revokeRoom(retiredRoomEpoch);
       choirContentPipeline?.cancelRoom(retiredRoomEpoch);
     },

@@ -23,6 +23,7 @@ let attempt = 0;
 let claimTimer = null;
 /** The latest room the server announced, waiting for capture to be ready. */
 let roomReady = false;
+let announcedRoomEpoch = null;
 const capture = new ChoirSecondaryCapture(() => disconnect());
 
 function notify(state) {
@@ -33,6 +34,7 @@ function notify(state) {
 /** Stops everything: B left, was refused, or capture failed. */
 function disconnect() {
   roomReady = false;
+  announcedRoomEpoch = null;
   closeMedia();
   capture.stop();
 }
@@ -105,6 +107,13 @@ window.addEventListener('relay-choir-start-secondary-capture', async () => {
 window.addEventListener('relay-choir-media-message', (event) => {
   if (!enabled) return;
   if (event.detail?.type === 'choir-room-ready') {
+    const epoch = event.detail.roomEpoch;
+    if (!Number.isSafeInteger(epoch) || epoch < 1
+      || (announcedRoomEpoch !== null && epoch < announcedRoomEpoch)) return;
+    // A repeated announcement while connecting must not close B's media and
+    // retire the very room it is trying to join. A real disconnect can retry.
+    if (epoch === announcedRoomEpoch && (awaitingClaim || mediaSocket)) return;
+    announcedRoomEpoch = epoch;
     roomReady = true;
     requestClaim();
     return;

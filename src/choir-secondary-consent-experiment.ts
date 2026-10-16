@@ -138,13 +138,16 @@ export class ChoirSecondaryConsentExperiment {
    * over: a different B joining replaces the one already in, who is told it
    * was replaced. Returns false when nobody else holds the Mic.
    */
-  join(secondarySocket: AuthenticatedSocket, primaryId: string | null, nowMs: number): boolean {
+  join(secondarySocket: AuthenticatedSocket, primaryId: string | null, nowMs: number, resume = false): boolean {
     this.sweep(nowMs);
     const secondaryId = secondarySocket.participantId;
     if (!secondaryId || !primaryId || secondaryId === primaryId
       || !this.policy.socketOpen(secondarySocket)
       || !this.policy.primaryStillOwnsMic(primaryId)
       || !this.policy.participantConnected(secondaryId)) return false;
+    // Reconnection is not a user request to take over another singer's seat.
+    if (resume && [...this.pending.values()].some(invite => invite.accepted
+      && invite.primaryId === primaryId && invite.secondaryId !== secondaryId)) return false;
     for (const invite of this.pending.values()) {
       if (invite.primaryId === primaryId && invite.accepted
         && invite.secondaryId === secondaryId && invite.consentSocket === secondarySocket) return true;

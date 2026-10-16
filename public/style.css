@@ -310,8 +310,6 @@ body:has(#start-publisher:disabled) .voice-ribbon span:nth-child(6) { animation-
   cursor: pointer; font-size: 12px; font-weight: 630;
 }
 .choir-invite-open[hidden] { display: none; }
-.choir-status { margin: 10px 0 0; font-size: 13px; color: #d6d7dc; }
-.choir-status[hidden] { display: none; }
 /* A joined second singer leaves the duet first; taking over the Mic would end it. */
 body[data-choir-guest="joined"] #start-publisher { display: none !important; }
 
@@ -328,7 +326,8 @@ body[data-choir-guest="joined"] #start-publisher { display: none !important; }
   font-weight: 720;
 }
 #start-publisher:disabled { display: none; }
-#release-mic {
+#release-mic,
+#choir-withdraw {
   padding-left: 0;
   color: #c7c7cb;
 }

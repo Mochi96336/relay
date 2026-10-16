@@ -91,6 +91,8 @@ window.relayIdentityReady = (async () => {
   let sessionAuthorityFresh = false;
   let choirConsentAvailable = false;
   let choirMediaEnabled = false;
+  let choirAnnouncedOnConnection = false;
+  let choirResumeSupported = false;
   let takeoverOwnerId = null;
   let startAfterTakeover = false;
   let takeoverFailure = null;
@@ -221,9 +223,11 @@ window.relayIdentityReady = (async () => {
    * Choir announcement and session freshness arrived in.
    */
   function announceChoirConsentAvailable() {
-    const available = choirConsentAvailable && sessionAuthorityFresh;
+    // Feature support is separate from a transient control reconnect.
+    // Freshness still gates every command; it must not stop B capture.
+    const available = choirConsentAvailable;
     window.dispatchEvent(new CustomEvent('relay-choir-consent-availability', {
-      detail: { available },
+      detail: { available, resumeSupported: choirResumeSupported },
     }));
     window.dispatchEvent(new CustomEvent('relay-choir-media-mode', {
       detail: { enabled: available && choirMediaEnabled },
@@ -245,6 +249,11 @@ window.relayIdentityReady = (async () => {
     if (['choir-room-begin', 'choir-secondary-media-claim-request', 'choir-secondary-join',
       'choir-secondary-song-anchor', 'choir-secondary-page', 'choir-secondary-gain']
       .includes(payload.type) && !choirMediaEnabled) return;
+    if (payload.type === 'choir-secondary-join') {
+      send({ type: payload.type, ...(payload.resume === true
+        ? { resume: true, expectedPrimaryId: payload.expectedPrimaryId } : {}) });
+      return;
+    }
     if (payload.type === 'choir-secondary-gain') {
       send({ type: payload.type, micGainDb: payload.micGainDb });
       return;
@@ -264,9 +273,9 @@ window.relayIdentityReady = (async () => {
     if (payload.type === 'choir-secondary-invite') {
       if (typeof payload.secondaryId !== 'string') return;
       send({ type: payload.type, secondaryId: payload.secondaryId });
-    } else if (payload.type === 'choir-secondary-withdraw'
-      || payload.type === 'choir-secondary-join'
-      || payload.type === 'choir-secondary-media-claim-request') {
+    } else if (payload.type === 'choir-secondary-withdraw') {
+      send({ type: payload.type, reason: typeof payload.reason === 'string' ? payload.reason.slice(0, 80) : 'unspecified' });
+    } else if (payload.type === 'choir-secondary-media-claim-request') {
       send({ type: payload.type });
     } else if (payload.type === 'choir-room-begin') {
       if (typeof payload.secondaryId !== 'string') return;
@@ -327,6 +336,8 @@ window.relayIdentityReady = (async () => {
 
   function handleMessage(message) {
     if (message.type === 'choir-consent-available') {
+      choirAnnouncedOnConnection = true;
+      choirResumeSupported = message.resumeSupported === true;
       choirConsentAvailable = message.mode === 'invitation-only'
         || message.mode === 'media-experiment';
       choirMediaEnabled = message.mode === 'media-experiment';
@@ -366,6 +377,12 @@ window.relayIdentityReady = (async () => {
       && typeof nextIncarnation === 'string'
       && previousIncarnation !== nextIncarnation
     ) {
+      if (!choirAnnouncedOnConnection) {
+        choirConsentAvailable = false;
+        choirMediaEnabled = false;
+        choirResumeSupported = false;
+        announceChoirConsentAvailable();
+      }
       hideTakeover({ cancelPrewarm: true });
     }
     latestSession = message;
@@ -386,11 +403,7 @@ window.relayIdentityReady = (async () => {
   async function connect() {
     if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return;
     sessionAuthorityFresh = false;
-    choirConsentAvailable = false;
-    choirMediaEnabled = false;
-    window.dispatchEvent(new CustomEvent('relay-choir-media-mode', {
-      detail: { enabled: false },
-    }));
+    choirAnnouncedOnConnection = false;
     announceChoirConsentAvailable();
     publishMicActionState();
     publishPresenceState();
@@ -421,11 +434,6 @@ window.relayIdentityReady = (async () => {
       if (socket !== next) return;
       socket = null;
       sessionAuthorityFresh = false;
-      choirConsentAvailable = false;
-      choirMediaEnabled = false;
-      window.dispatchEvent(new CustomEvent('relay-choir-media-mode', {
-        detail: { enabled: false },
-      }));
       announceChoirConsentAvailable();
       publishMicActionState();
       publishPresenceState();

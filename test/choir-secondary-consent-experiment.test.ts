@@ -257,3 +257,26 @@ test('anyone else can take over the second Mic; the singer replaced is told so',
   assert.equal(notice?.payload.reason, 'replaced');
   assert.equal(f.consent.hasConsent(A, B, 1, 3), false, 'the replaced B has nothing left');
 });
+
+
+test('a reconnecting B cannot automatically take the seat from a new second singer', () => {
+  const f = fixture();
+  assert.equal(f.consent.join(f.b, A, 0), true);
+  f.b.open = false;
+  f.consent.disconnected(f.b);
+  f.changeCPresence(true);
+  assert.equal(f.consent.join({ participantId: C, open: true }, A, 1), true);
+  assert.equal(f.consent.join(f.anotherB, A, 2, true), false);
+  assert.equal(f.consent.activeJoin(2)?.secondaryId, C);
+  assert.equal(f.consent.join(f.anotherB, A, 3), true, 'an explicit press can still take over');
+});
+
+test('a fresh authenticated B can resume an empty seat after control disconnect', () => {
+  const f = fixture();
+  assert.equal(f.consent.join(f.b, A, 0), true);
+  f.b.open = false;
+  f.consent.disconnected(f.b);
+  assert.equal(f.consent.activeJoin(1), null);
+  assert.equal(f.consent.join(f.anotherB, A, 2, true), true);
+  assert.equal(f.consent.activeJoin(2)?.secondaryId, B);
+});

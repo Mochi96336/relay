@@ -19,6 +19,7 @@
 
 #change-youtube,
 #release-mic,
+#choir-withdraw,
 #cancel-takeover,
 #listen-toggle,
 #last-take-toggle,
@@ -32,6 +33,7 @@
    actions do not compete for the same tap. */
 #change-youtube::before,
 #release-mic::before,
+#choir-withdraw::before,
 #cancel-takeover::before,
 #last-take-toggle::before,
 #calibrate-timing::before {

@@ -474,7 +474,12 @@ choirConsent = choirRestartCoordinator && choirShadow
           sendJson(target, payload);
       }
     },
-    notifySocket: (raw, payload) => sendJson(raw as RelaySocket, payload),
+    notifySocket: (raw, payload) => {
+      if (payload.type === 'choir-secondary-consent-status' && payload.status === 'revoked')
+        logChoir('b-revoked', { reason: payload.reason,
+          participant: (raw as RelaySocket).participantId ? participantLogLabel((raw as RelaySocket).participantId!) : null });
+      sendJson(raw as RelaySocket, payload);
+    },
   }) : null;
 // One-use B-claim broker is exercised ONLY under the second explicit media
 // flag and a successful A/B authorization. N=1 PCM ownership is unchanged.
@@ -1302,6 +1307,7 @@ function attachParticipantIdentity(
   // "invitation-only" does not enable Choir capture, mixing or playback.
   if (choirConsent) sendJson(socket, {
     type: 'choir-consent-available',
+    resumeSupported: true,
     mode: choirMediaEnabled ? 'media-experiment' : 'invitation-only',
   });
   return true;
@@ -5166,7 +5172,8 @@ function handleChoirConsentMessage(socket: RelaySocket, payload: Record<string, 
     // The joiner never names the other singer: it is whoever holds the Mic.
     accepted = participants.micOwnerId !== null
       && micRuntime.mediaOwnerId === participants.micOwnerId
-      && choirConsent.join(socket, participants.micOwnerId, nowMs);
+      && (payload.resume !== true || payload.expectedPrimaryId === participants.micOwnerId)
+      && choirConsent.join(socket, participants.micOwnerId, nowMs, payload.resume === true);
     if (accepted) {
       // A song may already be playing: start now rather than on the next tick.
       lastJoinedRoomAttemptMs = Number.NEGATIVE_INFINITY;
@@ -5177,6 +5184,8 @@ function handleChoirConsentMessage(socket: RelaySocket, payload: Record<string, 
     logChoir(type === 'choir-secondary-join' ? (accepted ? 'b-joined' : 'b-join-refused') : 'b-left', {
       participant: socket.participantId ? participantLogLabel(socket.participantId) : null,
       micOwner: participants.micOwnerId ? participantLogLabel(participants.micOwnerId) : null,
+      ...(type === 'choir-secondary-withdraw' ? { reason: typeof payload.reason === 'string'
+        ? payload.reason.slice(0, 80) : 'unspecified' } : { resume: payload.resume === true }),
       ...(accepted ? {} : { mediaOwnerMatches: micRuntime.mediaOwnerId === participants.micOwnerId }),
     });
   }
@@ -5254,8 +5263,10 @@ wss.on('connection', (rawSocket, request) => {
 
   socket.on('close', () => {
     choirSecondaryTickets?.disconnected(socket);
-    choirConsent?.disconnected(socket);
-    choirSecondaryIngress?.disconnect(socket, performance.now());
+    if (choirConsent?.disconnected(socket))
+      logChoir('consent-disconnected', { participant: socket.participantId ? participantLogLabel(socket.participantId) : null });
+    if (choirSecondaryIngress?.disconnect(socket, performance.now()))
+      logChoir('b-media-disconnected', { participant: socket.participantId ? participantLogLabel(socket.participantId) : null });
     playbackClosed(socket);
     let micTransportChanged = false;
 

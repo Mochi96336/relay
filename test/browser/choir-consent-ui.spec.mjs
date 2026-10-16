@@ -30,7 +30,7 @@ async function openFixture(page, participantId, micOwnerId = null) {
       detail: {
         authorityFresh: true,
         session: {
-          micOwnerId, micConnected: micOwnerId !== null,
+          micOwnerId, micConnected: micOwnerId !== null, serverIncarnation: 'fixture-server',
           participants: [
             { id: 'owner', nickname: 'Lead Singer', connected: true },
             { id: 'singerB', nickname: 'Second Singer', connected: true },
@@ -42,7 +42,7 @@ async function openFixture(page, participantId, micOwnerId = null) {
 }
 
 const enable = page => page.evaluate(() => {
-  window.dispatchEvent(new CustomEvent('relay-choir-consent-availability', { detail: { available: true } }));
+  window.dispatchEvent(new CustomEvent('relay-choir-consent-availability', { detail: { available: true, resumeSupported: true } }));
   window.dispatchEvent(new CustomEvent('relay-choir-media-mode', { detail: { enabled: true } }));
 });
 const consent = (page, detail) => page.evaluate(detail => window.dispatchEvent(
@@ -94,6 +94,13 @@ test('only someone other than the Mic owner sees + Second Mic, and one tap joins
   await consent(page, accepted);
   // Joined: the heading carries the duet's progress; the Mic row only offers leaving.
   await expect(page.locator('#choir-withdraw')).toBeVisible();
+  const buttonStyles = await page.evaluate(() => {
+    const properties = ['borderRadius', 'borderWidth', 'backgroundColor', 'padding', 'fontSize', 'fontWeight', 'color'];
+    const style = id => { const css = getComputedStyle(document.getElementById(id));
+      return properties.map(property => css[property]); };
+    return { release: style('release-mic'), leave: style('choir-withdraw') };
+  });
+  expect(buttonStyles.leave).toEqual(buttonStyles.release);
   await expect(open).toBeHidden();
   await expect(page.locator('#start-publisher')).toBeHidden();
   // B's own Mic gain, in the same row the Mic owner has.
@@ -115,7 +122,7 @@ test('only someone other than the Mic owner sees + Second Mic, and one tap joins
   expect(await page.evaluate(() => window.__primaryMixChanges)).toBe(0);
 
   await page.locator('#choir-withdraw').click();
-  expect((await page.evaluate(() => window.__choirSent)).at(-1)).toEqual({ type: 'choir-secondary-withdraw' });
+  expect((await page.evaluate(() => window.__choirSent)).at(-1)).toEqual({ type: 'choir-secondary-withdraw', reason: 'user' });
   await consent(page, { type: 'choir-secondary-consent-status', status: 'withdrawn', secondaryId: 'singerB' });
   await expect(page.locator('#choir-withdraw')).toBeHidden();
   await expect(open).toBeVisible();
@@ -223,4 +230,72 @@ test('repeated room announcements preserve B media while a new room reconnects',
   });
   expect(result.preserved).toEqual({ sockets: 1, closes: 0, claims: 1 });
   expect(result.replaced).toEqual({ closes: 1, claims: 2 });
+});
+
+
+const presence = (page, authorityFresh, overrides = {}) => page.evaluate(({ authorityFresh, overrides }) => {
+  window.dispatchEvent(new CustomEvent('relay-presence-state', { detail: {
+    authorityFresh, session: { micOwnerId: 'owner', micConnected: true,
+      serverIncarnation: 'fixture-server', ...overrides },
+  } }));
+}, { authorityFresh, overrides });
+
+test('B survives a brief control disconnect and resumes without another microphone tap', async ({ page }) => {
+  await openFixture(page, 'singerB', 'owner');
+  await enable(page);
+  await page.locator('#choir-invite-open').click();
+  await consent(page, accepted);
+  await page.evaluate(() => {
+    window.__captureStops = 0;
+    window.addEventListener('relay-choir-stop-secondary-capture', () => window.__captureStops++);
+  });
+  await presence(page, false);
+  await expect(page.locator('#choir-withdraw')).toBeVisible();
+  await expect(page.locator('#choir-invite-open')).toBeHidden();
+  expect(await page.evaluate(() => window.__captureStops)).toBe(0);
+  await presence(page, true);
+  expect(await page.evaluate(() => window.__choirSent.at(-1))).toEqual({
+    type: 'choir-secondary-join', resume: true, expectedPrimaryId: 'owner',
+  });
+  await consent(page, accepted);
+  await expect(page.locator('#choir-withdraw')).toBeVisible();
+  expect(await page.evaluate(() => window.__captureStops)).toBe(0);
+});
+
+for (const change of [{ micOwnerId: 'another-owner' }, { serverIncarnation: 'another-server' }]) {
+  test(`a changed room scope cannot silently rejoin B: ${JSON.stringify(change)}`, async ({ page }) => {
+    await openFixture(page, 'singerB', 'owner');
+    await enable(page);
+    await page.locator('#choir-invite-open').click();
+    await consent(page, accepted);
+    await presence(page, false);
+    await presence(page, true, change);
+    await expect(page.locator('#choir-withdraw')).toBeHidden();
+    expect(await page.evaluate(() => window.__choirSent.some(m => m.resume))).toBe(false);
+  });
+}
+
+test('leaving during reconnect cancels B resume', async ({ page }) => {
+  await openFixture(page, 'singerB', 'owner');
+  await enable(page);
+  await page.locator('#choir-invite-open').click();
+  await consent(page, accepted);
+  await presence(page, false);
+  await page.locator('#choir-withdraw').click();
+  await presence(page, true);
+  await expect(page.locator('#choir-withdraw')).toBeHidden();
+  expect(await page.evaluate(() => window.__choirSent.some(m => m.resume))).toBe(false);
+});
+
+test('B stops capture after the control recovery deadline', async ({ page }) => {
+  await openFixture(page, 'singerB', 'owner');
+  await enable(page);
+  await page.locator('#choir-invite-open').click();
+  await consent(page, accepted);
+  await page.clock.install();
+  await presence(page, false);
+  await page.clock.fastForward(15_001);
+  await expect(page.locator('#choir-withdraw')).toBeHidden();
+  await presence(page, true);
+  expect(await page.evaluate(() => window.__choirSent.some(m => m.resume))).toBe(false);
 });

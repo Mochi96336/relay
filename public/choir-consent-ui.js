@@ -15,11 +15,15 @@ const joinButton = document.querySelector('#choir-invite-open');
 const leaveButton = document.querySelector('#choir-withdraw');
 
 let available = false;
+let resumeSupported = false;
 let session = null;
 let authorityFresh = false;
 let mediaEnabled = false;
 let joined = false;
 let pending = false;
+let joinScope = null;
+let recovering = false;
+let recoveryTimer = null;
 /** The second singer the room has now (from product status), or null. */
 let duetSecondaryId = null;
 let pendingTimer = null;
@@ -51,36 +55,76 @@ function render() {
   // node, and would put + 副 Mic back over 接手副 Mic.
   joinButton.dataset.i18n = takeOver ? 'choir.takeOver' : 'choir.invite';
   joinButton.textContent = t(joinButton.dataset.i18n);
-  leaveButton.hidden = !(available && authorityFresh && joined);
+  leaveButton.hidden = !(available && joined);
   if (joined) document.body.dataset.choirGuest = 'joined';
   else delete document.body.dataset.choirGuest;
   window.dispatchEvent(new CustomEvent('relay-choir-guest-state', {
-    detail: { enabled: available && authorityFresh && joined && mediaEnabled },
+    detail: { enabled: available && joined && mediaEnabled },
   }));
 }
 function resetJoin() {
   clearTimeout(pendingTimer);
+  clearTimeout(recoveryTimer);
+  joinScope = null;
+  recovering = false;
+  window.dispatchEvent(new Event('relay-choir-stop-secondary-capture'));
   joined = false;
   pending = false;
   render();
 }
 
+// A brief control outage revokes the server ticket, but the user's join
+// intent and running microphone survive for 15 s. Only the same room owner
+// and server may resume it, through fresh authenticated server admission.
+function resumeIfReady() {
+  if (!recovering || !authorityFresh || !available || !mediaEnabled) return;
+  if (!joinScope || typeof joinScope.serverIncarnation !== 'string'
+    || session?.micOwnerId !== joinScope.primaryId
+    || session?.serverIncarnation !== joinScope.serverIncarnation) {
+    resetJoin();
+    return;
+  }
+  if (session?.micConnected !== true) return;
+  recovering = false;
+  clearTimeout(recoveryTimer);
+  pending = publishCommand('choir-secondary-join', {
+    resume: true, expectedPrimaryId: joinScope.primaryId,
+  });
+  clearTimeout(pendingTimer);
+  pendingTimer = setTimeout(() => { if (pending) resetJoin(); }, 8_000);
+}
+function recoverControl() {
+  if (!joined || recovering || !joinScope) return;
+  if (!resumeSupported) { resetJoin(); return; }
+  recovering = true;
+  window.dispatchEvent(new Event('relay-choir-pause-secondary-media'));
+  pending = false;
+  clearTimeout(pendingTimer);
+  clearTimeout(recoveryTimer);
+  recoveryTimer = setTimeout(resetJoin, 15_000);
+}
+
 window.addEventListener('relay-presence-state', (event) => {
   session = event.detail?.session ?? null;
   authorityFresh = event.detail?.authorityFresh === true;
-  if (!authorityFresh) joined = false;
+  if (!authorityFresh) recoverControl();
+  else if (joined && joinScope && (session?.micOwnerId !== joinScope.primaryId
+    || session?.serverIncarnation !== joinScope.serverIncarnation)) resetJoin();
+  resumeIfReady();
   render();
 });
 window.addEventListener('relay-choir-consent-availability', (event) => {
   available = event.detail?.available === true;
+  resumeSupported = event.detail?.resumeSupported === true;
   if (!available) {
-    joined = false;
-    pending = false;
+    resetJoin();
   }
   render();
 });
 window.addEventListener('relay-choir-media-mode', (event) => {
   mediaEnabled = event.detail?.enabled === true;
+  if (!mediaEnabled) resetJoin();
+  resumeIfReady();
   render();
 });
 window.addEventListener('relay-product-status', (event) => {
@@ -100,12 +144,15 @@ window.addEventListener('relay-choir-consent-message', (event) => {
   if (message.status === 'accepted') {
     clearTimeout(pendingTimer);
     joined = true;
+    recovering = false;
+    clearTimeout(recoveryTimer);
     pending = false;
     render();
   } else if (message.status === 'withdrawn') {
     resetJoin();
   } else if (message.status === 'revoked') {
-    resetJoin();
+    if (message.reason === 'connection-closed') { recoverControl(); resumeIfReady(); render(); }
+    else resetJoin();
   }
 });
 window.addEventListener('relay-choir-media-connection', (event) => {
@@ -113,7 +160,7 @@ window.addEventListener('relay-choir-media-connection', (event) => {
   // Media reconnects on its own for each room; only a microphone that will
   // not open needs the singer. Leave rather than sit joined but silent.
   if (event.detail?.state !== 'capture-failed') return;
-  publishCommand('choir-secondary-withdraw');
+  publishCommand('choir-secondary-withdraw', { reason: `capture-failed:${event.detail?.reason ?? 'unknown'}` });
   resetJoin();
 });
 // What B's page shows and plays, for the server log: on change (at most once
@@ -134,6 +181,7 @@ joinButton?.addEventListener('click', () => {
   if (!canJoin() || pending) return;
   // Inside the click: iOS and other browsers require a user gesture for the
   // microphone. Capture starts now and connects once the server has a room.
+  joinScope = { primaryId: session.micOwnerId, serverIncarnation: session.serverIncarnation };
   window.dispatchEvent(new Event('relay-choir-start-secondary-capture'));
   pending = publishCommand('choir-secondary-join');
   clearTimeout(pendingTimer);
@@ -143,7 +191,8 @@ joinButton?.addEventListener('click', () => {
 });
 leaveButton?.addEventListener('click', () => {
   if (!joined) return;
-  publishCommand('choir-secondary-withdraw');
+  publishCommand('choir-secondary-withdraw', { reason: 'user' });
+  resetJoin();
 });
 render();
 window.dispatchEvent(new Event('relay-request-presence-state'));

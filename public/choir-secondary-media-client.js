@@ -24,11 +24,14 @@ let claimTimer = null;
 /** The latest room the server announced, waiting for capture to be ready. */
 let roomReady = false;
 let announcedRoomEpoch = null;
-const capture = new ChoirSecondaryCapture(() => disconnect());
+const capture = new ChoirSecondaryCapture((reason) => {
+  disconnect();
+  notify('capture-failed', reason);
+});
 
-function notify(state) {
+function notify(state, reason = null) {
   window.dispatchEvent(new CustomEvent('relay-choir-media-connection', {
-    detail: { state },
+    detail: { state, reason },
   }));
 }
 /** Stops everything: B left, was refused, or capture failed. */
@@ -68,6 +71,8 @@ function requestClaim() {
   }, 20_000);
 }
 
+window.addEventListener('relay-choir-stop-secondary-capture', disconnect);
+window.addEventListener('relay-choir-pause-secondary-media', closeMedia);
 window.addEventListener('relay-choir-media-mode', (event) => {
   const wasEnabled = enabled;
   enabled = event.detail?.enabled === true;
@@ -77,6 +82,11 @@ window.addEventListener('relay-choir-media-mode', (event) => {
 });
 window.addEventListener('relay-choir-consent-message', (event) => {
   const msg = event.detail;
+  if (msg?.type === 'choir-secondary-consent-status' && msg.status === 'revoked'
+    && msg.reason === 'connection-closed' && msg.secondaryId === window.relayParticipantId) {
+    closeMedia();
+    return;
+  }
   if ((msg?.type === 'choir-secondary-consent-status'
     && ['withdrawn', 'revoked'].includes(msg.status)
     && msg.secondaryId === window.relayParticipantId)

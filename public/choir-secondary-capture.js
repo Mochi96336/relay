@@ -1,5 +1,6 @@
 import { enforceUnprocessedCapture } from './capture-observability.js';
 import { createMicCaptureGraph } from './mic-capture-graph.js';
+import { claimMicrophoneAudio } from './audio-session-policy.js';
 
 const HEADER_BYTES = 24;
 // This is only ~0.25s of native 48 kHz Int16 mono PCM, not seconds
@@ -39,6 +40,7 @@ export class ChoirSecondaryCapture {
   constructor(onFailure = () => {}) {
     this.onFailure = onFailure;
     this.epoch = 0;
+    this.claimedAudio = false;
     this.stream = null;
     this.context = null;
     this.graph = null;
@@ -56,6 +58,10 @@ export class ChoirSecondaryCapture {
     this.stop();
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('HTTPS microphone required');
     const epoch = this.epoch;
+    // As the main Mic does: iOS enters play-and-record before the input
+    // opens, rather than switching while B's local song plays.
+    claimMicrophoneAudio(true);
+    this.claimedAudio = true;
     // Establish the AudioContext during the actual click gesture on iOS.
     const context = new AudioContext({ latencyHint: 'interactive' });
     this.context = context;
@@ -232,6 +238,10 @@ export class ChoirSecondaryCapture {
     const ctx = this.context;
     this.context = null;
     if (ctx) void ctx.close().catch(() => {});
+    if (this.claimedAudio) {
+      this.claimedAudio = false;
+      claimMicrophoneAudio(false);
+    }
     this.rate = null;
     this.generation = null;
     this.clockWallOriginMs = null;

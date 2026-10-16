@@ -44,6 +44,12 @@ export class ChoirSecondaryConsentExperiment {
   constructor(private readonly policy: {
     scopeNow: (nowMs: number) => ChoirConsentScope | null;
     primaryStillOwnsMic: (id: string) => boolean;
+    /**
+     * Whether `id` still holds the Mic, through a reconnect grace. A join
+     * follows the Mic owner, so a brief media or control hiccup must not end
+     * it; only a new owner does. Defaults to primaryStillOwnsMic.
+     */
+    holdsMic?: (id: string) => boolean;
     participantConnected: (id: string) => boolean;
     takeFrozenNow: () => boolean;
     socketOpen: (socket: AuthenticatedSocket) => boolean;
@@ -67,7 +73,7 @@ export class ChoirSecondaryConsentExperiment {
     if (invite.join) {
       return Number.isFinite(nowMs) && nowMs >= 0
         && invite.consentSocket !== null && this.policy.socketOpen(invite.consentSocket)
-        && this.policy.primaryStillOwnsMic(invite.primaryId)
+        && (this.policy.holdsMic ?? this.policy.primaryStillOwnsMic)(invite.primaryId)
         && this.policy.participantConnected(invite.secondaryId);
     }
     const scope = this.policy.scopeNow(nowMs);

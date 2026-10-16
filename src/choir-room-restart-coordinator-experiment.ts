@@ -69,7 +69,7 @@ export class ChoirRoomRestartCoordinatorExperiment {
     private readonly takeFrozenNow: () => boolean,
     private readonly config: Pick<FreshChoirRoomSpec,
       'sampleRate' | 'frameMs' | 'prebufferMs' | 'retentionMs'
-      | 'contentHistoryMs' | 'outputHoldbackMs'>,
+      | 'contentHistoryMs' | 'outputHoldbackMs' | 'lateClock'>,
     private readonly handshake = new ChoirFreshRoomHandshakeExperiment(),
     // Fail closed unless the caller provides an explicit server-owned live
     // Mic-owner / B-consent check, re-evaluated on every media operation.

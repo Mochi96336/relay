@@ -71,7 +71,9 @@ test('only someone other than the Mic owner sees + Second Mic, and one tap joins
     detail: { type: 'choir-secondary-consent-status', status: 'accepted',
       secondaryId: 'singerB', primaryId: 'owner', joined: true },
   })));
-  await expect(page.locator('#choir-consent-status')).toContainText('已加入副 Mic');
+  // Joined: the heading carries the duet's progress; the panel only offers leaving.
+  await expect(page.locator('#choir-consent-status')).toHaveText('');
+  await expect(page.locator('#choir-consent-status')).toBeHidden();
   await expect(page.locator('#choir-withdraw')).toBeVisible();
   await expect(open).toBeHidden();
   await expect.poll(() => page.evaluate(() =>

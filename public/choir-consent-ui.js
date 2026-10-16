@@ -1,4 +1,8 @@
 import './live-i18n.js';
+// Evaluated before this module: + Second Mic must not be tappable before the
+// media client listens for the capture its tap starts. As a separate page
+// script it could finish loading seconds later, and the tap was lost.
+import './choir-secondary-media-client.js';
 
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const trigger = document.querySelector('#choir-invite-open');
@@ -209,3 +213,4 @@ closeButton?.addEventListener('click', () => {
 });
 render();
 window.dispatchEvent(new Event('relay-request-presence-state'));
+window.dispatchEvent(new Event('relay-request-choir-media-mode'));

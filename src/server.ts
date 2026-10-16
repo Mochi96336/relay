@@ -346,6 +346,8 @@ const choirShadowConfig = {
   sampleRate: MIX_SAMPLE_RATE, frameMs: MIX_FRAME_MS,
   prebufferMs: LIVE_MIX_PREBUFFER_MS, retentionMs: MIC_RETENTION_MS,
   outputHoldbackMs: 200, contentHistoryMs: 7_000,
+  // The duet room's PCM is evidence; B is heard through the N=1 output.
+  lateClock: 'skip' as const,
 };
 const choirMediaEnabled = relayConfig.choirShadow && relayConfig.choirMediaExperiment;
 const choirShadow = relayConfig.choirShadow
@@ -452,6 +454,7 @@ choirConsent = choirRestartCoordinator && choirShadow
       participants.micOwnerId === id && micRuntime.mediaOwnerId === id
       && micRuntime.controlConnected()
       && participants.participant(id)?.connected === true,
+    holdsMic: id => participants.micOwnerId === id,
     participantConnected: id => participants.participant(id)?.connected === true,
     takeFrozenNow: () => takeController.lifecycle === 'recording'
       || takeController.lifecycle === 'finalizing',
@@ -1869,7 +1872,11 @@ function remoteStatusPayload() {
     audio: {
       ...status.audio,
       listenerPlayback: monitorTransport.playbackHealth(),
-      ...(choirRestartCoordinator ? { duetSecondary: session.secondaryMic } : {}),
+      ...(choirRestartCoordinator ? {
+        duetSecondary: session.secondaryMic,
+        duetIngress: choirSecondaryIngress?.counts ?? null,
+        duetRoom: choirRestartCoordinator.preview(),
+      } : {}),
     },
   };
 }

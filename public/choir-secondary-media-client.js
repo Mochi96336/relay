@@ -67,8 +67,11 @@ function requestClaim() {
 }
 
 window.addEventListener('relay-choir-media-mode', (event) => {
+  const wasEnabled = enabled;
   enabled = event.detail?.enabled === true;
-  if (!enabled) disconnect();
+  if (!enabled && wasEnabled) disconnect();
+  // A room announced while this module still waited for the mode.
+  if (enabled && !wasEnabled) requestClaim();
 });
 window.addEventListener('relay-choir-consent-message', (event) => {
   const msg = event.detail;
@@ -80,13 +83,16 @@ window.addEventListener('relay-choir-consent-message', (event) => {
 
 let preparing = false;
 window.addEventListener('relay-choir-start-secondary-capture', async () => {
-  if (!enabled || preparing || capture.rate !== null) return;
+  // The singer's own tap starts capture even if this module has not heard
+  // Choir's mode yet (it can load after presence announced it). Media is
+  // claimed only once the mode and a room are both known.
+  if (preparing || capture.rate !== null) return;
   preparing = true;
   // The user's physical click initiates getUserMedia (not a server reply).
   // This path is NEVER started by an automatic invitation or login.
   try {
     const sourceRate = await capture.prepare();
-    if (!enabled || !sourceRate) return;
+    if (!sourceRate) return;
     requestClaim();
   } catch {
     disconnect();
@@ -201,3 +207,6 @@ function connectMedia(claimToken, roomEpoch, sourceRate, direct) {
     if (socket === mediaSocket && !fallBack()) socket.close();
   });
 }
+
+// Presence may have announced Choir before this module finished loading.
+window.dispatchEvent(new Event('relay-request-choir-media-mode'));

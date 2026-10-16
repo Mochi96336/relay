@@ -185,6 +185,10 @@ window.relayIdentityReady = (async () => {
 
   window.addEventListener('relay-request-mic-action-state', publishMicActionState);
   window.addEventListener('relay-request-presence-state', publishPresenceState);
+  // The second-Mic modules can finish loading after the server already said
+  // whether Choir is on; a missed announcement left B's media client off, so
+  // B joined but never sent audio. They ask for it again on load.
+  window.addEventListener('relay-request-choir-media-mode', announceChoirConsentAvailable);
 
   function cancelSpeculativePlaybackPrewarm() {
     window.dispatchEvent(new CustomEvent('relay:playback-prewarm-cancel'));
@@ -211,9 +215,18 @@ window.relayIdentityReady = (async () => {
     return true;
   }
 
+  /**
+   * Availability first, media mode last: a listener that resets on
+   * "unavailable" must end on the current mode, whatever order the server's
+   * Choir announcement and session freshness arrived in.
+   */
   function announceChoirConsentAvailable() {
+    const available = choirConsentAvailable && sessionAuthorityFresh;
     window.dispatchEvent(new CustomEvent('relay-choir-consent-availability', {
-      detail: { available: choirConsentAvailable && sessionAuthorityFresh },
+      detail: { available },
+    }));
+    window.dispatchEvent(new CustomEvent('relay-choir-media-mode', {
+      detail: { enabled: available && choirMediaEnabled },
     }));
   }
 

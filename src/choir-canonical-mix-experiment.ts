@@ -580,6 +580,18 @@ export class CanonicalChoirMixExperiment {
     return true;
   }
 
+  /**
+   * Moves the output cursor forward past frames that will never be rendered
+   * (a deadline room skipping a late backlog). Never backwards: output stays
+   * monotonic, and each singer's read trajectory treats the gap as a jump.
+   */
+  skipOutputTo(roomStartSample: number): boolean {
+    if (!Number.isSafeInteger(roomStartSample) || roomStartSample < 0
+      || (this.nextRoomSample !== null && roomStartSample < this.nextRoomSample)) return false;
+    this.nextRoomSample = roomStartSample;
+    return true;
+  }
+
   render(roomStartSample: number): CanonicalChoirFrame {
     if (!Number.isSafeInteger(roomStartSample) || roomStartSample < 0
       || (this.nextRoomSample !== null && roomStartSample !== this.nextRoomSample))

@@ -222,3 +222,25 @@ describe('B joins the Mic owner by its own press', () => {
     assert.equal(left.consent.hasConsent(A, B, 1, 2), false);
   });
 });
+
+test('a join follows the Mic owner through a media or control hiccup', () => {
+  const a = { participantId: 'participant-AAAAAAA1', open: true };
+  const b = { participantId: 'participant-BBBBBBB2', open: true };
+  let owner: string | null = a.participantId;
+  let liveMedia = true;
+  const consent = new ChoirSecondaryConsentExperiment({
+    scopeNow: () => null,
+    primaryStillOwnsMic: (id) => id === owner && liveMedia,
+    holdsMic: (id) => id === owner,
+    participantConnected: () => true,
+    takeFrozenNow: () => false,
+    socketOpen: (socket) => (socket as { open: boolean }).open,
+    notifyParticipant: () => {},
+    notifySocket: () => {},
+  });
+  assert.equal(consent.join(b, a.participantId, 0), true);
+  liveMedia = false;
+  assert.deepEqual(consent.activeJoin(1)?.secondaryId, b.participantId, 'A reconnecting keeps B in');
+  owner = 'participant-CCCCCCC3';
+  assert.equal(consent.activeJoin(2), null, 'a new Mic owner ends it');
+});

@@ -160,8 +160,15 @@ window.addEventListener('relay-choir-media-message', (event) => {
  * rest of the page once the direct one fails. The claim is spent only when
  * registration is sent, so a direct socket that never opened hands the same
  * claim to the tunnel.
+ *
+ * An open socket must also be registered within MEDIA_REGISTER_TIMEOUT_MS.
+ * Otherwise the server's replies stopped (authentication or registration),
+ * and the socket is dropped: the server's next room-ready (every 3 s) then
+ * brings a fresh claim. While it was kept, room-ready was ignored and B
+ * stayed in with no voice.
  */
 const DIRECT_SOCKET_OPEN_TIMEOUT_MS = 2_500;
+const MEDIA_REGISTER_TIMEOUT_MS = 5_000;
 let directSocketFailed = false;
 function connectMedia(claimToken, roomEpoch, sourceRate, direct) {
   const tunnelUrl = wsUrl({ compress: false });
@@ -180,9 +187,17 @@ function connectMedia(claimToken, roomEpoch, sourceRate, direct) {
     return true;
   };
   const openTimer = viaDirect ? setTimeout(fallBack, DIRECT_SOCKET_OPEN_TIMEOUT_MS) : null;
+  let registerTimer = null;
   socket.addEventListener('open', () => {
     opened = true;
     clearTimeout(openTimer);
+    registerTimer = setTimeout(() => {
+      if (socket !== mediaSocket || registered) return;
+      // A direct socket that opens but goes quiet is a failed direct path.
+      if (viaDirect) directSocketFailed = true;
+      closeMedia();
+      notify('disconnected', 'register-timeout');
+    }, MEDIA_REGISTER_TIMEOUT_MS);
     if (socket !== mediaSocket || !enabled
       || !sendParticipantAuthentication(socket)) {
       socket.close();
@@ -216,6 +231,7 @@ function connectMedia(claimToken, roomEpoch, sourceRate, direct) {
         return;
       }
       registered = true;
+      clearTimeout(registerTimer);
       notify('registered');
     } else if (message.type === 'choir-media-rejected'
       || message.type === 'participant-auth-rejected') {
@@ -224,6 +240,7 @@ function connectMedia(claimToken, roomEpoch, sourceRate, direct) {
   });
   socket.addEventListener('close', () => {
     clearTimeout(openTimer);
+    clearTimeout(registerTimer);
     if (fallBack()) return;
     if (socket !== mediaSocket) return;
     // The room was retired (seek, song change) or the link dropped; keep the

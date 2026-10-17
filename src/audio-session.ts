@@ -433,17 +433,21 @@ export class AudioSession {
     this.micGain.setTargetDb(value, this.running);
   }
 
-  /** Starts holding a second singer's PCM. Silent until it has a lag. */
+  /**
+   * Starts holding a second singer's PCM. Silent until it has a lag. A voice
+   * still fading out is not revived: whoever comes next (the same B
+   * reconnecting, or a C who took the seat) starts on a fresh track once the
+   * fade is done, never on the last singer's lag, gain or limiter state.
+   * Returns whether a fresh voice is attached.
+   */
   attachSecondaryMic() {
-    if (this.secondary) {
-      this.secondary.detaching = false;
-      return;
-    }
+    if (this.secondary) return !this.secondary.detaching;
     this.secondary = {
       track: new MicTrack(this.micTrackOptions),
       audible: false, blend: 0, detaching: false, sumGain: 1,
-      gapSamples: 0, starvedSamples: 0, mixedFrames: 0,
+      gapSamples: 0, starvedSamples: 0, mixedFrames: 0, heardAtFrame: null,
     };
+    return true;
   }
 
   /** Fades the second singer out, then drops it. */
@@ -510,6 +514,10 @@ export class AudioSession {
       gapSamples: secondary.gapSamples,
       starvedSamples: secondary.starvedSamples,
       mixedFrames: secondary.mixedFrames,
+      /** B's PCM reached the mix within the last SECONDARY_HEARD_WINDOW_MS. */
+      recentlyHeard: secondary.heardAtFrame !== null
+        && (this.frameIndex - secondary.heardAtFrame) * this.frameSamples * 1000
+          <= SECONDARY_HEARD_WINDOW_MS * this.sampleRate,
       bufferedSamples: secondary.track.timeline.totalSamples,
     };
   }
@@ -527,6 +535,8 @@ export class AudioSession {
     track.frontier.reset(track.timeline.generation);
     track.gain.reset();
     track.calibratedMicLagTargetMs = track.alignmentState.calibratedMicLagMs;
+    // Its PCM is gone, and the frame count may restart.
+    secondary.heardAtFrame = null;
     if (stopping) {
       track.alignmentState = { networkCompensationMs: 0, calibratedMicLagMs: null, fineTuneMs: 0 };
       track.calibratedMicLagTargetMs = null;
@@ -1254,6 +1264,9 @@ export class AudioSession {
       secondary.starvedSamples += read.evidence.frontierMissingSamples;
       secondary.mixedFrames += 1;
     }
+    if (read.evidence.gapSamples + read.evidence.frontierMissingSamples < this.frameSamples) {
+      secondary.heardAtFrame = this.frameIndex;
+    }
     trimPcmTimeline(track.timeline, startSample - this.retentionSamples);
     track.captureRestarts.trimBefore(startSample - this.retentionSamples);
     track.clipping.trimBefore(startSample - this.retentionSamples);
@@ -1263,6 +1276,8 @@ export class AudioSession {
 
 /** How long B takes to fade in or out of the room mix. */
 const SECONDARY_BLEND_MS = 50;
+/** How recent B's PCM must be for B to count as singing, not just allowed to. */
+const SECONDARY_HEARD_WINDOW_MS = 500;
 /** How fast the A+B sum comes back up after a peak turned it down. */
 const SECONDARY_SUM_RELEASE_MS = 80;
 
@@ -1277,6 +1292,8 @@ type SecondaryVoice = {
   gapSamples: number;
   starvedSamples: number;
   mixedFrames: number;
+  /** The last mix frame that held any of B's PCM; null before the first. */
+  heardAtFrame: number | null;
 };
 
 type SecondaryFrame = {

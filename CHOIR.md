@@ -39,8 +39,12 @@ The room output is still the N=1 `AudioSession`, so Listen, Take and timing need
 - Once Content has both, B's lag is A's advance plus (B − A) from the duet room. Both singers are measured against the same Robot backing, so their difference holds in any coordinates.
 - A and B are summed, as two singers in one room would sound, so a harmony keeps the balance it was sung at. A sum that would pass one voice's ceiling is turned down at once and comes back up over 80 ms; a singer alone is untouched. B fades in and out over 50 ms.
 - While a Take records, an audible B keeps its lag, as A's alignment does.
+- B's gain is B's own: the media registration carries the gain B's device remembers (default 24 dB), and B's Mic slider changes it while B is in.
+- Only the socket B joined from speaks for B. B's gain, song anchors and page reports from any other tab of the same participant are ignored, as only that socket may claim B's media.
+- A voice fading out is never revived. Whoever sings next, the same B reconnecting or a C who took the seat, starts on a fresh `MicTrack` once the fade is done.
+- The room shows B `singing` only while B is allowed to sound and B's PCM has reached the mix within the last 500 ms. A B whose media stalls shows as `aligning`.
 - `/statusz` shows B under `audio.duetSecondary`. `audio.duetIngress` counts B's accepted and rejected frames, `audio.duetRoom` gives the duet room's state, `audio.duetContent` shows the Content worker's counters and last failure, and `audio.duetYoutube` shows the YouTube-time anchors and which source B's lag uses.
-- The server logs each step as `[choir] {"event":…}`: `b-joined`, `room`, `b-claim`, `b-media-registered`, `b-lag-source`, `b-heard`/`b-silent`, `b-left`. `b-page` is what B's page shows and plays (its local player state), so a B who hears no song can be explained.
+- The server logs each step as `[choir] {"event":…}`: `b-joined`, `room`, `b-claim`, `b-media-registered`, `b-lag-source`, `b-heard`/`b-silent`, `b-pcm-stalled`/`b-pcm-resumed`, `b-left`. `b-page` is what B's page shows and plays (its local player state), so a B who hears no song can be explained.
 
 The duet room's own rendered PCM is still only proof evidence and is not sent anywhere.
 
@@ -48,4 +52,3 @@ The duet room's own rendered PCM is still only proof evidence and is not sent an
 
 - Real two-device runs have only just started: phone capture clocks, local YouTube drift, Bluetooth paths, network jitter.
 - B has no capture clock trim, and B's gaps are not in the Take's quality evidence yet.
-- B's gain is the default 24 dB; B's own remembered gain is not sent yet.

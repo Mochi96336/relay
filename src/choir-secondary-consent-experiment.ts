@@ -181,6 +181,19 @@ export class ChoirSecondaryConsentExperiment {
   }
 
   /**
+   * Whether this is the socket B joined from: the only one whose reports
+   * (gain, song anchors, page state) may steer B's voice, as only it may
+   * claim B's media. Another tab of the same participant is not B.
+   */
+  isJoinSocket(socket: AuthenticatedSocket, nowMs: number): boolean {
+    this.sweep(nowMs);
+    for (const invite of this.pending.values())
+      if (invite.join && invite.accepted && invite.consentSocket === socket
+        && socket.participantId === invite.secondaryId && this.validInvite(invite, nowMs)) return true;
+    return false;
+  }
+
+  /**
    * B explicitly accepts or declines from its own authenticated socket.
    * The invite UUID is never sufficient proof of identity by itself.
    */

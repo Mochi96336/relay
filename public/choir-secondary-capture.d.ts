@@ -19,8 +19,11 @@ export class ChoirSecondaryCapture {
   sequence: number;
   clockWallOriginMs: number | null;
   clockSampleOrigin: number;
+  opus: any;
+  readonly packetVersion: 2 | 3;
   prepare(): Promise<number | null>;
   attach(socket: any, sampleRate: number): boolean;
   onCapture(event: { data: unknown }, graph: any, epoch: number): void;
+  sendPacket(packet: ArrayBuffer): void;
   stop(): void;
 }

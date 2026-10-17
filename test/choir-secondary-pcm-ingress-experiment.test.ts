@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { describe, test } from 'node:test';
+import { createOpusEncoder } from '../public/mic-opus-worker.js';
 import { encodePcmFrame } from '../src/pcm-frame.js';
 import { AUDIO_PACKET_HEADER_BYTES } from '../src/audio-packet.js';
 import { encodeAudioPacket } from '../src/audio-packet.js';
@@ -187,7 +189,7 @@ describe('isolated Choir secondary WebSocket PCM admission', () => {
     v3.writeUInt8(3, 2);
     assert.deepEqual(f.ingress.interceptBinary(socket, v3, 40), {
       intercepted: true, accepted: false, reason: 'malformed-frame',
-    }, 'Opus v3 must wait for an explicit safe decoder');
+    }, 'a socket registered for PCM v2 never takes Opus v3');
     const mismatchedCount = Buffer.from(v2(1, 960));
     mismatchedCount.writeUInt32LE(970, 12);
     assert.deepEqual(f.ingress.interceptBinary(socket, mismatchedCount, 50), {
@@ -242,4 +244,50 @@ describe('isolated Choir secondary WebSocket PCM admission', () => {
     assert.equal(f.accepted.length, 131);
   });
 
+  test('an Opus v3 socket is decoded to PCM at its own sample positions, and takes nothing else', async () => {
+    const f = fixture();
+    const frames: Array<{ firstSampleIndex: number; pcm: Buffer }> = [];
+    f.ingress.onAcceptedFrame = (frame) => { frames.push(frame); };
+    assert.equal(f.ingress.bindVerifiedSecondary(socketFor('B'), B, 44_100, 0, 3), false,
+      'Opus v3 is 20 ms frames at 48 kHz only');
+    const socket = socketFor('B');
+    assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 0, 3), true);
+
+    // The page's own encoder (mic-opus-worker.js), framed as mic-opus-trial.js does.
+    const encoder = createOpusEncoder(
+      await readFile(new URL('../node_modules/@evan/opus/wasm/opus.wasm', import.meta.url)), 128_000);
+    const opus = (sequence: number) => {
+      const tone = new Int16Array(960);
+      for (let i = 0; i < 960; i++) tone[i] = Math.round(8_000 * Math.sin(2 * Math.PI * 440 * (sequence * 960 + i) / 48_000));
+      const payload = Buffer.from(encoder.encode(tone.buffer));
+      const packet = Buffer.alloc(28 + payload.length);
+      v2(sequence, sequence * 960).copy(packet, 0, 0, AUDIO_PACKET_HEADER_BYTES);
+      packet.writeUInt8(3, 2);
+      packet.writeUInt16LE(encoder.delaySamples, 24);
+      payload.copy(packet, 28);
+      return packet;
+    };
+    const delay = encoder.delaySamples;
+    for (let sequence = 0; sequence < 3; sequence++) {
+      assert.deepEqual(f.ingress.interceptBinary(socket, opus(sequence), 10 + sequence),
+        { intercepted: true, accepted: true, reason: 'accepted' });
+    }
+    assert.equal(frames[0].firstSampleIndex, 0);
+    assert.equal(frames[0].pcm.length / 2, 960 - delay, "the encoder's look-ahead is taken off the start");
+    assert.equal(frames[1].firstSampleIndex, 960 - delay, 'contiguous after the first');
+    assert.equal(frames[2].firstSampleIndex, 2 * 960 - delay);
+    const rms = Math.sqrt(new Int16Array(frames[2].pcm.buffer, frames[2].pcm.byteOffset, 960)
+      .reduce((sum, v) => sum + v * v, 0) / 960);
+    assert.ok(rms > 4_000, `decoded audio, not silence (rms ${rms.toFixed(0)})`);
+
+    assert.deepEqual(f.ingress.interceptBinary(socket, v2(3, 3 * 960), 20), {
+      intercepted: true, accepted: false, reason: 'malformed-frame',
+    }, 'a socket registered for Opus never takes PCM v2');
+    assert.deepEqual(f.ingress.interceptBinary(socket, opus(2), 21), {
+      intercepted: true, accepted: false, reason: 'duplicate-packet',
+    }, 'a duplicate is refused before it reaches the decoder');
+    assert.deepEqual(f.ingress.interceptBinary(socket, opus(3), 22),
+      { intercepted: true, accepted: true, reason: 'accepted' });
+    assert.equal(frames.length, 4);
+  });
 });

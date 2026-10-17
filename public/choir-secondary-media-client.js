@@ -217,7 +217,7 @@ function connectMedia(claimToken, roomEpoch, sourceRate, direct) {
       const micGainDb = storedNumber(MIC_GAIN_KEY, 0, 40);
       socket.send(JSON.stringify({
         type: 'choir-secondary-media-register',
-        claimToken, packetVersion: 2, sampleRate: sourceRate,
+        claimToken, packetVersion: capture.packetVersion, sampleRate: sourceRate,
         ...(micGainDb === null ? {} : { micGainDb }),
       }));
     } else if (message.type === 'choir-secondary-media-registered') {

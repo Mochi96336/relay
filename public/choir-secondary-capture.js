@@ -1,6 +1,7 @@
 import { enforceUnprocessedCapture } from './capture-observability.js';
 import { createMicCaptureGraph } from './mic-capture-graph.js';
 import { claimMicrophoneAudio } from './audio-session-policy.js';
+import { createMicOpusTrial } from './mic-opus-trial.js';
 
 const HEADER_BYTES = 24;
 // This is only ~0.25s of native 48 kHz Int16 mono PCM, not seconds
@@ -9,6 +10,23 @@ const MAX_BUFFERED_BYTES = 24 * 1024;
 const CLOCK_PROOF_WINDOW_MS = 5_000;
 const MIN_CLOCK_RATE_RATIO = 0.75;
 const MAX_CLOCK_RATE_RATIO = 1.25;
+const OPUS_FRAME_SAMPLES = 960;
+
+/**
+ * Whether B sends Opus, as the main Mic does when the server's codec trial is
+ * on: about 128 kbps instead of PCM16's 768 kbps at 48 kHz. Fetched once at
+ * load, so the tap that starts B's capture still creates its AudioContext
+ * synchronously (iOS). Until it is known, or if it fails, B sends PCM.
+ */
+let micCodec = { opus: false, bitrate: 128_000 };
+if (typeof fetch === 'function' && typeof location !== 'undefined') {
+  fetch('/mic-codec-config', { cache: 'no-store' })
+    .then(response => response.ok ? response.json() : null)
+    .then((config) => {
+      if (config?.opus === true) micCodec = { opus: true, bitrate: Number(config.bitrate) || 128_000 };
+    })
+    .catch(() => {});
+}
 
 /** Relay AudioPacket v2. Sample index belongs to the NATIVE AudioWorklet
  * capture clock; dropped chunks still advance that clock. */
@@ -52,6 +70,13 @@ export class ChoirSecondaryCapture {
     this.track = null;
     this.clockWallOriginMs = null;
     this.clockSampleOrigin = 0;
+    /** The Opus encoder while B sends Opus v3; null sends PCM v2. */
+    this.opus = null;
+  }
+
+  /** The AudioPacket version B registers and sends with. */
+  get packetVersion() {
+    return this.opus ? 3 : 2;
   }
 
   async prepare() {
@@ -63,7 +88,9 @@ export class ChoirSecondaryCapture {
     claimMicrophoneAudio(true);
     this.claimedAudio = true;
     // Establish the AudioContext during the actual click gesture on iOS.
-    const context = new AudioContext({ latencyHint: 'interactive' });
+    // Opus takes 20 ms frames at 48 kHz, so ask for that rate, as app.js does.
+    const wantOpus = micCodec.opus;
+    const context = new AudioContext({ latencyHint: 'interactive', ...(wantOpus ? { sampleRate: 48_000 } : {}) });
     this.context = context;
     // Invoke resume() in the SAME user gesture, before the asynchronous
     // permission dialog consumes transient activation (notably on iOS).
@@ -102,6 +129,20 @@ export class ChoirSecondaryCapture {
       this.track = stream.getAudioTracks()[0] ?? null;
       if (!this.track || this.track.readyState !== 'live'
         || this.track.muted) throw new Error('Microphone track unavailable');
+      if (wantOpus && rate === 48_000) {
+        // An encoder that will not start leaves B on PCM, not out of the room.
+        const opus = await createMicOpusTrial({
+          bitrate: micCodec.bitrate,
+          onPacket: packet => this.sendPacket(packet),
+          onDrop: () => {},
+          onError: () => { if (this.epoch === epoch) this.fail('opus-failed'); },
+        }).catch(() => null);
+        if (this.epoch !== epoch) { opus?.close(); return null; }
+        if (opus) {
+          opus.reset(this.generation);
+          this.opus = opus;
+        }
+      }
       const revoke = () => { if (this.epoch === epoch) this.fail('capture-route-changed'); };
       this.track.addEventListener('ended', revoke, { once: true });
       this.track.addEventListener('mute', revoke, { once: true });
@@ -208,6 +249,14 @@ export class ChoirSecondaryCapture {
         || socket.bufferedAmount > MAX_BUFFERED_BYTES
         || !Number.isFinite(age) || age > 0.2 || age < -0.05
         || !samples || samples > Math.ceil(this.rate * .2)) return;
+      if (this.opus) {
+        // The encoder copies the chunk, so the buffer is still returned below.
+        if (samples === OPUS_FRAME_SAMPLES
+          && this.opus.encode(pcm, this.sequence, firstSampleIndex)) {
+          this.sequence = (this.sequence + 1) >>> 0;
+        }
+        return;
+      }
       const packet = encodeChoirMicV2(
         pcm, this.generation, this.sequence, firstSampleIndex,
       );
@@ -222,6 +271,14 @@ export class ChoirSecondaryCapture {
     }
   }
 
+  /** An encoded Opus packet, sent on B's media socket if it can take it now. */
+  sendPacket(packet) {
+    const socket = this.socket;
+    if (!socket || socket.readyState !== WebSocket.OPEN
+      || socket.bufferedAmount > MAX_BUFFERED_BYTES) return;
+    socket.send(packet);
+  }
+
   fail(reason) {
     this.stop();
     this.onFailure(reason);
@@ -230,6 +287,8 @@ export class ChoirSecondaryCapture {
   stop() {
     ++this.epoch;
     this.socket = null;
+    this.opus?.close();
+    this.opus = null;
     this.graph?.dispose();
     this.graph = null;
     this.track = null;

@@ -781,6 +781,9 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
     const unsupportedV1 = broker.issue(bControl, 7.5)!;
     assert.equal(broker.redeem(bMedia, unsupportedV1.claimToken, RATE, 1, 7.5), null,
       'legacy v1 may never redeem a valid Choir media claim');
+    const opusAt44k = broker.issue(bControl, 7.6)!;
+    assert.equal(broker.redeem(bMedia, opusAt44k.claimToken, 44_100, 3, 7.6), null,
+      'Opus v3 is 20 ms frames at 48 kHz only');
     assert.equal(ingress.isAttached(bMedia), false);
     const old = broker.issue(bControl, 8)!;
     const latest = broker.issue(bControl, 9)!;

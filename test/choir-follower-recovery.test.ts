@@ -98,6 +98,23 @@ test('Monitor yields while B\'s song starts in a playing room and returns after 
   assert.equal(f.status(), 'choir.followerVideoError');
 });
 
+test('a local song stuck without an error gives Listen back after a grace, and Listen yields again once it plays', async () => {
+  const f = await fixture();
+  const p = f.players[0];
+  p.config.events.onReady();
+  f.tick();
+  assert.equal(f.active(), true, 'Listen yields while the local song starts');
+  // Buffering forever: no error, no autoplay block, so nothing else would give Listen back.
+  p.state = 3;
+  await f.advance(9_000);
+  assert.equal(f.active(), true, 'a short stall keeps Listen yielding');
+  await f.advance(2_000);
+  assert.equal(f.active(), false, 'past the grace B hears the room through Listen');
+  p.state = 1;
+  await f.advance(1_000);
+  assert.equal(f.active(), true, 'the local song plays again, so Listen yields again');
+});
+
 test('a slow player load keeps being retried, more slowly, and ignores retired iframe callbacks', async () => {
   const f = await fixture();
   const retired = f.players[0];

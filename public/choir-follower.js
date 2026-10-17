@@ -23,6 +23,9 @@ let lastPlayAttemptMs = Number.NEGATIVE_INFINITY;
 let generation = 0;
 let apiPromise = null;
 let autoplayBlocked = false;
+/** Since when the room plays but B's own song does not; Listen yields only so long. */
+let localNotPlayingSinceMs = null;
+const LOCAL_START_GRACE_MS = 10_000;
 let statusKey = null;
 let localBackingAudibleRole = false;
 let readyTimer = null;
@@ -93,6 +96,7 @@ function resetPlayer() {
   lastSeekAtMs = Number.NEGATIVE_INFINITY;
   lastPlayAttemptMs = Number.NEGATIVE_INFINITY;
   autoplayBlocked = false;
+  localNotPlayingSinceMs = null;
   if (host) host.replaceChildren();
   if (positionNode) positionNode.textContent = '--:-- / --:--';
   setStatus(null);
@@ -339,8 +343,14 @@ function tick() {
   }
   // Listen yields while the local song is starting, not only once it plays:
   // on iOS, Listen sounding again on every buffering or paused moment
-  // interrupts the video that is trying to start. It returns on failure.
-  setLocalPlayback((room.playing && !autoplayBlocked) || local.playerState === 1);
+  // interrupts the video that is trying to start. It returns on failure, and
+  // once the local song has not played for LOCAL_START_GRACE_MS: a player stuck
+  // buffering without an error must not leave B with no song at all.
+  if (!room.playing || local.playerState === 1) localNotPlayingSinceMs = null;
+  else if (localNotPlayingSinceMs === null) localNotPlayingSinceMs = sampledAtPerformanceMs;
+  const localStuck = localNotPlayingSinceMs !== null
+    && sampledAtPerformanceMs - localNotPlayingSinceMs >= LOCAL_START_GRACE_MS;
+  setLocalPlayback((room.playing && !autoplayBlocked && !localStuck) || local.playerState === 1);
   reconcileSound(local.playerState);
   if (local.playerState === 1 && localVideoId === room.videoId) {
     // Where B's local YouTube is, for B's YouTube-time alignment.
@@ -358,6 +368,8 @@ function tick() {
       case 'cue':
         attemptedRate = null;
         setLocalPlayback(false);
+        // A new video starts with a fresh grace for Listen to yield.
+        localNotPlayingSinceMs = null;
         localVideoId = action.videoId;
         lastSeekAtMs = nowMs;
         player.cueVideoById({ videoId: action.videoId, startSeconds: action.positionSeconds });

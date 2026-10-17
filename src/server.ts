@@ -4980,8 +4980,9 @@ function handleChoirMediaMessage(socket: RelaySocket, payload: Record<string, un
   const token = payload.claimToken;
   const rate = payload.sampleRate;
   const version = payload.packetVersion;
+  // B speaks PCM v2, or Opus v3 when the Mic codec trial is on (as the main Mic).
   const ticket = typeof token === 'string'
-    && version === 2 && typeof rate === 'number'
+    && (version === 2 || (version === 3 && relayConfig.micOpusTrial)) && typeof rate === 'number'
     ? choirSecondaryTickets.redeem(socket, token, rate, version, nowMs) : null;
   if (!ticket) {
     sendJson(socket, { type: 'choir-media-rejected', reason: 'claim-invalid-or-expired' });
@@ -4989,14 +4990,14 @@ function handleChoirMediaMessage(socket: RelaySocket, payload: Record<string, un
   }
   logChoir('b-media-registered', {
     participant: participantLogLabel(socket.participantId), roomEpoch: ticket.roomEpoch,
-    sampleRate: rate,
+    sampleRate: rate, codec: version === 3 ? 'opus' : 'pcm',
   });
   duetSecondaryGainDb = requestedMicGainDb(payload.micGainDb);
   if (duetSecondaryGainDb !== null) session.setSecondaryMicGainDb(duetSecondaryGainDb);
   sendJson(socket, {
     type: 'choir-secondary-media-registered',
     roomEpoch: ticket.roomEpoch, songEpoch: ticket.songEpoch,
-    mediaEpoch: ticket.mediaEpoch, packetVersion: 2, sampleRate: rate,
+    mediaEpoch: ticket.mediaEpoch, packetVersion: version, sampleRate: rate,
     awaitingContent: true,
   });
   return true;

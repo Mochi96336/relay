@@ -69,7 +69,7 @@ test('B starts its Mic only on its own tap and connects to each room the server 
   assert.match(media, /sendParticipantAuthentication\(socket\)/);
   assert.match(media, /message\.participantId !== window\.relayParticipantId/);
   assert.match(media, /'choir-secondary-media-register'/);
-  assert.match(media, /packetVersion: 2, sampleRate: sourceRate/);
+  assert.match(media, /packetVersion: capture\.packetVersion, sampleRate: sourceRate/);
   assert.match(media, /const sourceRate = await capture\.prepare\(\)/);
   assert.match(media, /capture\.attach\(socket, message\.sampleRate\)/);
   // YouTube-time alignment: B's local player position paired with its capture.

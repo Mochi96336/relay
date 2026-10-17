@@ -1,3 +1,4 @@
+import { Decoder } from '@evan/opus';
 import { FRAME_MAGIC } from './pcm-frame.js';
 import {
   AUDIO_PACKET_HEADER_BYTES, AUDIO_PACKET_VERSION, decodeAudioPacket,
@@ -15,6 +16,11 @@ import type { ChoirRoomRestartCoordinatorExperiment } from './choir-room-restart
  *
  * Attached sockets are consumed even on malformed/stale input so a choir
  * packet can NEVER fall through to the existing N=1 Mic/Robot path.
+ *
+ * A socket speaks exactly the one wire format it registered with: AudioPacket
+ * v2 PCM at its native rate, or Opus v3 (20 ms at 48 kHz, as the main Mic
+ * sends). Opus is decoded here, in arrival order, so everything after this
+ * point sees PCM frames either way.
  */
 type ChoirSecondarySocket = object & {
   participantId?: string;
@@ -30,6 +36,8 @@ type BoundSecondary = {
   /** v2 committed sequence identity, bounded to the recent reorder horizon. */
   latestSequence: number | null;
   seenSequences: Map<number, { start: number; end: number }>;
+  /** Opus v3 sockets only: the decoder, and where its last packet ended. */
+  opus: { decoder: Decoder | null; end: number | null } | null;
 };
 
 export type ChoirIngressResult =
@@ -83,8 +91,10 @@ export class ChoirSecondaryPcmIngressExperiment {
     ticket: ChoirFreshCaptureTicket,
     sourceRate: number,
     nowMs: number,
+    packetVersion: 2 | 3 = 2,
   ): boolean {
     if (this.sockets.has(socket) || this.transportBindings.has(ticket.transportId)
+      || (packetVersion !== 2 && !(packetVersion === 3 && sourceRate === 48_000))
       || !this.isSocketOpen(socket)
       || socket.role !== 'unknown'
       || !socket.participantId || socket.participantId !== ticket.participantId
@@ -101,6 +111,7 @@ export class ChoirSecondaryPcmIngressExperiment {
       ticket, sampleRate: sourceRate, generation: null,
       packetWindowStartMs: nowMs, packetCount: 0,
       latestSequence: null, seenSequences: new Map(),
+      opus: packetVersion === 3 ? { decoder: null, end: null } : null,
     });
     this.transportBindings.set(ticket.transportId, socket);
     return true;
@@ -126,10 +137,10 @@ export class ChoirSecondaryPcmIngressExperiment {
     if (!Buffer.isBuffer(bytes) || bytes.length > this.maxFrameBytes
       || bytes.length < AUDIO_PACKET_HEADER_BYTES + 2)
       return rejected('too-large');
-    // This experimental ingress has exactly one wire format: AudioPacket v2
-    // MIC PCM. Never autodetect v1 or Opus v3, even on malformed frames.
+    // Exactly the wire format this socket registered: AudioPacket v2 MIC PCM
+    // or Opus v3. Never autodetect, even on malformed frames.
     if (bytes.readUInt16LE(0) !== FRAME_MAGIC
-      || bytes.readUInt8(2) !== AUDIO_PACKET_VERSION) return rejected('malformed-frame');
+      || bytes.readUInt8(2) !== (bound.opus ? 3 : AUDIO_PACKET_VERSION)) return rejected('malformed-frame');
 
     // Bound ingress traffic even if a future malformed/duplicate sender tries
     // hundreds of retransmitted frames inside a single wall-clock second.
@@ -148,11 +159,15 @@ export class ChoirSecondaryPcmIngressExperiment {
     if (packet.sampleCount > Math.ceil(bound.sampleRate * this.maxPacketMs / 1_000))
       return rejected('too-large');
     const sequence = packet.sequence;
-    const frame = {
-      generation: packet.generation,
-      firstSampleIndex: packet.firstSampleIndex,
-      pcm: packet.pcm,
-    };
+    // Opus state follows every packet decoded, so a duplicate or another
+    // capture's packet must be refused before it reaches the decoder.
+    if (bound.opus && bound.seenSequences.has(sequence)) return rejected('duplicate-packet');
+    if (bound.opus && bound.generation !== null && packet.generation !== bound.generation)
+      return rejected('capture-restarted');
+    const frame = bound.opus
+      ? decodeOpusFrame(bound.opus, packet)
+      : { generation: packet.generation, firstSampleIndex: packet.firstSampleIndex, pcm: packet.pcm };
+    if (!frame) return rejected('malformed-frame');
 
     const sampleCount = frame.pcm.length / 2;
     if (!Number.isSafeInteger(frame.firstSampleIndex)
@@ -250,3 +265,32 @@ export class ChoirSecondaryPcmIngressExperiment {
     return this.sockets.has(socket);
   }
 }
+
+/**
+ * One Opus v3 packet to its PCM frame, as the main Mic's transport decodes
+ * (audio-transport.ts): decoder state carries across contiguous packets and
+ * resets at a hole, and the encoder's look-ahead is taken off the start.
+ * Corrupt codec data is a hole, never stale decoder output.
+ */
+function decodeOpusFrame(
+  opus: NonNullable<BoundSecondary['opus']>,
+  packet: { generation: number; firstSampleIndex: number; sampleCount: number; pcm: Buffer; opusDelaySamples?: number },
+): { generation: number; firstSampleIndex: number; pcm: Buffer } | null {
+  if (packet.opusDelaySamples === undefined) return null;
+  try {
+    opus.decoder ??= new Decoder({ channels: 1, sample_rate: 48_000 });
+    if (opus.end !== null && opus.end !== packet.firstSampleIndex) opus.decoder.reset();
+    const pcm = Buffer.from(opus.decoder.decode(packet.pcm));
+    if (pcm.byteLength !== packet.sampleCount * 2) throw new Error('Opus sample count mismatch');
+    opus.end = packet.firstSampleIndex + packet.sampleCount;
+    const start = packet.firstSampleIndex - packet.opusDelaySamples;
+    const trim = Math.max(0, -start);
+    if (trim * 2 >= pcm.byteLength) return null;
+    return { generation: packet.generation, firstSampleIndex: Math.max(0, start), pcm: pcm.subarray(trim * 2) };
+  } catch {
+    opus.decoder = null;
+    opus.end = null;
+    return null;
+  }
+}
+

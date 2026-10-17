@@ -98,14 +98,15 @@ export class ChoirSecondaryMediaTicketExperiment {
    * A server-generated transportId is used only AFTER all checks pass.
    */
   redeem(mediaSocket: ChoirSocket, claimToken: string,
-    sourceRate: number, packetVersion: 1 | 2, nowMs: number):
+    sourceRate: number, packetVersion: 1 | 2 | 3, nowMs: number):
     ChoirFreshCaptureTicket | null {
     if (!Number.isFinite(nowMs) || typeof claimToken !== 'string'
       || !/^[0-9a-f]{64}$/.test(claimToken)
       || !this.socketOpen(mediaSocket) || mediaSocket.role !== 'unknown'
       || !mediaSocket.participantId
       || !Number.isInteger(sourceRate) || sourceRate < 8_000 || sourceRate > 192_000
-      || packetVersion !== 2) return null;
+      // PCM v2 at any native rate, or Opus v3 (20 ms frames at 48 kHz only).
+      || (packetVersion !== 2 && !(packetVersion === 3 && sourceRate === 48_000))) return null;
     this.sweep(nowMs);
     const claim = this.pending.get(claimToken);
     if (!claim) return null;
@@ -135,7 +136,7 @@ export class ChoirSecondaryMediaTicketExperiment {
     });
     if (!ticket) return null;
     if (!this.ingress.bindVerifiedSecondary(
-      mediaSocket, ticket, sourceRate, nowMs,
+      mediaSocket, ticket, sourceRate, nowMs, packetVersion,
     )) {
       // The canonical N=2 seat is first-version non-rebindable. Removing
       // the ticket does NOT make that seat safely re-admittable; retire the

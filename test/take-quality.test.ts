@@ -205,7 +205,7 @@ test('raw microphone input clipping reviews the Take without pretending the fina
   }));
 
   const result = quality.assessment();
-  assert.equal(result.policyVersion, 'take-quality-v5');
+  assert.equal(result.policyVersion, 'take-quality-v6');
   assert.equal(result.evidence.micInputClippedSamples, 6);
   assert.equal(result.evidence.micInputClippedMs, (6 / RATE) * 1000);
   assert.equal(result.evidence.clippedSamples, 0);
@@ -221,7 +221,7 @@ test('a worklet input gap prevents a padded-silence Take from assessing clean', 
   quality.observeFrame(960, frameState(), mixedFrame());
 
   const result = quality.assessment();
-  assert.equal(result.policyVersion, 'take-quality-v5');
+  assert.equal(result.policyVersion, 'take-quality-v6');
   assert.equal(result.evidence.events['mic-input-gap'], 1);
   assert.equal(result.verdict, 'review');
   assert.deepEqual(
@@ -462,3 +462,42 @@ test('a stored Take without timing provenance keeps its old fallback message', (
     'Part of the Take used network-estimate timing instead of an applicable acoustic calibration.',
   );
 });
+
+test("the second singer is judged as a voice in the Take, by the same rule as A", () => {
+  const quality = tracker();
+  quality.observeFrame(960, frameState(), mixedFrame());
+  // B allowed to sound, then B's media stalls for 300 ms while A is fine.
+  quality.observeFrame(960, frameState(), mixedFrame({
+    secondaryAudibleSamples: 960, secondaryGapSamples: 0, secondaryStarvedSamples: 0,
+  }));
+  for (let i = 0; i < 15; i += 1) {
+    quality.observeFrame(960, frameState(), mixedFrame({
+      secondaryAudibleSamples: 960, secondaryGapSamples: 0, secondaryStarvedSamples: 960,
+    }));
+  }
+  quality.observeFrame(960, frameState(), mixedFrame({
+    secondaryAudibleSamples: 960, secondaryGapSamples: 48, secondaryStarvedSamples: 0,
+  }));
+
+  const result = quality.assessment();
+  assert.equal(result.policyVersion, 'take-quality-v6');
+  assert.equal(result.evidence.secondaryAudibleMs, 17 * 20);
+  assert.equal(result.evidence.secondaryStarvedMs, 300);
+  assert.equal(result.evidence.secondaryGapMs, 1);
+  assert.deepEqual(
+    result.issues.map((issue) => [issue.code, issue.severity]),
+    [['second-mic-pcm-gap', 'warning'], ['second-mic-starvation', 'critical']],
+    "A's own evidence stays clean; only B's part is flagged",
+  );
+  assert.equal(result.verdict, 'degraded');
+});
+
+test('an N=1 Take carries no second-singer evidence at all', () => {
+  const quality = tracker();
+  quality.observeFrame(960, frameState(), mixedFrame());
+  const result = quality.assessment();
+  assert.equal('secondaryAudibleSamples' in result.evidence, false);
+  assert.equal('secondaryStarvedMs' in result.evidence, false);
+  assert.equal(result.verdict, 'clean');
+});
+

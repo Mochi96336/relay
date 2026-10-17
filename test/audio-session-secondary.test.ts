@@ -231,6 +231,32 @@ describe('AudioSession second singer', () => {
     assert.equal(session.secondaryMic!.recentlyHeard, false, 'but nothing of B has reached the mix for a second');
   });
 
+  test("each frame's evidence carries B's part only while B is attached, counted only while B may sound", () => {
+    const session = makeSession();
+    session.start(0);
+    session.ingestBacking(frame(silence(4_000)), RATE, 0);
+    session.ingestMic(frame(silence(4_000)), RATE, 0);
+    session.setAlignment({ calibratedMicLagMs: 0 });
+    const alone = drainAll(session, 600 + 200).evidence;
+    assert.ok(alone.every((e) => !('secondaryAudibleSamples' in e)), 'an N=1 frame has no B fields');
+
+    session.attachSecondaryMic();
+    session.setSecondaryMicGainDb(0);
+    session.ingestSecondaryMic(frame(square(1_000, 8_000, 96)), RATE, 0);
+    const silentB = drainAll(session, 600 + 400).evidence;
+    assert.ok(silentB.every((e) => e.secondaryAudibleSamples === 0 && e.secondaryStarvedSamples === 0),
+      'a B with no lag yet cannot damage the Take');
+
+    session.setSecondaryMicLag(0);
+    // B's PCM ends at 1 s; B stays allowed to sound and starves after that.
+    const { evidence } = drainAll(session, 600 + 2_000);
+    const sum = (key: 'secondaryAudibleSamples' | 'secondaryStarvedSamples') =>
+      evidence.reduce((total, e) => total + (e[key] ?? 0), 0);
+    assert.equal(sum('secondaryAudibleSamples'), evidence.length * 960);
+    assert.ok(sum('secondaryStarvedSamples') >= 0.9 * RATE, `B starved for about a second (${sum('secondaryStarvedSamples')})`);
+    assert.ok(evidence.every((e) => e.micStarvedSamples === 0), "A's evidence is untouched");
+  });
+
   test("a new mix epoch clears B's buffered PCM along with A's", () => {
     const session = makeSession();
     session.start(0);

@@ -92,7 +92,8 @@ function quality(
     | 'take-quality-v2'
     | 'take-quality-v3'
     | 'take-quality-v4'
-    | 'take-quality-v5',
+    | 'take-quality-v5'
+    | 'take-quality-v6',
 ) {
   const evidence: Record<string, unknown> = v1Evidence();
   if (policyVersion !== 'take-quality-v1') {
@@ -104,14 +105,16 @@ function quality(
     policyVersion === 'take-quality-v3'
     || policyVersion === 'take-quality-v4'
     || policyVersion === 'take-quality-v5'
+    || policyVersion === 'take-quality-v6'
   ) {
     evidence.timingDivergenceToleranceMs = 150;
   }
-  if (policyVersion === 'take-quality-v4' || policyVersion === 'take-quality-v5') {
+  if (policyVersion === 'take-quality-v4' || policyVersion === 'take-quality-v5'
+    || policyVersion === 'take-quality-v6') {
     evidence.micInputClippedSamples = 0;
     evidence.micInputClippedMs = 0;
   }
-  if (policyVersion === 'take-quality-v5') {
+  if (policyVersion === 'take-quality-v5' || policyVersion === 'take-quality-v6') {
     evidence.events = {
       ...(evidence.events as Record<string, number>),
       'mic-input-gap': 0,
@@ -216,12 +219,13 @@ test('malformed present rich fields fail closed to WAV-only recovery', async (t)
   }
 });
 
-test('archived v1, v2, v3 and v4 quality assessments remain valid without reassessment', async (t) => {
+test('archived v1 to v5 quality assessments remain valid without reassessment', async (t) => {
   for (const [index, version] of [
     [5, 'take-quality-v1'],
     [6, 'take-quality-v2'],
     [8, 'take-quality-v3'],
     [4, 'take-quality-v4'],
+    [1, 'take-quality-v5'],
   ] as const) {
     await t.test(version, async () => {
       const id = takeId(index);
@@ -307,12 +311,54 @@ test('quality v5 requires explicit Mic input-gap event evidence', async () => {
   }
 });
 
+test("quality v6 keeps the second singer's part, and its issue codes do not exist before v6", async (t) => {
+  const secondSinger = (version: 'take-quality-v5' | 'take-quality-v6') => {
+    const value = quality(version);
+    Object.assign(value.evidence, {
+      secondaryAudibleSamples: 48_000, secondaryAudibleMs: 1_000,
+      secondaryGapSamples: 0, secondaryGapMs: 0,
+      secondaryStarvedSamples: 14_400, secondaryStarvedMs: 300,
+    });
+    return {
+      ...value,
+      verdict: 'degraded',
+      issues: [{
+        code: 'second-mic-starvation', severity: 'critical', value: 300, unit: 'ms',
+        message: "The mixer recorded the second singer's samples beyond its live source frontier.",
+      }],
+    };
+  };
+  for (const [index, version, kept] of [
+    [2, 'take-quality-v6', true],
+    [3, 'take-quality-v5', false],
+  ] as const) {
+    await t.test(version, async () => {
+      const id = takeId(index);
+      const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-rich-second-singer-'));
+      try {
+        await writeCrashCandidate(directory, id, metadata(id, secondSinger(version)));
+        const entry = await recover(directory, id);
+        assert.ok(entry);
+        if (kept) {
+          assert.ok(entry.quality);
+          assert.equal(entry.quality.verdict, 'degraded');
+          assert.equal(entry.quality.evidence.secondaryStarvedMs, 300);
+        } else {
+          assert.equal(entry.quality, null, 'v5 has no second-singer issue codes');
+        }
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
 test('invalid archived quality policy versions fail closed', async () => {
   const id = takeId(9);
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-rich-policy-'));
   try {
     const invalid = quality('take-quality-v5') as Record<string, unknown>;
-    invalid.policyVersion = 'take-quality-v6';
+    invalid.policyVersion = 'take-quality-v7';
     await writeCrashCandidate(directory, id, metadata(id, invalid));
     const entry = await recover(directory, id);
 

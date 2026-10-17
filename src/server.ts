@@ -2523,7 +2523,9 @@ const mixerTimer = setInterval(() => {
 function duetView(nowMs: number): ProductDuet | null {
   const joined = choirConsent?.activeJoin(nowMs) ?? null;
   if (!joined || !choirRestartCoordinator) return null;
-  const singing = (session.secondaryMic?.audible === true) && (session.secondaryMic.blend > 0);
+  // Allowed to sound is not singing: B's PCM must also be reaching the mix.
+  const singing = (session.secondaryMic?.audible === true) && (session.secondaryMic.blend > 0)
+    && session.secondaryMic.recentlyHeard;
   return {
     secondaryId: joined.secondaryId,
     secondaryNickname: participants.participant(joined.secondaryId)?.nickname ?? null,
@@ -2563,12 +2565,20 @@ function duetSampleSongLagMs(nowMs: number): number | null {
 }
 
 let lastDuetAudible = false;
+let lastDuetRecentlyHeard = false;
 let lastDuetLagSource: string | null = null;
 function syncDuetOutput() {
   const audible = session.secondaryMic?.audible === true;
   if (audible !== lastDuetAudible) {
     lastDuetAudible = audible;
     logChoir(audible ? 'b-heard' : 'b-silent', { lagMs: session.secondaryMic?.lagMs ?? null, source: lastDuetLagSource });
+    broadcastProductStatus();
+  }
+  // B's PCM stopping (or resuming) changes whether the room shows B singing.
+  const recentlyHeard = session.secondaryMic?.recentlyHeard === true;
+  if (recentlyHeard !== lastDuetRecentlyHeard) {
+    lastDuetRecentlyHeard = recentlyHeard;
+    if (audible) logChoir(recentlyHeard ? 'b-pcm-resumed' : 'b-pcm-stalled', {});
     broadcastProductStatus();
   }
   if (!choirRestartCoordinator || !session.secondaryMic) return;
@@ -5109,8 +5119,11 @@ function handleChoirSecondaryReport(socket: RelaySocket, payload: Record<string,
   const type = payload.type;
   if (type !== 'choir-secondary-song-anchor' && type !== 'choir-secondary-page'
     && type !== 'choir-secondary-gain') return false;
-  const joined = choirConsent?.activeJoin(performance.now()) ?? null;
-  if (!joined || socket.participantId !== joined.secondaryId || socket.role !== 'unknown') return true;
+  const nowMs = performance.now();
+  const joined = choirConsent?.activeJoin(nowMs) ?? null;
+  // Only the socket B joined from speaks for B, as only it may claim B's media.
+  if (!joined || socket.participantId !== joined.secondaryId || socket.role !== 'unknown'
+    || !choirConsent?.isJoinSocket(socket, nowMs)) return true;
   if (type === 'choir-secondary-gain') {
     const gainDb = requestedMicGainDb(payload.micGainDb);
     if (gainDb === null || gainDb === duetSecondaryGainDb) return true;
@@ -5141,7 +5154,7 @@ function handleChoirSecondaryReport(socket: RelaySocket, payload: Record<string,
     mediaSeconds: Number(payload.currentTime) + Number(a.mediaDeltaSeconds) * Number(payload.playbackRate),
     generation: Number(a.generation), sampleRate: Number(a.sampleRate),
     sampleIndex: Number(a.sampleIndex), uncertaintyMs: Number(a.uncertaintyMs),
-  }, performance.now());
+  }, nowMs);
   return true;
 }
 

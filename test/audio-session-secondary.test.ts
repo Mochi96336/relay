@@ -183,6 +183,54 @@ describe('AudioSession second singer', () => {
     assert.equal(session.secondaryMic, null, 'dropped once fully silent');
   });
 
+  test('a voice fading out is never revived: the next singer starts on a fresh track', () => {
+    const session = makeSession();
+    session.start(0);
+    session.ingestBacking(frame(silence(3_000)), RATE, 0);
+    session.ingestMic(frame(silence(3_000)), RATE, 0);
+    session.setAlignment({ calibratedMicLagMs: 0 });
+    session.attachSecondaryMic();
+    session.setSecondaryMicGainDb(6);
+    session.ingestSecondaryMic(frame(square(3_000, 16_000, 96)), RATE, 0);
+    session.setSecondaryMicLag(120);
+    drainAll(session, 600 + 100);
+    assert.equal(session.secondaryMic!.blend, 1);
+
+    session.detachSecondaryMic();
+    assert.equal(session.attachSecondaryMic(), false, 'the fading voice is not taken over');
+    assert.equal(session.ingestSecondaryMic(frame(square(1_000, 16_000, 96), 2), RATE, 0), null,
+      "the next singer's PCM never lands on the old track");
+    drainAll(session, 600 + 200);
+    assert.equal(session.secondaryMic, null, 'the old voice still fades out and is dropped');
+
+    assert.equal(session.attachSecondaryMic(), true);
+    const fresh = session.secondaryMic!;
+    assert.equal(fresh.lagMs, null, "no lag carried over from the last singer");
+    assert.equal(fresh.audible, false);
+    assert.equal(fresh.blend, 0);
+    assert.equal(fresh.bufferedSamples, 0);
+  });
+
+  test('B counts as heard only while its PCM reaches the mix', () => {
+    const session = makeSession();
+    session.start(0);
+    session.ingestBacking(frame(silence(4_000)), RATE, 0);
+    session.ingestMic(frame(silence(4_000)), RATE, 0);
+    session.setAlignment({ calibratedMicLagMs: 0 });
+    session.attachSecondaryMic();
+    assert.equal(session.secondaryMic!.recentlyHeard, false, 'nothing mixed yet');
+    session.setSecondaryMicGainDb(0);
+    // One second of B, then B's media stops while B stays allowed to sound.
+    session.ingestSecondaryMic(frame(square(1_000, 8_000, 96)), RATE, 0);
+    session.setSecondaryMicLag(0);
+    drainAll(session, 600 + 800);
+    assert.equal(session.secondaryMic!.audible, true);
+    assert.equal(session.secondaryMic!.recentlyHeard, true);
+    drainAll(session, 600 + 2_000);
+    assert.equal(session.secondaryMic!.audible, true, 'still allowed to sound');
+    assert.equal(session.secondaryMic!.recentlyHeard, false, 'but nothing of B has reached the mix for a second');
+  });
+
   test("a new mix epoch clears B's buffered PCM along with A's", () => {
     const session = makeSession();
     session.start(0);

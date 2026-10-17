@@ -199,6 +199,18 @@ describe('B joins the Mic owner by its own press', () => {
     assert.equal(f.consent.activeJoin(3)?.secondaryId, B, 'one second singer per Mic owner');
   });
 
+  test("only the socket B joined from speaks for B, not another tab of the same participant", () => {
+    const f = fixture();
+    assert.equal(f.consent.isJoinSocket(f.b, 0), false, 'nobody joined yet');
+    assert.equal(f.consent.join(f.b, A, 0), true);
+    assert.equal(f.consent.isJoinSocket(f.b, 1), true);
+    assert.equal(f.consent.isJoinSocket(f.anotherB, 1), false, 'same participant, other tab');
+    assert.equal(f.consent.isJoinSocket(f.attacker, 1), false);
+    assert.equal(f.consent.isJoinSocket(f.a, 1), false, 'the Mic owner');
+    f.consent.withdraw(f.b, 2);
+    assert.equal(f.consent.isJoinSocket(f.b, 3), false, 'B left');
+  });
+
   test('the join ends when A gives up the Mic, B disconnects or B leaves', () => {
     const owner = fixture();
     owner.consent.join(owner.b, A, 0);

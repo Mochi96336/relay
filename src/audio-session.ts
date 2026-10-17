@@ -63,6 +63,14 @@ export type MixFrameEvidence = {
   /** Mic samples held down by more than `HEAVY_LIMIT_DB`: audible, not just protective. */
   heavyLimitedSamples: number;
   unheaderedSamples: number;
+  /**
+   * The second singer's share of this frame. Present only while a B is
+   * attached, so an N=1 frame's evidence is unchanged. Counted only while B
+   * is allowed to sound: a B that is still silent cannot damage the Take.
+   */
+  secondaryAudibleSamples?: number;
+  secondaryGapSamples?: number;
+  secondaryStarvedSamples?: number;
 };
 
 /** Authoritative position of one emitted frame on the shared mix timeline. */
@@ -1181,6 +1189,7 @@ export class AudioSession {
         micReadEvidence.unheaderedSamples
         + backingReadEvidence.unheaderedSamples
         + crossfadeUnheaderedSamplesDelta,
+      ...(duet ? this.secondaryFrameEvidence(duet) : {}),
     };
 
     this.micTrack.lastEmittedMicAdvanceSamples = boundedRuntimeAdvanceMoved
@@ -1194,6 +1203,16 @@ export class AudioSession {
     this.trim(this.backing, startSample - this.backingRetentionSamples);
     if (duet) this.finishSecondaryFrame(duet, startSample);
     return { frame: output, evidence };
+  }
+
+  /** What B contributed to this frame's evidence; zeros while B is silent. */
+  private secondaryFrameEvidence(duet: SecondaryFrame) {
+    const audible = duet.secondary.audible;
+    return {
+      secondaryAudibleSamples: audible ? this.frameSamples : 0,
+      secondaryGapSamples: audible ? duet.read.evidence.gapSamples : 0,
+      secondaryStarvedSamples: audible ? duet.read.evidence.frontierMissingSamples : 0,
+    };
   }
 
   /** B's frame at the same room position, planned on B's own track. */

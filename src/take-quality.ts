@@ -1,6 +1,6 @@
 import type { MixFrameEvidence } from './audio-session.js';
 
-export const TAKE_QUALITY_POLICY_VERSION = 'take-quality-v5' as const;
+export const TAKE_QUALITY_POLICY_VERSION = 'take-quality-v6' as const;
 
 export type TakeQualityVerdict = 'clean' | 'review' | 'degraded';
 export type TakeQualitySeverity = 'warning' | 'critical';
@@ -106,6 +106,17 @@ export type TakeQualityEvidence = {
   contentAlignedSamples?: number;
   contentAlignedMs?: number;
   timingAtStart?: TakeTimingAtStart | null;
+  /**
+   * The second singer (Choir), from v6: how much of the Take B was allowed
+   * to sound in, and the gaps and starvation in B's part of it. Present only
+   * when B sounded in the Take, so an N=1 Take's evidence is unchanged.
+   */
+  secondaryAudibleSamples?: number;
+  secondaryAudibleMs?: number;
+  secondaryGapSamples?: number;
+  secondaryGapMs?: number;
+  secondaryStarvedSamples?: number;
+  secondaryStarvedMs?: number;
   calibrationStaleSamples: number;
   calibrationStaleMs: number;
   alignmentClampedSamples: number;
@@ -143,6 +154,8 @@ export type TakeQualityIssueCode =
   | 'output-clipping'
   | 'mic-input-clipping'
   | 'mic-input-gap'
+  | 'second-mic-pcm-gap'
+  | 'second-mic-starvation'
   | 'unheadered-pcm'
   | 'timing-fallback'
   | 'calibration-stale'
@@ -273,6 +286,19 @@ export function assessTakeQuality(evidence: TakeQualityEvidence): TakeQualityAss
     'backing-starvation',
     evidence.backingStarvedMs,
     'The mixer recorded backing samples beyond the live source frontier.',
+  );
+  // The second singer is a voice in the Take like A, judged by the same rule.
+  addDurationIssue(
+    issues,
+    'second-mic-pcm-gap',
+    evidence.secondaryGapMs ?? 0,
+    "The second singer's recorded range contained positioned PCM gaps.",
+  );
+  addDurationIssue(
+    issues,
+    'second-mic-starvation',
+    evidence.secondaryStarvedMs ?? 0,
+    "The mixer recorded the second singer's samples beyond its live source frontier.",
   );
 
   if (evidence.clippedSamples > 0) {
@@ -443,6 +469,9 @@ export class TakeQualityTracker {
   private limitedSamples = 0;
   private heavyLimitedSamples = 0;
   private unheaderedSamples = 0;
+  private secondaryAudibleSamples = 0;
+  private secondaryGapSamples = 0;
+  private secondaryStarvedSamples = 0;
   private micUnavailableSamples = 0;
   private backingUnavailableSamples = 0;
   private networkEstimateSamples = 0;
@@ -495,6 +524,9 @@ export class TakeQualityTracker {
     this.limitedSamples += audio.limitedSamples;
     this.heavyLimitedSamples += audio.heavyLimitedSamples ?? 0;
     this.unheaderedSamples += audio.unheaderedSamples;
+    this.secondaryAudibleSamples += audio.secondaryAudibleSamples ?? 0;
+    this.secondaryGapSamples += audio.secondaryGapSamples ?? 0;
+    this.secondaryStarvedSamples += audio.secondaryStarvedSamples ?? 0;
 
     if (this.options.timingExpected !== false) {
       if (state.timingMode === 'network-estimate') {
@@ -573,6 +605,14 @@ export class TakeQualityTracker {
       contentAlignedSamples: this.contentAlignedSamples,
       contentAlignedMs: toMs(this.contentAlignedSamples),
       timingAtStart: this.timingAtStart,
+      ...(this.secondaryAudibleSamples > 0 ? {
+        secondaryAudibleSamples: this.secondaryAudibleSamples,
+        secondaryAudibleMs: toMs(this.secondaryAudibleSamples),
+        secondaryGapSamples: this.secondaryGapSamples,
+        secondaryGapMs: toMs(this.secondaryGapSamples),
+        secondaryStarvedSamples: this.secondaryStarvedSamples,
+        secondaryStarvedMs: toMs(this.secondaryStarvedSamples),
+      } : {}),
       calibrationStaleSamples: this.calibrationStaleSamples,
       calibrationStaleMs: toMs(this.calibrationStaleSamples),
       alignmentClampedSamples: this.alignmentClampedSamples,

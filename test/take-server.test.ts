@@ -216,7 +216,7 @@ test('Relay records the authoritative mixed PCM directly into an authenticated W
     assert.equal(ready.take.artifact.channels, 1);
     assert.equal(ready.take.artifact.bitsPerSample, 16);
     assert.ok(ready.take.artifact.durationMs > 0);
-    assert.equal(ready.take.quality.policyVersion, 'take-quality-v5');
+    assert.equal(ready.take.quality.policyVersion, 'take-quality-v6');
     assert.equal(
       ready.take.quality.evidence.recordedSamples,
       ready.take.artifact.sampleCount,
@@ -312,7 +312,7 @@ test('a Mic input gap completed before Start does not contaminate the later Take
 
     control.send({ type: 'stop-take', takeId });
     const ready = await waitReady(control, takeId);
-    assert.equal(ready.take.quality.policyVersion, 'take-quality-v5');
+    assert.equal(ready.take.quality.policyVersion, 'take-quality-v6');
     assert.equal(ready.take.quality.evidence.events['mic-input-gap'], 0);
     assert.equal(
       ready.take.quality.issues.some((issue: any) => issue.code === 'mic-input-gap'),
@@ -394,7 +394,7 @@ test('a short worklet input gap prevents a padded-silence Take from assessing cl
 
     control.send({ type: 'stop-take', takeId });
     const ready = await waitReady(control, takeId);
-    assert.equal(ready.take.quality.policyVersion, 'take-quality-v5');
+    assert.equal(ready.take.quality.policyVersion, 'take-quality-v6');
     assert.equal(ready.take.quality.evidence.events['mic-input-gap'], 1);
     assert.equal(
       ready.take.quality.issues.some((issue: any) => issue.code === 'mic-input-gap'),

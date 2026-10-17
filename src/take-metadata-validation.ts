@@ -13,6 +13,7 @@ const TAKE_QUALITY_POLICY_VERSIONS = new Set([
   'take-quality-v3',
   'take-quality-v4',
   'take-quality-v5',
+  'take-quality-v6',
 ]);
 
 const TAKE_QUALITY_VERDICTS = new Set(['clean', 'review', 'degraded']);
@@ -66,6 +67,12 @@ const TAKE_QUALITY_V4_ISSUE_CODES = new Set([
 const TAKE_QUALITY_V5_ISSUE_CODES = new Set([
   ...TAKE_QUALITY_V4_ISSUE_CODES,
   'mic-input-gap',
+]);
+/** v6 judges the second singer (Choir) as a voice in the Take too. */
+const TAKE_QUALITY_V6_ISSUE_CODES = new Set([
+  ...TAKE_QUALITY_V5_ISSUE_CODES,
+  'second-mic-pcm-gap',
+  'second-mic-starvation',
 ]);
 
 const BASE_SAMPLE_FIELDS = [
@@ -156,7 +163,7 @@ function isTakeQualityEvidence(value: unknown, policyVersion: string) {
 
   const events = recordValue(evidence.events);
   if (!events) return false;
-  const eventKinds = policyVersion === 'take-quality-v5'
+  const eventKinds = policyVersion === 'take-quality-v5' || policyVersion === 'take-quality-v6'
     ? TAKE_QUALITY_V5_EVENT_KINDS
     : TAKE_QUALITY_LEGACY_EVENT_KINDS;
   for (const kind of eventKinds) {
@@ -168,6 +175,7 @@ function isTakeQualityEvidence(value: unknown, policyVersion: string) {
     || policyVersion === 'take-quality-v3'
     || policyVersion === 'take-quality-v4'
     || policyVersion === 'take-quality-v5'
+    || policyVersion === 'take-quality-v6'
   ) {
     if (!nonNegativeSafeInteger(evidence.timingDivergedSamples)) return false;
     if (!nonNegativeFinite(evidence.timingDivergedMs)) return false;
@@ -177,6 +185,7 @@ function isTakeQualityEvidence(value: unknown, policyVersion: string) {
     policyVersion === 'take-quality-v3'
     || policyVersion === 'take-quality-v4'
     || policyVersion === 'take-quality-v5'
+    || policyVersion === 'take-quality-v6'
   ) {
     if (!positiveFinite(evidence.timingDivergenceToleranceMs)) return false;
     if (
@@ -184,7 +193,8 @@ function isTakeQualityEvidence(value: unknown, policyVersion: string) {
       && typeof evidence.recordingInterrupted !== 'boolean'
     ) return false;
   }
-  if (policyVersion === 'take-quality-v4' || policyVersion === 'take-quality-v5') {
+  if (policyVersion === 'take-quality-v4' || policyVersion === 'take-quality-v5'
+    || policyVersion === 'take-quality-v6') {
     if (!nonNegativeSafeInteger(evidence.micInputClippedSamples)) return false;
     if (!nonNegativeFinite(evidence.micInputClippedMs)) return false;
   }
@@ -209,6 +219,10 @@ const OPTIONAL_DURATION_PAIRS = [
   ['sampleSongEstimateSamples', 'sampleSongEstimateMs'],
   ['bootProbeAlignedSamples', 'bootProbeAlignedMs'],
   ['contentAlignedSamples', 'contentAlignedMs'],
+  // v6: the second singer's part, present only when B sounded in the Take.
+  ['secondaryAudibleSamples', 'secondaryAudibleMs'],
+  ['secondaryGapSamples', 'secondaryGapMs'],
+  ['secondaryStarvedSamples', 'secondaryStarvedMs'],
 ] as const;
 const TIMING_KINDS = new Set(['none', 'content', 'boot-probe']);
 const ESTIMATE_SOURCES = new Set(['sample-song', 'transport']);
@@ -218,6 +232,8 @@ function isTakeQualityIssue(value: unknown, policyVersion: string) {
   if (!issue) return false;
   const allowedCodes = policyVersion === 'take-quality-v1'
     ? TAKE_QUALITY_V1_ISSUE_CODES
+    : policyVersion === 'take-quality-v6'
+      ? TAKE_QUALITY_V6_ISSUE_CODES
     : policyVersion === 'take-quality-v5'
       ? TAKE_QUALITY_V5_ISSUE_CODES
       : policyVersion === 'take-quality-v4'

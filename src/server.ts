@@ -2766,8 +2766,11 @@ function syncDuetOutput() {
   // time against the Robot's places B at once. Each song is measured afresh.
   const offset = primaryOwnsMic ? duetContent?.secondaryOffsetMs ?? null : null;
   const content = offset === null ? null : session.requestedMicAdvanceMs + offset;
-  // Then B's test tone, the main Mic's boot measurement for B; then YouTube time.
-  const probe = primaryOwnsMic && content === null && roomSongPlaying(nowMs)
+  // Then B's test tone, the main Mic's boot measurement for B; then YouTube
+  // time. Like the main Mic's boot calibration it holds with or without a
+  // song: read only while one played, B jumped between it and the main Mic's
+  // own value at every pause and play.
+  const probe = primaryOwnsMic && content === null
     ? duetProbe?.advanceMs(currentDeltaMs(nowMs), currentPlaybackRate(nowMs)) ?? null
     : null;
   const youtube = primaryOwnsMic && content === null && probe === null ? duetSampleSongLagMs(nowMs) : null;

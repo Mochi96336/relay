@@ -221,15 +221,17 @@ export class DuetProbe {
   }
 
   played(reply: { requestId: unknown; generation: unknown; timingDiagnostics?: unknown }, nowMs: number) {
-    if (this.state !== 'requested' || reply.requestId !== this.leg?.requestId) return false;
-    this.apply(this.leg.played(reply, nowMs), nowMs);
+    const leg = this.leg;
+    if (this.state !== 'requested' || !leg || reply.requestId !== leg.requestId) return false;
+    this.apply(leg.played(reply, nowMs), nowMs);
     return true;
   }
 
   clientFailed(reply: { requestId: unknown; reason?: unknown }, nowMs: number) {
-    if (!this.running || reply.requestId !== this.leg?.requestId) return false;
+    const leg = this.leg;
+    if (!this.running || !leg || reply.requestId !== leg.requestId) return false;
     const reason = typeof reply.reason === 'string' ? reply.reason.slice(0, 200) : 'could not play the notes';
-    this.apply(this.leg.fail(`${this.state === 'robot' ? 'Robot' : 'B'} page: ${reason}`), nowMs);
+    this.apply(leg.fail(`${this.state === 'robot' ? 'Robot' : 'B'} page: ${reason}`), nowMs);
     return true;
   }
 

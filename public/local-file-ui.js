@@ -1,49 +1,7 @@
-import { localFileMix } from './local-file-mix.js';
+import { localFileMix, localFileSurface, lostMicToAnother } from './local-file-mix.js';
 
-window.relayI18n?.registerMessages({
-  en: {
-    'localFile.open': 'Open local audio file',
-    'localFile.label': 'Local file',
-    'localFile.from': "Local file · {name}'s phone",
-    'localFile.untitled': 'Local song',
-    'localFile.close': 'Close',
-    'localFile.play': 'Play',
-    'localFile.pause': 'Pause',
-    'localFile.position': 'Position',
-    'localFile.mix': 'Mix',
-    'localFile.music': 'Song',
-    'localFile.offset': 'Voice timing',
-    'localFile.offsetEarlier': '{ms} ms earlier',
-    'localFile.offsetLater': '{ms} ms later',
-    'localFile.latency': 'Device delay of {ms} ms is already compensated.',
-    'localFile.needsMic': 'Take Mic to play.',
-    'localFile.roomSongPaused': 'Paused because the room song started.',
-    'localFile.playFailed': 'This file cannot be played.',
-    'localFile.blockedSong': 'Pause the YouTube song first.',
-    'localFile.blockedDuet': 'Not available while a second Mic is in.',
-  },
-  'zh-Hant': {
-    'localFile.open': '打開本機音檔',
-    'localFile.label': '本機音檔',
-    'localFile.from': '本機音檔 · {name} 的手機',
-    'localFile.untitled': '本機歌曲',
-    'localFile.close': '關閉',
-    'localFile.play': '播放',
-    'localFile.pause': '暫停',
-    'localFile.position': '播放位置',
-    'localFile.mix': '混音',
-    'localFile.music': '伴奏',
-    'localFile.offset': '人聲對齊',
-    'localFile.offsetEarlier': '提前 {ms} ms',
-    'localFile.offsetLater': '延後 {ms} ms',
-    'localFile.latency': '已自動補償裝置延遲 {ms} ms。',
-    'localFile.needsMic': '拿 Mic 後才能播放。',
-    'localFile.roomSongPaused': '房間的歌開始播放，已暫停。',
-    'localFile.playFailed': '這個檔案無法播放。',
-    'localFile.blockedSong': '先暫停 YouTube 歌曲。',
-    'localFile.blockedDuet': '副 Mic 在場時不能用。',
-  },
-});
+// Copy lives in i18n.js: the menu item is static markup that i18n.js
+// translates before this module loads.
 
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const $ = selector => document.querySelector(selector);
@@ -77,6 +35,9 @@ let roomSongPlaying = false;
 let roomLocalFile = null;
 let roomMicOwnerId = null;
 let roomMicOwnerName = null;
+// The last participant seen holding the Mic; a reconnect grace's null in
+// between does not count as a handoff.
+let lastMicOwnerId = null;
 let roomHasDuet = false;
 let transientNote = null;
 let seeking = false;
@@ -95,11 +56,6 @@ function offsetLabel(ms) {
 
 function syncVocalGain() {
   if (micGain) localFileMix.setVocalGainDb(Number(micGain.value));
-}
-
-function observingAnotherPhone() {
-  return !localFileMix.active && roomLocalFile !== null
-    && roomMicOwnerId !== null && roomMicOwnerId !== window.relayParticipantId;
 }
 
 function renderMenu() {
@@ -147,13 +103,18 @@ function renderObserver() {
 
 function render() {
   renderMenu();
-  const owner = localFileMix.active;
-  const observer = observingAnotherPhone();
-  panel.hidden = !owner && !observer;
-  songStage.dataset.localFile = owner || observer ? 'on' : 'off';
-  document.body.dataset.localFile = owner ? 'on' : 'off';
-  if (owner) renderOwner();
-  else if (observer) renderObserver();
+  const surface = localFileSurface({
+    fileOpen: localFileMix.active,
+    myId: window.relayParticipantId,
+    micOwnerId: roomMicOwnerId,
+    roomLocalFile,
+  });
+  panel.hidden = surface === 'none';
+  // Standby keeps the room's own song visible: someone else is singing.
+  songStage.dataset.localFile = surface === 'owner' || surface === 'observer' ? 'on' : 'off';
+  document.body.dataset.localFile = localFileMix.active ? 'on' : 'off';
+  if (surface === 'owner' || surface === 'standby') renderOwner();
+  else if (surface === 'observer') renderObserver();
 }
 
 openButton.addEventListener('click', () => {
@@ -216,6 +177,13 @@ window.addEventListener('relay-product-status', (event) => {
   roomLocalFile = room?.localFile ?? null;
   roomMicOwnerId = room?.mic?.ownerId ?? null;
   roomMicOwnerName = room?.mic?.ownerNickname ?? null;
+  if (roomMicOwnerId !== null) {
+    // Someone took the Mic from this phone: its local song went with it.
+    if (localFileMix.active && lostMicToAnother({
+      previousOwnerId: lastMicOwnerId, nextOwnerId: roomMicOwnerId, myId: window.relayParticipantId,
+    })) localFileMix.close();
+    lastMicOwnerId = roomMicOwnerId;
+  }
   roomHasDuet = Boolean(room?.duet);
   render();
 });

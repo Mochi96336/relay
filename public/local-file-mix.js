@@ -69,6 +69,27 @@ function limiter(context, thresholdDb, releaseSeconds) {
   return node;
 }
 
+/**
+ * How this page's song area shows local file mode.
+ * - 'owner': this phone's file is the room's song (it holds the Mic, or
+ *   nobody does yet) and replaces the YouTube surface;
+ * - 'standby': a file is open here but someone else holds the Mic, whose
+ *   room song stays visible;
+ * - 'observer': another phone is playing its local file;
+ * - 'none'.
+ */
+export function localFileSurface({ fileOpen, myId, micOwnerId, roomLocalFile }) {
+  const othersMic = typeof micOwnerId === 'string' && micOwnerId !== myId;
+  if (fileOpen) return othersMic ? 'standby' : 'owner';
+  return othersMic && roomLocalFile ? 'observer' : 'none';
+}
+
+/** This page held the Mic and someone else holds it now: its local file is over. */
+export function lostMicToAnother({ previousOwnerId, nextOwnerId, myId }) {
+  return typeof myId === 'string' && previousOwnerId === myId
+    && typeof nextOwnerId === 'string' && nextOwnerId !== myId;
+}
+
 export class LocalFileMix extends EventTarget {
   #file = null; // { url, name }
   #graph = null; // nodes bound to one AudioContext
@@ -223,7 +244,9 @@ export class LocalFileMix extends EventTarget {
     element.addEventListener('timeupdate', () => { if (this.#graph === graph) this.#changed('time'); });
     graph.onState = () => {
       if (context.state === 'closed' && this.#graph === graph) {
-        this.#teardown();
+        // The Mic stopped (released, revoked, or lost). Taking it again
+        // later must not start the song by itself.
+        this.#teardown({ resume: false });
         this.#changed('detached');
       }
     };
@@ -231,7 +254,11 @@ export class LocalFileMix extends EventTarget {
     return graph;
   }
 
-  #teardown() {
+  /**
+   * `resume`: a replacement capture context (clock-loss recovery) carries
+   * on playing where this one was; the end of the Mic session does not.
+   */
+  #teardown({ resume = true } = {}) {
     const graph = this.#graph;
     if (!graph) return;
     if (this.#links?.graph === graph) this.#unlink();
@@ -239,7 +266,8 @@ export class LocalFileMix extends EventTarget {
     clearInterval(this.#retuneTimer);
     this.#retuneTimer = null;
     this.#position = graph.element.currentTime || this.#position;
-    if (!graph.element.paused) this.#wantPlaying = true;
+    if (!resume) this.#wantPlaying = false;
+    else if (!graph.element.paused) this.#wantPlaying = true;
     try { graph.context.removeEventListener?.('statechange', graph.onState); } catch {}
     try { graph.element.pause(); } catch {}
     // A media element can feed only the context it was first bound to; a

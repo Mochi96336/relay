@@ -1,0 +1,87 @@
+/* Local file mode: the song this phone plays from its own storage. */
+.local-file-panel {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.local-file-panel[hidden] { display: none; }
+
+.local-file-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.local-file-label {
+  flex: none;
+  color: var(--dim);
+  font-size: 11px;
+}
+.local-file-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 620;
+}
+.local-file-heading .text-action {
+  flex: none;
+  min-height: 36px;
+  font-size: 12px;
+}
+
+.local-file-transport {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+.local-file-play {
+  appearance: none;
+  min-width: 64px;
+  min-height: 40px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  padding: 0 12px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 620;
+  touch-action: manipulation;
+}
+.local-file-seek { width: 100%; min-width: 0; accent-color: var(--accent); }
+.local-file-time {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.local-file-note:empty { display: none; }
+
+.local-file-mix { margin-top: 8px; }
+.local-file-mix > summary {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.local-file-control {
+  display: grid;
+  grid-template-columns: 5.5em minmax(0, 1fr) 4.5em;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.local-file-control input { width: 100%; min-width: 0; accent-color: var(--accent); }
+.local-file-control output {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}

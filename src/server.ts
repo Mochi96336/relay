@@ -773,6 +773,8 @@ function micMediaPath(nowMs = performance.now()) {
 function clearMicMediaAuthority() {
   micRuntime.clearMediaAuthority(performance.now());
   session.setMicExpected(false);
+  // Premixed belongs to the capture that declared it.
+  session.setMicPremixed(false);
   // An audibility or level verdict belongs to one capture, never to the next singer.
   resetMicAudibility();
   micLevel.reset();
@@ -1969,6 +1971,7 @@ function remoteStatusFacts(nowMs: number): RemoteStatusFacts {
       audibility: micAudibility.status(),
       level: micLevel.status(),
       micGainDb: session.micGainDb,
+      premixed: session.micPremixed,
       concealedSamples: session.micConcealedSampleCount,
       clockDrift: micClockDrift.estimate(),
       clockTrimPpm: session.micClockTrimPpm,
@@ -2533,7 +2536,7 @@ const mixerTimer = setInterval(() => {
       micLive: micPlayable(nowMs),
       frameSamples: frame.byteLength / 2,
       heavyLimitedSamples: evidence.heavyLimitedSamples,
-    }, () => ({ songPlaying: roomSongPlaying(nowMs), micGainDb: session.micGainDb }));
+    }, () => ({ songPlaying: roomSongPlaying(nowMs), micGainDb: session.effectiveMicGainDb }));
     if (levelChanged) reportMicLevel('window');
   });
   reportMicTimelineFolds();
@@ -2810,6 +2813,7 @@ function reportMicDevice(health: AudioUplinkHealth) {
     },
     audioSessionType: health.capture?.audioSessionType ?? null,
     gainDb: session.micGainDb,
+    premixed: session.micPremixed,
     // A page keeps the scripts it loaded. On 2026-10-16 a Mic in Germany ran
     // an app.js from before Opus and sent PCM at six times the bitrate; only
     // missing fields gave it away. null: the page predates sending its build.
@@ -4455,6 +4459,8 @@ function publisherActivated(request: {
   initialSequence?: number;
   audioPacketVersion: 1 | 2;
   requestedMicGainDb: number | null;
+  /** The phone mixed a local song into this capture (local file mode). */
+  premixed: boolean;
 }) {
   // The ownership change's timing invalidation and handoff preparation wait
   // until the new publisher is bound.
@@ -4510,6 +4516,14 @@ function publisherActivated(request: {
 
   micTransportGrace.cancel();
   session.setMicExpected(true);
+  if (request.premixed !== session.micPremixed) {
+    console.log('[mic-premixed]', JSON.stringify({
+      premixed: request.premixed,
+      participant: request.socket.participantId ? participantLogLabel(request.socket.participantId) : null,
+      captureGeneration: request.captureGeneration,
+    }));
+  }
+  session.setMicPremixed(request.premixed);
   if (!previousPublisher && session.active) {
     takeController.noteQualityEvent('mic-transport-connected');
   }
@@ -4686,6 +4700,7 @@ const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
       initialSequence: initialSequence ?? undefined,
       audioPacketVersion,
       requestedMicGainDb: requestedMicGainDb(payload.micGainDb),
+      premixed: payload.premixed === true,
     });
     return;
   },

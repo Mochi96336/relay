@@ -55,6 +55,8 @@ export type RemoteStatusFacts = {
     audibility: ReturnType<MicAudibilityMonitor['status']>;
     level: ReturnType<MicLevelMonitor['status']>;
     micGainDb: number;
+    /** Local file mode: the phone mixed its song into the Mic, which is mixed at unity. */
+    premixed: boolean;
     concealedSamples: number;
     clockDrift: ReturnType<MicClockDriftEstimator['estimate']>;
     clockTrimPpm: number;
@@ -142,6 +144,7 @@ export function projectRemoteStatus(facts: RemoteStatusFacts) {
       // The gain now, beside the gain the last window was measured at: a
       // change is judged at once but measured only when the next window closes.
       micLevel: { ...mic.level, micGainDb: mic.micGainDb },
+      micPremixed: mic.premixed,
       timeline: {
         micGapMs: mix.health.micGapMs,
         micConcealedMs: Math.round((mic.concealedSamples / facts.mixSampleRate) * 1000),

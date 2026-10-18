@@ -1,5 +1,7 @@
 /** Trial policy: local congestion and fresh media delivery, never RTT alone. */
 export class MicBitratePolicy {
+  /** The lowest step congestion may reach. A premixed song needs 64 kbps; 32 is for voice. */
+  floor = 32000;
   constructor() { this.reset(); }
   reset() {
     this.bitrate = 128000; this.reason = 'startup'; this.changedAt = null;
@@ -26,7 +28,7 @@ export class MicBitratePolicy {
     else if (good) { this.goodSince ??= previous.nowMs; this.badSince = null; }
     else { this.badSince = this.goodSince = null; }
     const cooldown = this.changedAt === null || nowMs - this.changedAt >= 5000;
-    if (bad && this.badSince !== null && nowMs - this.badSince >= 3000 && cooldown && this.bitrate > 32000) {
+    if (bad && this.badSince !== null && nowMs - this.badSince >= 3000 && cooldown && this.bitrate > this.floor) {
       this.bitrate = this.bitrate === 128000 ? 64000 : 32000;
       this.reason = congestion ? 'congestion' : 'media-backlog';
       this.changedAt = nowMs; this.badSince = null;

@@ -30,6 +30,9 @@ function trackDeviceId(track) {
 export function createMicCaptureGraph({
   epoch, sessionEpoch, stream, context, isCurrent, onCaptureMessage,
   onProcessorError, onInputDeviceChanged, onInputDeviceRemoved,
+  // Local file mode puts its mix between the Mic and the capture. Returns a
+  // handle with disconnect(), or null to capture the Mic alone.
+  connectInput = null,
   mediaDevices = globalThis.navigator?.mediaDevices,
   AudioWorkletNodeClass = globalThis.AudioWorkletNode,
   WorkerClass = globalThis.Worker,
@@ -42,11 +45,13 @@ export function createMicCaptureGraph({
   let inputDeviceId = null;
   let processorErrorListener = null;
   let deviceChangeListener = null;
+  let premix = null;
 
   const graph = {
     epoch, sessionEpoch, stream, context,
     source: null, capture: null, silent: null,
     captureClockOriginContextTime: null,
+    get premixed() { return premix !== null; },
     get visualAnalysis() { return visualAnalysis; },
     dispose, submitVisualAnalysis, returnBuffer, checkInputDeviceChange,
   };
@@ -75,6 +80,7 @@ export function createMicCaptureGraph({
     } catch {}
     processorErrorListener = null;
     stopWorker();
+    try { premix?.disconnect(); } catch {}
     for (const node of [graph.source, graph.capture, graph.silent]) {
       try { node?.disconnect(); } catch {}
     }
@@ -177,7 +183,9 @@ export function createMicCaptureGraph({
     attachVisualAnalysisWorker();
     // New worklets stay raw-compatible until a current page opts in.
     graph.capture.port.postMessage({ type: 'capture-protocol', pcmEnvelope: true });
-    graph.source.connect(graph.capture).connect(graph.silent).connect(context.destination);
+    premix = connectInput?.({ context, stream, source: graph.source, capture: graph.capture }) ?? null;
+    if (!premix) graph.source.connect(graph.capture);
+    graph.capture.connect(graph.silent).connect(context.destination);
     return graph;
   } catch (error) {
     dispose();

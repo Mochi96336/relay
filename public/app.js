@@ -9,6 +9,7 @@ await window.relayIdentityReady;
 import { PreferredAudioTransport } from './audio-transport.js';
 import { createMicOpusTrial } from './mic-opus-trial.js';
 import { MicBitratePolicy } from './mic-bitrate-policy.js';
+import { localFileMix } from './local-file-mix.js';
 const micBitratePolicy = new MicBitratePolicy();
 const micCodecConfig = await fetch('/mic-codec-config', { cache: 'no-store', signal: AbortSignal.timeout(3000) })
   .then(response => response.ok ? response.json() : { opus: false }).catch(() => ({ opus: false }));
@@ -575,6 +576,7 @@ function installCaptureGraph(sessionEpoch, captureStream, captureContext) {
     onProcessorError: handleCaptureProcessorError,
     onInputDeviceChanged: () => { void rebuildPublisherCaptureGraph('input-device-changed'); },
     onInputDeviceRemoved: () => finishMicrophoneSession('input-device-removed', { releaseMic: false }),
+    connectInput: localFileMix.connectInput,
   });
   // No callback is admitted until all graph resources are installed. Neither
   // failed preparation nor graph disposal owns publisher stream/context teardown.
@@ -994,7 +996,10 @@ async function connectPublisherSocket(
     captureGeneration: expectedGeneration,
     initialSequence: capturePacketSequence >>> 0,
     audioPacketVersion: AUDIO_PACKET_VERSION,
+    // The capture this registration describes already holds a local song.
+    premixed: activeCaptureGraph?.premixed === true,
   };
+  micBitratePolicy.floor = registration.premixed ? 64000 : 32000;
   // This device's own last gain, so a new owner does not start from the
   // previous singer's.
   const rememberedGainDb = storedNumber(MIC_GAIN_KEY, 0, 40);
@@ -1133,6 +1138,21 @@ function rebuildPublisherAudioContext() {
   captureGraphRebuildPromise = promise;
   return promise;
 }
+
+// Opening or closing a local file changes what the capture carries, and Relay
+// mixes a premixed capture at unity. A new capture generation makes that
+// switch at a sample boundary: no voice-gain samples are mixed as premixed or
+// the other way round.
+function syncLocalFileMode() {
+  const graph = activeCaptureGraph;
+  if (!publisherActive || !graph || graph.premixed === localFileMix.active) return;
+  void rebuildPublisherCaptureGraph('local-file-mode').then((rebuilt) => {
+    if (rebuilt) syncLocalFileMode();
+  });
+}
+localFileMix.addEventListener('change', (event) => {
+  if (event.detail?.kind === 'mode') syncLocalFileMode();
+});
 
 function rebuildPublisherCaptureGraph(reason) {
   if (captureGraphRebuildPromise) return captureGraphRebuildPromise;

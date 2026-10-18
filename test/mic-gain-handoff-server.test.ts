@@ -21,7 +21,7 @@ async function publish(
   id: string,
   name: string,
   captureGeneration: number,
-  options: { takeoverExpectedOwnerId?: string; micGainDb?: unknown } = {},
+  options: { takeoverExpectedOwnerId?: string; micGainDb?: unknown; premixed?: boolean } = {},
 ) {
   const publisher = await connect(server, id, name);
   publisher.send({
@@ -31,6 +31,7 @@ async function publish(
     captureGeneration,
     ...(options.takeoverExpectedOwnerId ? { takeoverExpectedOwnerId: options.takeoverExpectedOwnerId } : {}),
     ...('micGainDb' in options ? { micGainDb: options.micGainDb } : {}),
+    ...(options.premixed ? { premixed: true } : {}),
   });
   await publisher.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
   return publisher;
@@ -126,6 +127,28 @@ test('a registered Mic gain is clamped, and an unusable one falls back to the de
     assert.equal(await publisherGain(garbled), 24);
 
     for (const client of [observer, alice, bob, garbled]) client.close();
+  } finally {
+    await server.stop();
+  }
+});
+
+test('a premixed capture is mixed at unity until the next ordinary capture', async () => {
+  const server = await startRelay(FAST);
+  const statusz = async () => (await fetch(server.httpUrl('/statusz')).then((response) => response.json()) as any).audio;
+  try {
+    await connect(server, 'participant-alice', 'Alice');
+    const premixed = await publish(server, 'participant-alice', 'Alice', 1, { premixed: true });
+    let mic = await statusz();
+    assert.equal(mic.micPremixed, true);
+    assert.equal(mic.micLevel.micGainDb, 24, 'the room setting is kept for the next ordinary capture');
+
+    // Closing the local file starts a new capture without the flag.
+    const ordinary = await publish(server, 'participant-alice', 'Alice', 2);
+    await premixed.waitForType('publisher-superseded');
+    mic = await statusz();
+    assert.equal(mic.micPremixed, false);
+    assert.equal(mic.micLevel.micGainDb, 24);
+    ordinary.close();
   } finally {
     await server.stop();
   }

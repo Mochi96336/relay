@@ -242,3 +242,29 @@ test('failed replacement preparation cleans its own nodes without disposing the 
   assert.deepEqual(f.messages, ['existing graph']);
   f.dispose(current);
 });
+
+test('local file mode routes the Mic through its premix and unlinks it on dispose', () => {
+  const f = captureFixture();
+  const calls: any[] = [];
+  f.env.localFileMix.connectInput = (input: any) => {
+    calls.push(input);
+    return { disconnect() { calls.push('disconnect'); } };
+  };
+  const graph = f.install();
+  assert.equal(graph.premixed, true);
+  assert.equal(calls[0].source, graph.source);
+  assert.equal(calls[0].capture, graph.capture);
+  assert.equal(calls[0].stream, f.stream);
+  // The premix owns the Mic's route into the capture.
+  assert.equal(graph.source.connected, false);
+  f.dispose(graph);
+  assert.deepEqual(calls.slice(1), ['disconnect']);
+});
+
+test('without a local file the Mic is captured alone', () => {
+  const f = captureFixture();
+  f.env.localFileMix.connectInput = () => null;
+  const graph = f.install();
+  assert.equal(graph.premixed, false);
+  assert.equal(graph.source.connected, true);
+});

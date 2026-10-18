@@ -9,17 +9,8 @@ import {
   ChoirSecondaryPcmIngressExperiment,
   type ChoirIngressResult,
 } from '../src/choir-secondary-pcm-ingress-experiment.js';
-import type { ChoirFreshCaptureTicket } from '../src/choir-fresh-room-handshake-experiment.js';
 
 type Socket = { participantId?: string; role: string; open: boolean };
-const A: ChoirFreshCaptureTicket = Object.freeze({
-  roomEpoch: 1, songEpoch: 1, mediaEpoch: 1,
-  participantId: 'A', seat: 'primary', transportId: 'socket-A',
-});
-const B: ChoirFreshCaptureTicket = Object.freeze({
-  roomEpoch: 1, songEpoch: 1, mediaEpoch: 2,
-  participantId: 'B', seat: 'secondary', transportId: 'socket-B',
-});
 function bytes(generation = 7, start = 0, samples = 960): Buffer {
   return v2(Math.floor(start / 960) >>> 0, start, samples, generation);
 }
@@ -30,28 +21,22 @@ function boundResult(result: ChoirIngressResult) {
 function socketFor(participantId?: string, role = 'unknown'): Socket {
   return { participantId, role, open: true };
 }
+/** B is the joined singer until `leave()`; every frame heard lands in `accepted`. */
 function fixture() {
-  const accepted: Array<{ticket: ChoirFreshCaptureTicket; generation: number | null; at: number}> = [];
-  const disconnected: ChoirFreshCaptureTicket[] = [];
-  let roomEpoch = 1;
-  const ingress = new ChoirSecondaryPcmIngressExperiment({
-    mayAcceptVerifiedTicket(ticket) {
-      return ticket.roomEpoch === roomEpoch && ticket.seat === 'secondary'
-        && ticket.participantId === 'B' && ticket.transportId === 'socket-B'
-        && ticket.mediaEpoch === 2;
-    },
-    receiveVerifiedMic(ticket, frame, _rate, nowMs) {
-      if (ticket.roomEpoch !== roomEpoch) return false;
-      accepted.push({ ticket, generation: frame.generation, at: nowMs });
-      return true;
-    },
-    disconnectVerifiedSinger(ticket) {
-      if (ticket.roomEpoch !== roomEpoch) return false;
-      disconnected.push(ticket);
-      return true;
-    },
-  }, socket => (socket as Socket).open);
-  return { ingress, accepted, disconnected, revoke: () => { roomEpoch++; } };
+  const accepted: Array<{ participantId: string; generation: number | null; at: number }> = [];
+  let joined = true;
+  const ingress = new ChoirSecondaryPcmIngressExperiment(
+    socket => (socket as Socket).open,
+    participantId => joined && participantId === 'B',
+  );
+  ingress.onAcceptedFrame = (frame, _rate, participantId, nowMs) => {
+    accepted.push({ participantId, generation: frame.generation, at: nowMs });
+  };
+  return {
+    ingress, accepted,
+    leave: () => { joined = false; },
+    join: () => { joined = true; },
+  };
 }
 
 function v2(sequence: number, firstSampleIndex: number, sampleCount = 960,
@@ -62,66 +47,58 @@ function v2(sequence: number, firstSampleIndex: number, sampleCount = 960,
   });
 }
 
-describe('isolated Choir secondary WebSocket PCM admission', () => {
-  test('only server-bound authenticated secondary may reach experimental Mic sink', () => {
+describe('the second Mic\'s packet ingress', () => {
+  test('only a joined, authenticated B socket may be bound, once', () => {
     const f = fixture();
     const socket: Socket = { participantId: 'B', role: 'unknown', open: true };
     const raw = bytes();
     assert.deepEqual(f.ingress.interceptBinary(socket, raw, 10), { intercepted: false },
-      'default state preserves the existing N=1 route');
-    assert.equal(f.ingress.bindVerifiedSecondary(socket, A, 48_000, 10), false,
-      'a primary cannot silently claim a second Mic transport');
-    assert.equal(f.ingress.bindVerifiedSecondary(socketFor('A'),
-      B, 48_000, 10), false, 'auth identity must match the ticket singer');
-    assert.equal(f.ingress.bindVerifiedSecondary(socketFor(),
-      B, 48_000, 10), false, 'anonymous transport has no Choir media authority');
-    assert.equal(f.ingress.bindVerifiedSecondary(socketFor('B', 'publisher'),
-      B, 48_000, 10), false, 'production publisher role cannot double-register as Choir');
+      'an unbound socket keeps the ordinary routes');
+    assert.equal(f.ingress.bind(socketFor('A'), 'A', 'socket-A', 48_000, 10), false,
+      'the Mic owner is not the joined second singer');
+    assert.equal(f.ingress.bind(socketFor('A'), 'B', 'socket-B', 48_000, 10), false,
+      'auth identity must match the joined singer');
+    assert.equal(f.ingress.bind(socketFor(), 'B', 'socket-B', 48_000, 10), false,
+      'an anonymous socket has no second Mic authority');
+    assert.equal(f.ingress.bind(socketFor('B', 'publisher'), 'B', 'socket-B', 48_000, 10), false,
+      'a main Mic publisher cannot double as the second Mic');
     assert.equal(f.ingress.codec, null, 'no codec to report before B binds');
-    assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 10), true);
+    assert.equal(f.ingress.bind(socket, 'B', 'socket-B', 48_000, 10), true);
     assert.equal(f.ingress.codec, 'pcm');
-    assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 11), false);
-    assert.equal(f.ingress.bindVerifiedSecondary(socketFor('B'), B, 48_000, 12), false,
-      'same B ticket may not be claimed by two physical WebSockets');
+    assert.equal(f.ingress.liveTransportFor('B'), 'socket-B');
+    assert.equal(f.ingress.bind(socket, 'B', 'socket-B2', 48_000, 11), false, 'a socket binds once');
+    assert.equal(f.ingress.bind(socketFor('B'), 'B', 'socket-B', 48_000, 12), false,
+      'one transport id is one physical socket');
     assert.deepEqual(f.ingress.interceptBinary(socket, raw, 20),
       { intercepted: true, accepted: true, reason: 'accepted' });
-    assert.equal(f.accepted.length, 1);
-    assert.equal(f.accepted[0].ticket.participantId, 'B');
-    assert.equal(f.accepted[0].generation, 7);
-    assert.equal(f.ingress.disconnect(socket, 30), true);
-    assert.equal(f.ingress.disconnect(socket, 31), false);
+    assert.deepEqual(f.accepted, [{ participantId: 'B', generation: 7, at: 20 }]);
+    assert.equal(f.ingress.disconnect(socket), true);
+    assert.equal(f.ingress.disconnect(socket), false);
     assert.deepEqual(f.ingress.interceptBinary(socket, raw, 32), { intercepted: false });
-    assert.deepEqual(f.disconnected, [B]);
+    assert.equal(f.ingress.liveTransportFor('B'), null);
     assert.equal(f.ingress.codec, null, 'a departed B leaves no codec behind');
   });
 
-  test('a socket bound by B\'s join alone carries B only while the join allows it', () => {
+  test('a bound socket carries B only while B\'s join allows it', () => {
     const f = fixture();
-    const socket: Socket = { participantId: 'B', role: 'unknown', open: true };
-    assert.equal(f.ingress.bindJoinedSecondary(socket, 'B', 'join-B', 48_000, 0), false,
-      'no join predicate: every socket stays room-only');
-    let joined = true;
-    f.ingress.liveVoiceAllowed = (participantId) => joined && participantId === 'B';
-    assert.equal(f.ingress.bindJoinedSecondary(socketFor('A'), 'B', 'join-B', 48_000, 0), false,
-      'auth identity must match the joined singer');
-    assert.equal(f.ingress.bindJoinedSecondary(socket, 'B', 'join-B', 48_000, 0), true);
-    assert.equal(f.ingress.liveTransportFor('B'), 'join-B');
-    const heard: number[] = [];
-    f.ingress.onAcceptedFrame = (frame) => { heard.push(frame.firstSampleIndex); };
+    const socket = socketFor('B');
+    assert.equal(f.ingress.bind(socket, 'B', 'socket-B', 48_000, 0), true);
     assert.equal(boundResult(f.ingress.interceptBinary(socket, bytes(), 10)).accepted, true);
-    assert.equal(f.accepted.length, 0, 'no room took it as evidence');
-    joined = false;
+    f.leave();
     assert.deepEqual(f.ingress.interceptBinary(socket, bytes(7, 960), 20),
       { intercepted: true, accepted: false, reason: 'stale-authority' });
     assert.equal(f.ingress.liveTransportFor('B'), null);
-    assert.deepEqual(heard, [0]);
-    assert.equal(f.ingress.disconnect(socket, 30), false, 'no room singer to revoke');
+    assert.equal(f.ingress.isAttached(socket), true,
+      'the old socket still swallows its late frames until it closes');
+    assert.equal(f.accepted.length, 1);
+    assert.equal(f.ingress.bind(socketFor('B'), 'B', 'socket-B3', 48_000, 30), false,
+      'nobody binds without a join');
   });
 
   test('malformed, unpositioned, oversized and restarted frames are intercepted but never applied', () => {
     const f = fixture();
     const socket: Socket = { participantId: 'B', role: 'unknown', open: true };
-    assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 0), true);
+    assert.equal(f.ingress.bind(socket, 'B', 'socket-B', 48_000, 0), true);
     const accepted = bytes();
     assert.equal(boundResult(f.ingress.interceptBinary(socket, accepted, 10)).accepted, true);
     const emptyCount = Buffer.from(bytes());
@@ -153,16 +130,16 @@ describe('isolated Choir secondary WebSocket PCM admission', () => {
       'a refused capture restart cannot poison previously valid source generation');
   });
 
-  test('old room and changed socket identity cannot leak PCM into N=1 or next Choir room', () => {
+  test('an ended join and a changed socket identity cannot leak PCM to the next B', () => {
     const f = fixture();
-    const socket: Socket = { participantId: 'B', role: 'unknown', open: true };
-    assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 0), true);
+    const socket = socketFor('B');
+    assert.equal(f.ingress.bind(socket, 'B', 'socket-B', 48_000, 0), true);
     assert.equal(boundResult(f.ingress.interceptBinary(socket, bytes(), 10)).accepted, true);
-    f.revoke();
+    f.leave();
     assert.equal(f.ingress.sweepStale(19), 1,
-      'a retired room frees active ownership without touching the old physical socket');
+      'an ended join frees the transport without touching the old physical socket');
     assert.equal(f.ingress.isAttached(socket), true,
-      'old socket still must intercept all late binary frames until it closes');
+      'the old socket still intercepts all late binary frames until it closes');
     assert.deepEqual(f.ingress.interceptBinary(socket, bytes(7, 960), 20), {
       intercepted: true, accepted: false, reason: 'stale-authority',
     });
@@ -176,15 +153,19 @@ describe('isolated Choir secondary WebSocket PCM admission', () => {
     socket.role = 'unknown';
     socket.open = false;
     assert.equal(boundResult(f.ingress.interceptBinary(socket, bytes(7, 3840), 32)).accepted, false);
-    assert.equal(f.ingress.disconnect(socket, 33), false,
-      'a retired Choir room cannot revoke a new singer by closing an old socket');
+    f.join();
+    const next = socketFor('B');
+    assert.equal(f.ingress.bind(next, 'B', 'socket-B2', 48_000, 40), true);
+    f.ingress.disconnect(socket);
+    assert.equal(f.ingress.liveTransportFor('B'), 'socket-B2',
+      'closing the old socket never releases the new one');
     assert.equal(f.accepted.length, 1);
   });
 
   test('sustained oversized or high-rate secondary traffic is bounded per socket', () => {
     const f = fixture();
     const socket: Socket = { participantId: 'B', role: 'unknown', open: true };
-    assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 0), true);
+    assert.equal(f.ingress.bind(socket, 'B', 'socket-B', 48_000, 0), true);
     assert.equal(boundResult(f.ingress.interceptBinary(socket, Buffer.alloc(77_000), 1)).reason,
       'too-large');
     for (let i = 0; i < 150; i++) {
@@ -199,7 +180,7 @@ describe('isolated Choir secondary WebSocket PCM admission', () => {
   test('AudioPacket v2 from authenticated secondary never downgrades to v1 or accepts backing/v3', () => {
     const f = fixture();
     const socket = socketFor('B');
-    assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 0), true);
+    assert.equal(f.ingress.bind(socket, 'B', 'socket-B', 48_000, 0), true);
     assert.deepEqual(f.ingress.interceptBinary(socket, v2(0, 0), 10), {
       intercepted: true, accepted: true, reason: 'accepted',
     });
@@ -230,7 +211,7 @@ describe('isolated Choir secondary WebSocket PCM admission', () => {
   test('v2 sequence deduplicates retransmissions, allows bounded reordering and uint32 wrap', () => {
     const f = fixture();
     const socket = socketFor('B');
-    assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 0), true);
+    assert.equal(f.ingress.bind(socket, 'B', 'socket-B', 48_000, 0), true);
     for (const [seq, first] of [
       [0xffff_fffe, 0], [0, 1920], [0xffff_ffff, 960], [1, 2880],
     ]) {
@@ -256,7 +237,7 @@ describe('isolated Choir secondary WebSocket PCM admission', () => {
   test('v2 bounded recent replay window evicts old sample claims without accepting old sequences', () => {
     const f = fixture();
     const socket = socketFor('B');
-    assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 0), true);
+    assert.equal(f.ingress.bind(socket, 'B', 'socket-B', 48_000, 0), true);
     for (let seq = 0; seq <= 129; seq++) {
       // Keep packet rate below 150/s while advancing an ordinary sequence.
       assert.equal(boundResult(f.ingress.interceptBinary(
@@ -274,10 +255,10 @@ describe('isolated Choir secondary WebSocket PCM admission', () => {
     const f = fixture();
     const frames: Array<{ firstSampleIndex: number; pcm: Buffer }> = [];
     f.ingress.onAcceptedFrame = (frame) => { frames.push(frame); };
-    assert.equal(f.ingress.bindVerifiedSecondary(socketFor('B'), B, 44_100, 0, 3), false,
+    assert.equal(f.ingress.bind(socketFor('B'), 'B', 'socket-B', 44_100, 0, 3), false,
       'Opus v3 is 20 ms frames at 48 kHz only');
     const socket = socketFor('B');
-    assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 0, 3), true);
+    assert.equal(f.ingress.bind(socket, 'B', 'socket-B', 48_000, 0, 3), true);
     assert.equal(f.ingress.codec, 'opus');
 
     // The page's own encoder (mic-opus-worker.js), framed as mic-opus-trial.js does.

@@ -53,7 +53,7 @@ test('the second Mic copy exists in both locales and the old invitation copy is 
   assert.doesNotMatch(i18n, /'choir\.(previewOnly|invitationFrom|panelTitle|beginRoom|connectMedia|dismiss)':/);
 });
 
-test('B starts its Mic only on its own tap and connects to each room the server announces', async () => {
+test('B starts its Mic only on its own tap and connects when the server asks for its media', async () => {
   const html = await file('../public/index.html');
   const app = await file('../public/choir-consent-ui.js');
   const media = await file('../public/choir-secondary-media-client.js');
@@ -64,7 +64,8 @@ test('B starts its Mic only on its own tap and connects to each room the server 
   // The join tap itself starts capture: browsers require a gesture for the Mic.
   assert.match(app, /relay-choir-start-secondary-capture[\s\S]*?publishCommand\('choir-secondary-join'\)/);
   assert.match(presence, /payload\.type === 'choir-secondary-join'/);
-  assert.match(media, /type === 'choir-room-ready'[\s\S]*?requestClaim\(\)/);
+  assert.match(media, /type === 'choir-media-ready'[\s\S]*?requestClaim\(\)/);
+  assert.doesNotMatch(media, /roomEpoch|choir-room-ready/);
   assert.match(media, /wsUrl\(\{ compress: false \}\)/);
   assert.match(media, /sendParticipantAuthentication\(socket\)/);
   assert.match(media, /message\.participantId !== window\.relayParticipantId/);

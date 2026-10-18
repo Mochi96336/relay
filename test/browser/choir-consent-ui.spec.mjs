@@ -182,7 +182,7 @@ test('a refused or ended second Mic restores its join button without an extra st
 });
 
 
-test('repeated room announcements preserve B media while a new room reconnects', async ({ page }) => {
+test('repeated media requests never replace B\'s media socket', async ({ page }) => {
   await openFixture(page, 'singerB', 'owner');
   await enable(page);
   const result = await page.evaluate(async () => {
@@ -204,7 +204,7 @@ test('repeated room announcements preserve B media while a new room reconnects',
         const message = JSON.parse(raw);
         const reply = message.type === 'participant-authenticate'
           ? { type: 'participant-authenticated', participantId: 'singerB' }
-          : { type: 'choir-secondary-media-registered', roomEpoch: 1, awaitingContent: true, sampleRate: 48000 };
+          : { type: 'choir-secondary-media-registered', sampleRate: 48000 };
         queueMicrotask(() => this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(reply) })));
       }
       close() { this.closes++; this.readyState = 3; this.dispatchEvent(new Event('close')); }
@@ -213,23 +213,17 @@ test('repeated room announcements preserve B media while a new room reconnects',
     const message = detail => window.dispatchEvent(new CustomEvent('relay-choir-media-message', { detail }));
     window.dispatchEvent(new Event('relay-choir-start-secondary-capture'));
     await Promise.resolve();
-    const room = { type: 'choir-room-ready', roomEpoch: 1 };
-    message(room);
-    message(room); // Still awaiting the one-use claim.
-    message({ type: 'choir-secondary-media-claim', roomEpoch: 1, claimToken: 'a'.repeat(64) });
-    message(room); // Socket is opening.
+    const ready = { type: 'choir-media-ready' };
+    message(ready);
+    message(ready); // Still awaiting the one-use claim.
+    message({ type: 'choir-secondary-media-claim', claimToken: 'a'.repeat(64) });
+    message(ready); // Socket is opening.
     await new Promise(resolve => setTimeout(resolve, 0));
-    message(room); // Media is registered.
-    message({ ...room, roomEpoch: 0 });
-    const preserved = { sockets: sockets.length, closes: sockets[0].closes,
+    message(ready); // Media is registered.
+    return { sockets: sockets.length, closes: sockets[0].closes,
       claims: window.__choirSent.filter(m => m.type === 'choir-secondary-media-claim-request').length };
-    message({ ...room, roomEpoch: 2 });
-    const replaced = { closes: sockets[0].closes,
-      claims: window.__choirSent.filter(m => m.type === 'choir-secondary-media-claim-request').length };
-    return { preserved, replaced };
   });
-  expect(result.preserved).toEqual({ sockets: 1, closes: 0, claims: 1 });
-  expect(result.replaced).toEqual({ closes: 1, claims: 2 });
+  expect(result).toEqual({ sockets: 1, closes: 0, claims: 1 });
 });
 
 
@@ -354,30 +348,4 @@ test('a cancelled permission request cannot block or cancel a newer capture atte
     return { attempts, failures };
   });
   expect(result).toEqual({ attempts: 2, failures: 0 });
-});
-
-test('a newer room supersedes an outstanding old claim immediately', async ({ page }) => {
-  await openFixture(page, 'singerB', 'owner');
-  await enable(page);
-  const result = await page.evaluate(async () => {
-    const { ChoirSecondaryCapture } = await import('/choir-secondary-capture.js');
-    ChoirSecondaryCapture.prototype.prepare = async function () { this.rate = 48000; return this.rate; };
-    let connections = 0;
-    class MediaSocket extends EventTarget {
-      static CLOSED = 3;
-      readyState = 0;
-      constructor() { super(); connections++; }
-      close() { this.readyState = 3; }
-    }
-    window.WebSocket = MediaSocket;
-    window.dispatchEvent(new Event('relay-choir-start-secondary-capture'));
-    await Promise.resolve();
-    const message = detail => window.dispatchEvent(new CustomEvent('relay-choir-media-message', { detail }));
-    message({ type: 'choir-room-ready', roomEpoch: 1 });
-    message({ type: 'choir-room-ready', roomEpoch: 2 });
-    message({ type: 'choir-secondary-media-claim', roomEpoch: 1, claimToken: 'a'.repeat(64) });
-    return { connections,
-      claims: window.__choirSent.filter(m => m.type === 'choir-secondary-media-claim-request').length };
-  });
-  expect(result).toEqual({ connections: 0, claims: 2 });
 });

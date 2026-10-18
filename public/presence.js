@@ -234,23 +234,18 @@ window.relayIdentityReady = (async () => {
     }));
   }
 
-  // Keep the invite-only control path on the established authenticated
-  // Presence socket; never ship a browser capability or Media Epoch as a
-  // Choir message. Server still checks the owner and B's actual identity.
+  // Second Mic commands travel on the established authenticated Presence
+  // socket; never ship a browser capability as a Choir message. The server
+  // still checks the Mic owner and B's actual identity.
   window.addEventListener('relay-choir-consent-command', (event) => {
     const payload = event.detail;
-    if (!choirConsentAvailable || !sessionAuthorityFresh
+    if (!choirConsentAvailable || !choirMediaEnabled || !sessionAuthorityFresh
       || !payload || ![
-        'choir-secondary-invite', 'choir-secondary-accept', 'choir-secondary-join',
+        'choir-secondary-join', 'choir-secondary-withdraw',
         'choir-secondary-song-anchor', 'choir-secondary-page', 'choir-secondary-gain',
-        'choir-secondary-decline', 'choir-secondary-withdraw',
-        'choir-room-begin', 'choir-secondary-media-claim-request',
+        'choir-secondary-media-claim-request',
         'choir-probe-played', 'choir-probe-failed', 'choir-probe-request',
       ].includes(payload.type)) return;
-    if (['choir-room-begin', 'choir-secondary-media-claim-request', 'choir-secondary-join',
-      'choir-secondary-song-anchor', 'choir-secondary-page', 'choir-secondary-gain',
-      'choir-probe-played', 'choir-probe-failed', 'choir-probe-request']
-      .includes(payload.type) && !choirMediaEnabled) return;
     if (payload.type === 'choir-probe-request') {
       send({ type: payload.type });
       return;
@@ -285,18 +280,10 @@ window.relayIdentityReady = (async () => {
       send({ type: payload.type, page: payload.page });
       return;
     }
-    if (payload.type === 'choir-secondary-invite') {
-      if (typeof payload.secondaryId !== 'string') return;
-      send({ type: payload.type, secondaryId: payload.secondaryId });
-    } else if (payload.type === 'choir-secondary-withdraw') {
+    if (payload.type === 'choir-secondary-withdraw') {
       send({ type: payload.type, reason: typeof payload.reason === 'string' ? payload.reason.slice(0, 80) : 'unspecified' });
-    } else if (payload.type === 'choir-secondary-media-claim-request') {
+    } else {
       send({ type: payload.type });
-    } else if (payload.type === 'choir-room-begin') {
-      if (typeof payload.secondaryId !== 'string') return;
-      send({ type: payload.type, secondaryId: payload.secondaryId });
-    } else if (typeof payload.inviteId === 'string') {
-      send({ type: payload.type, inviteId: payload.inviteId });
     }
   });
 
@@ -362,17 +349,14 @@ window.relayIdentityReady = (async () => {
       announceChoirConsentAvailable();
       return;
     }
-    if ([
-      'choir-secondary-invitation', 'choir-secondary-consent-status',
-      'choir-secondary-invite-acknowledged', 'choir-consent-rejected',
-    ].includes(message.type)) {
+    if (['choir-secondary-consent-status', 'choir-consent-rejected'].includes(message.type)) {
       if (choirConsentAvailable) window.dispatchEvent(
         new CustomEvent('relay-choir-consent-message', { detail: message }),
       );
       return;
     }
     if ([
-      'choir-room-ready', 'choir-media-ready', 'choir-media-rejected',
+      'choir-media-ready', 'choir-media-rejected',
       'choir-secondary-media-claim', 'choir-probe',
     ].includes(message.type)) {
       if (choirMediaEnabled) window.dispatchEvent(new CustomEvent(

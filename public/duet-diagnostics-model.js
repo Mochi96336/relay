@@ -156,7 +156,7 @@ function describeDuetMicAdvanced(audio, t) {
   return rows;
 }
 
-/** One singer's Content readiness, as the duet room recorded it. */
+/** One singer's Content readiness, as the duet Content measurement recorded it. */
 function readiness(t, value) {
   return typeof value === 'string' ? copyOr(t, `diag.duet.content.${value}`, value) : '—';
 }

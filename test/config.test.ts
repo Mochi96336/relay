@@ -103,24 +103,6 @@ test('Choir server shadow is disabled by default and strictly opt-in', () => {
   );
 });
 
-test('Choir Content readiness proof logging is allowed only for CI double opt-in', () => {
-  assert.equal(loadRelayConfig({}).choirProofCiDiagnostics, false);
-  assert.equal(loadRelayConfig({
-    NODE_ENV: 'test', RELAY_CHOIR_SHADOW: '1',
-  }).choirProofCiDiagnostics, false);
-  assert.equal(loadRelayConfig({
-    NODE_ENV: 'test', RELAY_CHOIR_MEDIA_EXPERIMENT: '1',
-  }).choirProofCiDiagnostics, false);
-  assert.equal(loadRelayConfig({
-    NODE_ENV: 'production', RELAY_CHOIR_SHADOW: '1',
-    RELAY_CHOIR_MEDIA_EXPERIMENT: '1',
-  }).choirProofCiDiagnostics, false);
-  assert.equal(loadRelayConfig({
-    NODE_ENV: 'test', RELAY_CHOIR_SHADOW: '1',
-    RELAY_CHOIR_MEDIA_EXPERIMENT: '1',
-  }).choirProofCiDiagnostics, true);
-});
-
 test('relay config owns the participant and mic transport grace windows', () => {
   assert.throws(() => loadRelayConfig({ RELAY_PARTICIPANT_GRACE_MS: '0' }), />= 1/);
   assert.throws(

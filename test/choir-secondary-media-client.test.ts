@@ -77,17 +77,17 @@ async function fixture({ direct = false } = {}) {
       now += ms;
       for (const [id, timer] of [...timers]) if (timer.at <= now) { timers.delete(id); timer.run(); }
     },
-    async join(roomEpoch = 1) {
+    async join() {
       emit('relay-choir-media-mode', { enabled: true });
       emit('relay-choir-start-secondary-capture');
       await new Promise((resolve) => setImmediate(resolve));
-      emit('relay-choir-media-message', { type: 'choir-room-ready', roomEpoch });
-      emit('relay-choir-media-message', { type: 'choir-secondary-media-claim', claimToken: CLAIM, roomEpoch });
+      emit('relay-choir-media-message', { type: 'choir-media-ready' });
+      emit('relay-choir-media-message', { type: 'choir-secondary-media-claim', claimToken: CLAIM });
     },
   };
 }
 
-test('an open media socket the server never registers is dropped, and the next room-ready claims again', async () => {
+test('an open media socket the server never registers is dropped, and the next media-ready claims again', async () => {
   const f = await fixture();
   await f.join();
   assert.equal(f.claims(), 1);
@@ -95,14 +95,14 @@ test('an open media socket the server never registers is dropped, and the next r
   socket.open();
   assert.equal(socket.sent[0].type, 'participant-authenticate');
   // The server goes quiet: no participant-authenticated, no registration.
-  f.emit('relay-choir-media-message', { type: 'choir-room-ready', roomEpoch: 1 });
-  assert.equal(f.claims(), 1, 'a repeated room-ready does not disturb a socket still in its deadline');
+  f.emit('relay-choir-media-message', { type: 'choir-media-ready' });
+  assert.equal(f.claims(), 1, 'a repeated media-ready does not disturb a socket still in its deadline');
   f.advance(5_000);
   assert.equal(socket.readyState, 3, 'the silent socket is closed');
   assert.equal(f.connection().at(-1).state, 'disconnected');
   assert.equal(f.connection().at(-1).reason, 'register-timeout');
-  f.emit('relay-choir-media-message', { type: 'choir-room-ready', roomEpoch: 1 });
-  assert.equal(f.claims(), 2, 'the server\'s next room-ready brings a fresh claim');
+  f.emit('relay-choir-media-message', { type: 'choir-media-ready' });
+  assert.equal(f.claims(), 2, 'the server\'s next media-ready brings a fresh claim');
 });
 
 test('a socket stalled after authentication is dropped too, but a registered one is kept', async () => {
@@ -115,13 +115,13 @@ test('a socket stalled after authentication is dropped too, but a registered one
   f.advance(5_000);
   assert.equal(stalled.readyState, 3);
 
-  f.emit('relay-choir-media-message', { type: 'choir-room-ready', roomEpoch: 1 });
-  f.emit('relay-choir-media-message', { type: 'choir-secondary-media-claim', claimToken: CLAIM, roomEpoch: 1 });
+  f.emit('relay-choir-media-message', { type: 'choir-media-ready' });
+  f.emit('relay-choir-media-message', { type: 'choir-secondary-media-claim', claimToken: CLAIM });
   const healthy = f.sockets.at(-1)!;
   assert.notEqual(healthy, stalled);
   healthy.open();
   healthy.reply({ type: 'participant-authenticated', participantId: 'participant-b' });
-  healthy.reply({ type: 'choir-secondary-media-registered', roomEpoch: 1, awaitingContent: true, sampleRate: 48_000 });
+  healthy.reply({ type: 'choir-secondary-media-registered', sampleRate: 48_000 });
   f.advance(60_000);
   assert.equal(healthy.readyState, 1, 'a registered socket has no deadline');
   assert.equal(f.connection().at(-1).state, 'registered');
@@ -134,12 +134,12 @@ test('a direct socket that opens but goes quiet sends the next claim through the
   assert.equal(direct.url, 'wss://pi.test/ws');
   direct.open();
   f.advance(5_000);
-  f.emit('relay-choir-media-message', { type: 'choir-room-ready', roomEpoch: 1 });
-  f.emit('relay-choir-media-message', { type: 'choir-secondary-media-claim', claimToken: CLAIM, roomEpoch: 1 });
+  f.emit('relay-choir-media-message', { type: 'choir-media-ready' });
+  f.emit('relay-choir-media-message', { type: 'choir-secondary-media-claim', claimToken: CLAIM });
   assert.equal(f.sockets.at(-1)!.url, 'wss://relay.test/ws');
 });
 
-test('with no song, media-ready connects B at once, and a repeat never replaces that socket', async () => {
+test('media-ready connects B at once, and a repeat never replaces that socket', async () => {
   const f = await fixture();
   f.emit('relay-choir-media-mode', { enabled: true });
   f.emit('relay-choir-start-secondary-capture');
@@ -148,13 +148,12 @@ test('with no song, media-ready connects B at once, and a repeat never replaces 
 
   f.emit('relay-choir-media-message', { type: 'choir-media-ready' });
   assert.equal(f.claims(), 1);
-  // A join claim names no room.
-  f.emit('relay-choir-media-message', { type: 'choir-secondary-media-claim', claimToken: CLAIM, roomEpoch: null });
+  f.emit('relay-choir-media-message', { type: 'choir-secondary-media-claim', claimToken: CLAIM });
   const socket = f.sockets.at(-1)!;
   socket.open();
   socket.reply({ type: 'participant-authenticated', participantId: 'participant-b' });
   assert.equal(socket.sent.at(-1).type, 'choir-secondary-media-register');
-  socket.reply({ type: 'choir-secondary-media-registered', roomEpoch: null, awaitingContent: true });
+  socket.reply({ type: 'choir-secondary-media-registered', sampleRate: 48_000 });
   assert.equal(f.connection().at(-1).state, 'registered');
 
   // The server repeats media-ready only until B is connected; a repeat in

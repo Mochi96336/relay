@@ -762,12 +762,10 @@ export class AudioSession {
     this.micFrontier.unfolded(unfold, correctionBefore, measuredAcross);
   }
 
-  ingestMic(frame: PcmFrame, sourceRate: number | null, nowMs = performance.now(),
-    auditNativeMirroring = false) {
+  ingestMic(frame: PcmFrame, sourceRate: number | null, nowMs = performance.now()) {
     return this.micTrack.ingestCapture({
       frame, sourceRate, running: this.running,
       roomSampleNow: () => this.currentSessionSample(nowMs),
-      auditNativeMirroring,
     });
   }
 
@@ -776,7 +774,6 @@ export class AudioSession {
     sourceRate: number | null,
     nowMs = performance.now(),
     trackSourceClock = false,
-    auditNativeMirroring = false,
   ) {
     const previousTotalSamples = this.backing.totalSamples;
     const previousChunk = this.backing.chunks.at(-1) ?? null;
@@ -787,7 +784,6 @@ export class AudioSession {
       nowMs,
       trackSourceClock,
       true,
-      auditNativeMirroring,
     );
     const currentChunk = this.backing.chunks.at(-1) ?? null;
     if (result.captureRestarted && this.running) {
@@ -1016,14 +1012,12 @@ export class AudioSession {
     nowMs: number,
     trackSourceClock = false,
     sourceRateDefinesCapture = false,
-    auditNativeMirroring = false,
   ): IngestResult {
     return ingestPcmTimeline({
       timeline, frame, sourceRate,
       mixRate: this.sampleRate,
       roomSampleNow: () => this.currentSessionSample(nowMs),
       trackSourceClock,
-      auditNativeMirroring,
       sourceRateDefinesCapture,
       onCaptureClockChanged: timeline === this.mic
         ? () => this.micTrack.onCaptureClockReplaced()

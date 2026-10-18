@@ -285,7 +285,8 @@ if (
 
   /**
    * The second Mic's block on one tab: hidden in a solo room, so the tab reads
-   * exactly as before; otherwise a heading, its rows and a closed fold.
+   * exactly as before; otherwise a heading and its rows, the finer ones last.
+   * A few rows read better open than behind a fold.
    */
   function renderDuetBlock(prefix, described) {
     const block = document.querySelector(`#${prefix}`);
@@ -296,8 +297,6 @@ if (
     if (heading) heading.textContent = described.title;
     renderLedger(`${prefix}-ledger`, described.rows);
     renderLedger(`${prefix}-advanced`, described.advanced);
-    const fold = block.querySelector('.diagnostics-advanced');
-    if (fold) fold.hidden = described.advanced.length === 0;
   }
 
   function renderDuet(facts) {

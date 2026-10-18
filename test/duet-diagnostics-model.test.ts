@@ -24,11 +24,12 @@ function duetFacts(overrides: (facts: Facts) => void = () => {}): Facts {
         duetSecondary: {
           audible: true, blend: 1, lagMs: 180, targetLagMs: 180, gainDb: 24,
           gapSamples: 0, starvedSamples: 0, mixedFrames: 500, recentlyHeard: true,
-          bufferedSamples: 9_600, sampleRate: 48_000,
+          bufferedSamples: 9_600, headroomMs: 200, sampleRate: 48_000,
         },
         duetIngress: { accepted: 500, rejected: {}, lastRejected: null, codec: 'opus' },
         duetRoom: { state: 'duet-ready', primaryId: 'a', secondaryId: 'b', primary: 'ready', secondary: 'ready' },
-        duetContent: { submitted: 4, applied: 2, rejected: 1, timedOut: 1, lastFailureReason: null },
+        duetContent: { submitted: 4, applied: 2, rejected: 1, timedOut: 1, lastFailureReason: null,
+          primaryLagMs: 41, secondaryLagMs: 160 },
         duetYoutube: { lagSource: 'content', mic: { ageMs: 400 }, backing: { ageMs: 900 }, calculation: null },
       },
     },
@@ -102,10 +103,10 @@ describe('second Mic diagnostics', () => {
     }))!;
     assert.ok(!block.rows.some((row) => row.key === 'duetPackets'));
     const advanced = byKey(block.advanced);
-    assert.equal(advanced.duetPackets.value, '500 accepted · 1 kinds rejected');
+    assert.equal(advanced.duetPackets.value, '500 accepted');
     assert.match(advanced.duetPackets.note, /duplicate-packet ×3/);
     assert.equal(advanced.duetBuffered.value, '200 ms');
-    assert.equal(advanced.duetRoom.value, 'Both singers measured');
+    assert.equal(advanced.duetRoom, undefined, 'the duet room is no longer what places B');
   });
 
   it('puts A and B compensation side by side and names what B rests on', () => {
@@ -145,7 +146,7 @@ describe('second Mic diagnostics', () => {
 
   it('keeps per-singer Content readiness and anchor ages in the timing fold', () => {
     const advanced = byKey(describeDuetTiming(duetFacts((f) => {
-      f.statusz.audio.duetRoom.secondary = 'calibration-required';
+      f.statusz.audio.duetContent.secondaryLagMs = null;
       f.statusz.audio.duetContent.lastFailureReason = 'worker-timeout';
     }))!.advanced);
     assert.equal(advanced.duetReadiness.value, 'Main measured · Second measuring');

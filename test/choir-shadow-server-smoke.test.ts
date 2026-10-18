@@ -360,9 +360,13 @@ test('double opt-in A/B room issues real one-use v2 B Media Epoch but no N=1 aud
     // Worker jobs complete. Stopping at 7.5s made B depend on CPU speed: A's
     // job could finish just as the remaining source window/authority expired.
     // The finite fixture still bounds the test if either job never completes.
-    for (let i = 0; i < mic.byteLength / frameBytes; i++) {
-      if (relay.stderr().includes('"state":"duet-ready"')) break;
-      const start = i * frameBytes;
+    const statusAudio = async () => (await (await fetch(relay.httpUrl('/statusz'))).json()).audio;
+    // Twice through the clip: a window rejected on a slow host gets a retry
+    // before the song would run out.
+    const clipFrames = mic.byteLength / frameBytes;
+    for (let i = 0; i < 2 * clipFrames; i++) {
+      if (i % 50 === 0 && (await statusAudio())?.duetYoutube?.lagSource === 'content') break;
+      const start = (i % clipFrames) * frameBytes;
       const end = start + frameBytes;
       publisher.sendAudioPacket(mic.subarray(start, end));
       robotBacking.sendPcm(backing.subarray(start, end));
@@ -377,13 +381,13 @@ test('double opt-in A/B room issues real one-use v2 B Media Epoch but no N=1 aud
       }
       await sleep(20);
     }
-    const proofDeadline = Date.now() + 4_500;
-    while (!relay.stderr().includes('"state":"duet-ready"')
-      && Date.now() < proofDeadline) await sleep(30);
-    assert.match(relay.stderr(), /\[choir-proof-ci\].*"state":"duet-ready"/,
-      'both singers must independently complete the real server-owned '
-      + 'A/B/Robot Content Worker pipeline from WebSocket PCM; '
-      + relay.stderr().slice(-2_500));
+    const proofDeadline = Date.now() + 8_000;
+    while ((await statusAudio())?.duetYoutube?.lagSource !== 'content'
+      && Date.now() < proofDeadline) await sleep(100);
+    const audio = await statusAudio();
+    assert.equal(audio?.duetYoutube?.lagSource, 'content',
+      'both singers must independently complete the server-owned Content '
+      + 'Worker measurement from WebSocket PCM; ' + JSON.stringify(audio?.duetContent));
     assert.equal(bMedia.messages.some(m => m.type === 'registered'),
       false, 'B must remain outside the N=1 publisher path after calibration');
     // B now sings in the room output, the mix Listen and Take carry, at A's
@@ -395,7 +399,7 @@ test('double opt-in A/B room issues real one-use v2 B Media Epoch but no N=1 aud
       duet = await duetSecondary();
       if (duet?.audible) break;
     }
-    assert.equal(duet?.audible, true, `B joins the room mix after duet-ready: ${JSON.stringify(duet)}`);
+    assert.equal(duet?.audible, true, `B is in the room mix once measured: ${JSON.stringify(duet)}`);
     assert.ok(Number.isFinite(duet.lagMs), 'B has a lag in room-output coordinates');
     assert.ok(duet.bufferedSamples > 0, "B's PCM reached the room output");
     // B's original consent can still revoke audio admission immediately.
@@ -510,8 +514,10 @@ test('B joins by its own press while the song is paused; the room starts itself 
       const { mic, backing } = laggedMultibandMusicPair(12, 48_000, 120, { singerGain: .18 });
       const frameSamples = 960;
       const frameBytes = frameSamples * 2;
+      const lagSource = async () =>
+        (await (await fetch(relay.httpUrl('/statusz'))).json()).audio?.duetYoutube?.lagSource ?? null;
       for (let i = 0; i < mic.byteLength / frameBytes; i++) {
-        if (relay.stderr().includes('"state":"duet-ready"')) break;
+        if (i % 50 === 0 && await lagSource() === 'content') break;
         const start = i * frameBytes;
         publisher.sendAudioPacket(mic.subarray(start, start + frameBytes));
         robotBacking.sendPcm(backing.subarray(start, start + frameBytes));
@@ -521,9 +527,14 @@ test('B joins by its own press while the song is paused; the room starts itself 
         }));
         await sleep(20);
       }
-      const deadline = Date.now() + 4_500;
-      while (!relay.stderr().includes('"state":"duet-ready"') && Date.now() < deadline) await sleep(30);
-      assert.match(relay.stderr(), /"state":"duet-ready"/, relay.stderr().slice(-2_000));
+      // Both singers measured by Content on the room output's timeline place B.
+      const deadline = Date.now() + 8_000;
+      while (await lagSource() !== 'content' && Date.now() < deadline) await sleep(100);
+      const content = (await (await fetch(relay.httpUrl('/statusz'))).json()).audio?.duetContent;
+      assert.equal(await lagSource(), 'content', JSON.stringify(content));
+      // A and B sent the same voice at the same capture positions; each
+      // timeline is anchored on its own first arrival, a frame or so apart.
+      assert.ok(Math.abs(content.secondaryLagMs - content.primaryLagMs) < 60, JSON.stringify(content));
 
       let duet: any = null;
       for (const until = Date.now() + 2_000; Date.now() < until; await sleep(30)) {

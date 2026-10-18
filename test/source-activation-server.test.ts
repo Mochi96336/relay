@@ -5,7 +5,6 @@ import {
   RelayClient,
   pulseTrain,
   sendPcmInChunks,
-  sleep,
   startCalibrationCollecting,
   startRelay,
   toInt16,

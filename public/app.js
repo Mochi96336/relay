@@ -37,7 +37,6 @@ import {
   micGainDb,
   restoreLastKnownControl,
   setSingerControlsEnabled,
-  signed,
   updateMixLabels,
 } from './mix-controls.js';
 import {

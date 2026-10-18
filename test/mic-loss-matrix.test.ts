@@ -18,7 +18,6 @@ import {
   clean,
   randomLoss,
   simulateMicUplink,
-  type Rngs,
   type Scenario,
 } from './helpers/mic-loss-network.js';
 

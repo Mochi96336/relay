@@ -9,7 +9,7 @@ import {
   monitorUnacknowledgedSamples,
   type MonitorDelivery,
 } from './monitor-backpressure.js';
-import { encodePcmFrame, FRAME_HEADER_BYTES } from './pcm-frame.js';
+import { encodePcmFrame } from './pcm-frame.js';
 import { encodeMonitorOpusFrame, type MonitorOpusEncoder } from './monitor-opus.js';
 
 export type ClientRole = 'publisher' | 'monitor' | 'backing' | 'unknown';

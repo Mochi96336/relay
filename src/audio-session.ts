@@ -11,7 +11,6 @@ import {
   resetPcmTimeline,
   retainsPcmAfter,
   trimPcmTimeline,
-  type PcmChunk,
   type PcmTimeline,
 } from './pcm-timeline.js';
 import { MicClockTrim } from './mic-clock-trim.js';
@@ -20,7 +19,6 @@ import { MicInputClipping } from './mic-input-clipping.js';
 import { MicGainRamp } from './mic-gain-ramp.js';
 import { MicLimiter } from './mic-limiter.js';
 import { MicRawMeter } from './mic-raw-meter.js';
-import type { MicSlewRead } from './mic-frame-reader.js';
 import { MixBus } from './mix-bus.js';
 import { MicTrack, type AlignmentState, type MicReadPlan } from './mic-track.js';
 import { SourceOutputEdge } from './source-output-edge.js';

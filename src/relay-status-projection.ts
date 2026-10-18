@@ -9,7 +9,7 @@ import type { TakeControllerStatusPayload } from './take-controller.js';
 import type { TimingCalibrationKind } from './timing-runtime.js';
 import type { ReadinessSnapshot } from './readiness.js';
 import { buildRelayObservationStatusV1 } from './observation-status.js';
-import { buildProductViewModel, type ProductDuet } from './product-view-model.js';
+import { buildProductViewModel, type ProductDuet, type ProductLocalFile } from './product-view-model.js';
 import { deriveRemoteStatusHealth } from './remote-status.js';
 import { youtubeErrorMeansUnplayable } from '../shared/robot-player-errors.js';
 
@@ -235,6 +235,7 @@ export type ProductStatusFacts = {
   micOwnerId: string | null;
   micOwnerNickname: string | null;
   duet?: ProductDuet | null;
+  localFile?: ProductLocalFile | null;
   publisherControlConnected: boolean;
   /**
    * The one fresh Mic health report every browser-quality fact comes from,
@@ -284,6 +285,7 @@ export function projectProductStatus(facts: ProductStatusFacts) {
     micOwnerId: facts.micOwnerId,
     micOwnerNickname: facts.micOwnerNickname,
     duet: facts.duet ?? null,
+    localFile: facts.localFile ?? null,
     publisherControlConnected: facts.publisherControlConnected,
     micMediaRecoveryDegraded: freshMicUplink?.transport.mediaRecoveryDegraded === true,
     // Only for the video the room is on: an old error for another video says

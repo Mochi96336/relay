@@ -43,6 +43,7 @@
                 <button id="open-local-file" class="more-action" type="button">
                   <span data-i18n="localFile.open">Open local audio file</span><span aria-hidden="true">›</span>
                 </button>
+                <span id="open-local-file-note" class="more-action-note" aria-live="polite"></span>
                 <input id="local-file-input" type="file" accept="audio/*" hidden />
 
                 <button id="open-system" class="more-action" type="button">
@@ -87,31 +88,40 @@
           </div>
         </div>
 
-        <div id="local-file-panel" class="local-file-panel" hidden>
-          <div class="local-file-heading">
-            <span class="local-file-label" data-i18n="localFile.label">Local file</span>
+        <div id="local-file-panel" class="local-file" hidden>
+          <div class="local-file-now">
             <strong id="local-file-title" class="local-file-title"></strong>
+            <span id="local-file-source" class="local-file-source"></span>
             <button id="local-file-close" class="text-action" type="button" data-i18n="localFile.close">Close</button>
           </div>
           <div class="local-file-transport">
-            <button id="local-file-play" class="local-file-play" type="button" data-i18n="localFile.play">Play</button>
-            <input id="local-file-seek" class="local-file-seek" type="range" min="0" max="0" step="0.1" value="0" aria-label="Position" data-i18n-aria-label="localFile.position" />
+            <button id="local-file-play" class="text-action local-file-play" type="button" data-i18n="localFile.play">Play</button>
+            <input id="local-file-seek" class="adjust-range" type="range" min="0" max="0" step="0.1" value="0" aria-label="Position" data-i18n-aria-label="localFile.position" />
             <span id="local-file-time" class="local-file-time">0:00 / --:--</span>
           </div>
           <p id="local-file-note" class="microcopy local-file-note" role="status" aria-live="polite"></p>
-          <details class="local-file-mix">
-            <summary data-i18n="localFile.mix">Mix</summary>
-            <label class="local-file-control">
-              <span data-i18n="localFile.music">Song level</span>
-              <input id="local-file-music" type="range" min="0" max="100" step="1" />
-              <output id="local-file-music-value" for="local-file-music"></output>
-            </label>
-            <label class="local-file-control">
-              <span data-i18n="localFile.offset">Voice timing</span>
-              <input id="local-file-offset" type="range" min="-500" max="500" step="5" />
-              <output id="local-file-offset-value" for="local-file-offset"></output>
-            </label>
-            <p id="local-file-latency" class="microcopy"></p>
+          <details id="local-file-mix" class="local-file-mix">
+            <summary>
+              <span data-i18n="localFile.mix">Mix</span>
+              <output id="local-file-mix-summary"></output>
+            </summary>
+            <div class="local-file-mix-body">
+              <label class="adjust-control">
+                <div class="adjust-row-heading">
+                  <strong data-i18n="localFile.music">Song</strong>
+                  <output id="local-file-music-value" for="local-file-music"></output>
+                </div>
+                <input id="local-file-music" class="adjust-range" type="range" min="0" max="100" step="1" />
+              </label>
+              <label class="adjust-control">
+                <div class="adjust-row-heading">
+                  <strong data-i18n="localFile.offset">Voice timing</strong>
+                  <output id="local-file-offset-value" for="local-file-offset"></output>
+                </div>
+                <input id="local-file-offset" class="adjust-range" type="range" min="-500" max="500" step="5" />
+              </label>
+              <p id="local-file-latency" class="adjust-helper"></p>
+            </div>
           </details>
         </div>
 

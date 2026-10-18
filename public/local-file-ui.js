@@ -4,40 +4,44 @@ window.relayI18n?.registerMessages({
   en: {
     'localFile.open': 'Open local audio file',
     'localFile.label': 'Local file',
+    'localFile.from': "Local file · {name}'s phone",
+    'localFile.untitled': 'Local song',
     'localFile.close': 'Close',
     'localFile.play': 'Play',
     'localFile.pause': 'Pause',
     'localFile.position': 'Position',
     'localFile.mix': 'Mix',
-    'localFile.music': 'Song level',
+    'localFile.music': 'Song',
     'localFile.offset': 'Voice timing',
     'localFile.offsetEarlier': '{ms} ms earlier',
     'localFile.offsetLater': '{ms} ms later',
-    'localFile.latency': 'Measured device delay {ms} ms is already compensated. Move Voice timing if your voice still sounds late or early on Listen.',
-    'localFile.needsMic': 'Take Mic to play. The song and your voice are mixed on this phone and sent as one.',
-    'localFile.roomSongPlaying': 'The room YouTube song is playing. Pause it to play your file.',
-    'localFile.roomSongPaused': 'Paused: the room YouTube song started.',
-    'localFile.playFailed': 'This file could not be played.',
-    'localFile.live': 'Listen hears the song and your voice as mixed here. Only you control it.',
+    'localFile.latency': 'Device delay of {ms} ms is already compensated.',
+    'localFile.needsMic': 'Take Mic to play.',
+    'localFile.roomSongPaused': 'Paused because the room song started.',
+    'localFile.playFailed': 'This file cannot be played.',
+    'localFile.blockedSong': 'Pause the YouTube song first.',
+    'localFile.blockedDuet': 'Not available while a second Mic is in.',
   },
   'zh-Hant': {
     'localFile.open': '打開本機音檔',
     'localFile.label': '本機音檔',
+    'localFile.from': '本機音檔 · {name} 的手機',
+    'localFile.untitled': '本機歌曲',
     'localFile.close': '關閉',
     'localFile.play': '播放',
     'localFile.pause': '暫停',
     'localFile.position': '播放位置',
     'localFile.mix': '混音',
-    'localFile.music': '伴奏音量',
+    'localFile.music': '伴奏',
     'localFile.offset': '人聲對齊',
     'localFile.offsetEarlier': '提前 {ms} ms',
     'localFile.offsetLater': '延後 {ms} ms',
-    'localFile.latency': '已自動補償裝置延遲 {ms} ms。Listen 聽起來人聲還是太晚或太早，就調「人聲對齊」。',
-    'localFile.needsMic': '拿 Mic 後才能播放：歌和人聲在這支手機上混好再一起送出。',
-    'localFile.roomSongPlaying': '房間的 YouTube 歌正在播放，先暫停它才能播本機音檔。',
-    'localFile.roomSongPaused': '已暫停：房間的 YouTube 歌開始播放了。',
+    'localFile.latency': '已自動補償裝置延遲 {ms} ms。',
+    'localFile.needsMic': '拿 Mic 後才能播放。',
+    'localFile.roomSongPaused': '房間的歌開始播放，已暫停。',
     'localFile.playFailed': '這個檔案無法播放。',
-    'localFile.live': 'Listen 聽到的是這裡混好的歌和人聲；只有你能控制。',
+    'localFile.blockedSong': '先暫停 YouTube 歌曲。',
+    'localFile.blockedDuet': '副 Mic 在場時不能用。',
   },
 });
 
@@ -46,14 +50,20 @@ const $ = selector => document.querySelector(selector);
 
 const moreMenu = $('#room-more');
 const openButton = $('#open-local-file');
+const openNote = $('#open-local-file-note');
 const fileInput = $('#local-file-input');
+const songStage = $('.song-stage');
 const panel = $('#local-file-panel');
 const title = $('#local-file-title');
+const source = $('#local-file-source');
 const closeButton = $('#local-file-close');
+const transport = $('.local-file-transport');
 const playButton = $('#local-file-play');
 const seek = $('#local-file-seek');
 const time = $('#local-file-time');
 const note = $('#local-file-note');
+const mixDetails = $('#local-file-mix');
+const mixSummary = $('#local-file-mix-summary');
 const music = $('#local-file-music');
 const musicValue = $('#local-file-music-value');
 const offset = $('#local-file-offset');
@@ -63,6 +73,11 @@ const micGain = $('#mic-gain');
 
 let micActive = window.relayActiveRole === 'publisher';
 let roomSongPlaying = false;
+// Room facts from ProductStatus: whose phone (if anyone's) is the song.
+let roomLocalFile = null;
+let roomMicOwnerId = null;
+let roomMicOwnerName = null;
+let roomHasDuet = false;
 let transientNote = null;
 let seeking = false;
 
@@ -82,36 +97,63 @@ function syncVocalGain() {
   if (micGain) localFileMix.setVocalGainDb(Number(micGain.value));
 }
 
-function render() {
-  const active = localFileMix.active;
-  panel.hidden = !active;
-  document.body.dataset.localFile = active ? 'on' : 'off';
-  if (!active) return;
+function observingAnotherPhone() {
+  return !localFileMix.active && roomLocalFile !== null
+    && roomMicOwnerId !== null && roomMicOwnerId !== window.relayParticipantId;
+}
 
+function renderMenu() {
+  const blocked = roomHasDuet ? 'localFile.blockedDuet'
+    : roomSongPlaying && !localFileMix.active ? 'localFile.blockedSong' : null;
+  openButton.disabled = blocked !== null;
+  openNote.textContent = blocked ? t(blocked) : '';
+}
+
+function renderOwner() {
   title.textContent = localFileMix.title ?? '';
+  source.textContent = t('localFile.label');
+  closeButton.hidden = false;
+  transport.hidden = false;
+  mixDetails.hidden = false;
+
   const playing = localFileMix.playing;
+  const ready = micActive && localFileMix.attached;
   playButton.textContent = t(playing ? 'localFile.pause' : 'localFile.play');
-  playButton.disabled = !playing && (!micActive || !localFileMix.attached || roomSongPlaying);
+  playButton.disabled = !playing && !ready;
 
   const duration = localFileMix.duration;
   seek.max = String(duration ?? 0);
   seek.disabled = duration === null;
   if (!seeking) seek.value = String(localFileMix.currentTime);
   time.textContent = `${clock(localFileMix.currentTime)} / ${clock(duration)}`;
-
-  let message = transientNote;
-  if (!message) {
-    if (!micActive || !localFileMix.attached) message = t('localFile.needsMic');
-    else if (roomSongPlaying && !playing) message = t('localFile.roomSongPlaying');
-    else if (playing) message = t('localFile.live');
-  }
-  note.textContent = message ?? '';
+  note.textContent = transientNote ?? (ready ? '' : t('localFile.needsMic'));
 
   music.value = String(Math.round(localFileMix.musicLevel * 100));
   musicValue.value = `${music.value}%`;
   offset.value = String(localFileMix.offsetMs);
   offsetValue.value = offsetLabel(localFileMix.offsetMs);
-  latency.textContent = t('localFile.latency', { ms: localFileMix.roundTripMs });
+  mixSummary.value = `${musicValue.value} · ${offsetValue.value}`;
+  latency.textContent = localFileMix.attached ? t('localFile.latency', { ms: localFileMix.roundTripMs }) : '';
+}
+
+function renderObserver() {
+  title.textContent = roomLocalFile.title ?? t('localFile.untitled');
+  source.textContent = t('localFile.from', { name: roomMicOwnerName ?? '' });
+  closeButton.hidden = true;
+  transport.hidden = true;
+  mixDetails.hidden = true;
+  note.textContent = '';
+}
+
+function render() {
+  renderMenu();
+  const owner = localFileMix.active;
+  const observer = observingAnotherPhone();
+  panel.hidden = !owner && !observer;
+  songStage.dataset.localFile = owner || observer ? 'on' : 'off';
+  document.body.dataset.localFile = owner ? 'on' : 'off';
+  if (owner) renderOwner();
+  else if (observer) renderObserver();
 }
 
 openButton.addEventListener('click', () => {
@@ -166,6 +208,15 @@ localFileMix.addEventListener('change', (event) => {
 
 window.addEventListener('relay-microphone-local-state', (event) => {
   micActive = Boolean(event.detail?.active);
+  render();
+});
+
+window.addEventListener('relay-product-status', (event) => {
+  const room = event.detail?.room;
+  roomLocalFile = room?.localFile ?? null;
+  roomMicOwnerId = room?.mic?.ownerId ?? null;
+  roomMicOwnerName = room?.mic?.ownerNickname ?? null;
+  roomHasDuet = Boolean(room?.duet);
   render();
 });
 

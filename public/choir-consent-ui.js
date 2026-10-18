@@ -26,6 +26,8 @@ let recovering = false;
 let recoveryTimer = null;
 /** The second singer the room has now (from product status), or null. */
 let duetSecondaryId = null;
+// The Mic owner's phone is playing a local file only it can hear.
+let roomLocalFile = false;
 let pendingTimer = null;
 let lastReport = '';
 let lastReportAtMs = Number.NEGATIVE_INFINITY;
@@ -37,7 +39,7 @@ function myId() {
 function canJoin() {
   return available && authorityFresh && mediaEnabled && Boolean(myId())
     && typeof session?.micOwnerId === 'string' && session.micOwnerId !== myId()
-    && session?.micConnected === true && !joined;
+    && session?.micConnected === true && !joined && !roomLocalFile;
 }
 function publishCommand(type, fields = {}) {
   if (!available || !authorityFresh) return false;
@@ -129,8 +131,10 @@ window.addEventListener('relay-choir-media-mode', (event) => {
 });
 window.addEventListener('relay-product-status', (event) => {
   const next = event.detail?.room?.duet?.secondaryId ?? null;
-  if (next === duetSecondaryId) return;
+  const localFile = Boolean(event.detail?.room?.localFile);
+  if (next === duetSecondaryId && localFile === roomLocalFile) return;
   duetSecondaryId = next;
+  roomLocalFile = localFile;
   render();
 });
 window.addEventListener('relay-choir-consent-message', (event) => {

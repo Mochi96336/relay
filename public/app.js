@@ -1000,6 +1000,7 @@ async function connectPublisherSocket(
     premixed: activeCaptureGraph?.premixed === true,
   };
   micBitratePolicy.floor = registration.premixed ? 64000 : 32000;
+  if (registration.premixed) registration.localFileTitle = localFileMix.title;
   // This device's own last gain, so a new owner does not start from the
   // previous singer's.
   const rememberedGainDb = storedNumber(MIC_GAIN_KEY, 0, 40);
@@ -1151,7 +1152,14 @@ function syncLocalFileMode() {
   });
 }
 localFileMix.addEventListener('change', (event) => {
-  if (event.detail?.kind === 'mode') syncLocalFileMode();
+  const kind = event.detail?.kind;
+  if (kind === 'mode') syncLocalFileMode();
+  // Another file on the same premixed capture: only its name changes for the room.
+  if (kind === 'file' && activeCaptureGraph?.premixed && socket?.readyState === WebSocket.OPEN) {
+    try {
+      socket.send(JSON.stringify({ type: 'set-local-file', title: localFileMix.title }));
+    } catch {}
+  }
 });
 
 function rebuildPublisherCaptureGraph(reason) {

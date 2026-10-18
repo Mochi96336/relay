@@ -21,7 +21,7 @@ async function publish(
   id: string,
   name: string,
   captureGeneration: number,
-  options: { takeoverExpectedOwnerId?: string; micGainDb?: unknown; premixed?: boolean } = {},
+  options: { takeoverExpectedOwnerId?: string; micGainDb?: unknown; premixed?: boolean; localFileTitle?: unknown } = {},
 ) {
   const publisher = await connect(server, id, name);
   publisher.send({
@@ -32,6 +32,7 @@ async function publish(
     ...(options.takeoverExpectedOwnerId ? { takeoverExpectedOwnerId: options.takeoverExpectedOwnerId } : {}),
     ...('micGainDb' in options ? { micGainDb: options.micGainDb } : {}),
     ...(options.premixed ? { premixed: true } : {}),
+    ...('localFileTitle' in options ? { localFileTitle: options.localFileTitle } : {}),
   });
   await publisher.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
   return publisher;
@@ -136,14 +137,30 @@ test('a premixed capture is mixed at unity until the next ordinary capture', asy
   const server = await startRelay(FAST);
   const statusz = async () => (await fetch(server.httpUrl('/statusz')).then((response) => response.json()) as any).audio;
   try {
+    const observer = await connect(server, 'participant-watch', 'Watcher');
     await connect(server, 'participant-alice', 'Alice');
-    const premixed = await publish(server, 'participant-alice', 'Alice', 1, { premixed: true });
+    let from = observer.messages.length;
+    const premixed = await publish(server, 'participant-alice', 'Alice', 1,
+      { premixed: true, localFileTitle: '  My\u0007 Song  ' });
+    // Everyone's page learns the room's song is the Mic owner's local file.
+    await waitForNewMessage(observer, from, (message) => (
+      message.type === 'product-status' && message.room?.localFile?.title === 'My Song'
+    ));
+    from = observer.messages.length;
+    premixed.send({ type: 'set-local-file', title: 'Second song' });
+    await waitForNewMessage(observer, from, (message) => (
+      message.type === 'product-status' && message.room?.localFile?.title === 'Second song'
+    ));
     let mic = await statusz();
     assert.equal(mic.micPremixed, true);
     assert.equal(mic.micLevel.micGainDb, 24, 'the room setting is kept for the next ordinary capture');
 
     // Closing the local file starts a new capture without the flag.
+    from = observer.messages.length;
     const ordinary = await publish(server, 'participant-alice', 'Alice', 2);
+    await waitForNewMessage(observer, from, (message) => (
+      message.type === 'product-status' && message.room?.mic?.ownerId && !message.room?.localFile
+    ));
     await premixed.waitForType('publisher-superseded');
     mic = await statusz();
     assert.equal(mic.micPremixed, false);

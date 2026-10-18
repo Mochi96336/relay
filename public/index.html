@@ -267,7 +267,17 @@
 
               <section class="diagnostics-view" data-diagnostics-panel="mic" hidden>
                 <p class="diagnostics-intro" data-i18n="diag.micIntro">Whether the voice is actually reaching the room, and what the device, network and Relay are doing about it. Updates every second while open.</p>
+                <p id="diag-mic-main-heading" class="diagnostic-group" hidden></p>
                 <dl id="diag-mic-ledger" class="diagnostic-ledger"></dl>
+                <!-- A second Mic (Choir) gets a short block of its own, only while one has joined. -->
+                <div id="diag-duet-mic" hidden>
+                  <p id="diag-duet-mic-heading" class="diagnostic-group"></p>
+                  <dl id="diag-duet-mic-ledger" class="diagnostic-ledger"></dl>
+                  <details class="diagnostics-advanced">
+                    <summary class="diagnostics-subheading" data-i18n="diag.duet.more">More second Mic details</summary>
+                    <dl id="diag-duet-mic-advanced" class="diagnostic-ledger"></dl>
+                  </details>
+                </div>
               </section>
 
               <section class="diagnostics-view" data-diagnostics-panel="audio" hidden>
@@ -279,6 +289,14 @@
 
               <section class="diagnostics-view" data-diagnostics-panel="timing" hidden>
                 <dl id="diag-timing-ledger" class="diagnostic-ledger"></dl>
+                <div id="diag-duet-timing" hidden>
+                  <p id="diag-duet-timing-heading" class="diagnostic-group"></p>
+                  <dl id="diag-duet-timing-ledger" class="diagnostic-ledger"></dl>
+                  <details class="diagnostics-advanced">
+                    <summary class="diagnostics-subheading" data-i18n="diag.duet.more">More second Mic details</summary>
+                    <dl id="diag-duet-timing-advanced" class="diagnostic-ledger"></dl>
+                  </details>
+                </div>
                 <!-- Raw calibration figures are for whoever is debugging timing, so they
                      sit closed under the readable rows instead of doubling the tab's length. -->
                 <details class="diagnostics-advanced">

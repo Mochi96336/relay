@@ -1888,7 +1888,8 @@ function remoteStatusPayload() {
       listenerPlayback: monitorTransport.playbackHealth(),
       ...(choirRestartCoordinator ? {
         duetSecondary: session.secondaryMic,
-        duetIngress: choirSecondaryIngress?.counts ?? null,
+        duetIngress: choirSecondaryIngress
+          ? { ...choirSecondaryIngress.counts, codec: choirSecondaryIngress.codec } : null,
         duetRoom: choirRestartCoordinator.preview(),
         duetContent: choirContentPipeline
           ? { ...choirContentPipeline.stats, lastFailureReason: choirContentPipeline.lastFailureReason }

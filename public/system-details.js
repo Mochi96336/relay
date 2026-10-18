@@ -7,6 +7,7 @@ import {
   describeRobot,
   describeTiming,
 } from './diagnostics-model.js';
+import { describeDuetMic, describeDuetTiming } from './duet-diagnostics-model.js';
 import { describeListeners } from './listener-diagnostics-model.js';
 import { describeMicTransport } from './mic-diagnostics-model.js';
 import { wsUrl } from './ws-url.js';
@@ -282,6 +283,35 @@ if (
     for (const node of [...container.children]) if (!retained.has(node)) node.remove();
   }
 
+  /**
+   * The second Mic's block on one tab: hidden in a solo room, so the tab reads
+   * exactly as before; otherwise a heading, its rows and a closed fold.
+   */
+  function renderDuetBlock(prefix, described) {
+    const block = document.querySelector(`#${prefix}`);
+    if (!block) return;
+    block.hidden = !described;
+    if (!described) return;
+    const heading = document.querySelector(`#${prefix}-heading`);
+    if (heading) heading.textContent = described.title;
+    renderLedger(`${prefix}-ledger`, described.rows);
+    renderLedger(`${prefix}-advanced`, described.advanced);
+    const fold = block.querySelector('.diagnostics-advanced');
+    if (fold) fold.hidden = described.advanced.length === 0;
+  }
+
+  function renderDuet(facts) {
+    const mic = describeDuetMic(facts, t);
+    // With two Mics the main Mic's rows need a name too.
+    const mainHeading = document.querySelector('#diag-mic-main-heading');
+    if (mainHeading) {
+      mainHeading.hidden = !mic;
+      mainHeading.textContent = mic ? mic.mainTitle : '';
+    }
+    renderDuetBlock('diag-duet-mic', mic);
+    renderDuetBlock('diag-duet-timing', describeDuetTiming(facts, t));
+  }
+
   function readyzUrl() {
     const source = new URLSearchParams(location.search);
     const params = new URLSearchParams();
@@ -440,6 +470,7 @@ if (
     renderLedger('diag-mic-ledger', describeMicTransport(latestStatusz, t));
     renderLedger('diag-audio-ledger', describeAudio(facts, t));
     renderListeners(session);
+    renderDuet(facts);
     const timingRows = describeTiming(facts, t);
     const timingSummary = new Set(['alignment', 'method', 'offset', 'formula', 'fineTune']);
     const youtubeRows = new Set(['youtubeRate', 'robotDelta']);

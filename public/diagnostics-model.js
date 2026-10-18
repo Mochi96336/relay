@@ -15,25 +15,12 @@
 
 import { describeMicAudio } from './mic-diagnostics-model.js';
 import { diagnosticsTranslator } from './diagnostics-copy.js';
+import { finite, row, signedMs, unknown } from './diagnostics-rows.js';
 
 /** A read-ahead shortfall smaller than this is rounding, not a clamp. */
 const SHORTFALL_MS = 5;
 
 const english = diagnosticsTranslator('en');
-
-function finite(value) {
-  if (value === null || value === undefined || value === '') return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
-}
-
-function row(key, label, value, note = '', tone = 'neutral') {
-  return { key, label, value, note, tone };
-}
-
-function unknown(t, key, labelKey) {
-  return row(key, t(labelKey), t('diag.unknown'));
-}
 
 function reasonsNote(t, reasons) {
   const described = reasons.map((reason) => {
@@ -42,11 +29,6 @@ function reasonsNote(t, reasons) {
     return text === key ? String(reason) : text;
   });
   return t('diag.overview.missing', { reasons: described.join(t('diag.listSeparator')) });
-}
-
-function signedMs(ms) {
-  const rounded = Math.round(ms) || 0;
-  return `${rounded > 0 ? '+' : ''}${rounded} ms`;
 }
 
 /**

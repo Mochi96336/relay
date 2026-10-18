@@ -10,6 +10,7 @@
  */
 
 import { diagnosticsTranslator, plural } from './diagnostics-copy.js';
+import { finite, row, unknown } from './diagnostics-rows.js';
 
 /** Below this much buffered Mic audio, lost packets stop waiting for a resend. */
 export const LOW_HEADROOM_MS = 60;
@@ -17,13 +18,6 @@ export const LOW_HEADROOM_MS = 60;
 const NEGLIGIBLE_DRIFT_PPM = 20;
 
 const english = diagnosticsTranslator('en');
-
-/** A number, or null for anything missing. Number(null) is 0, a real reading. */
-function finite(value) {
-  if (value === null || value === undefined || value === '') return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
-}
 
 function count(value) {
   const number = finite(value);
@@ -43,12 +37,6 @@ function sentence(t, clauses) {
   const text = clauses.join(t('diag.listSeparator'));
   return t('diag.sentence', { text: text.replace(/^./, (first) => first.toUpperCase()) });
 }
-
-function row(key, label, value, note = '', tone = 'neutral') {
-  return { key, label, value, note, tone };
-}
-
-const unknown = (t, key, labelKey) => row(key, t(labelKey), t('diag.unknown'));
 
 export function describeMicAudio(status, t = english) {
   const label = t('diag.mic.audio');

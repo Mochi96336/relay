@@ -16,27 +16,12 @@
  */
 
 import { diagnosticsTranslator } from './diagnostics-copy.js';
+import { finite, row, signedMs } from './diagnostics-rows.js';
 
 const english = diagnosticsTranslator('en');
 
 /** B's compensation still moving toward its target by at least this much. */
 const SETTLING_MS = 5;
-
-function finite(value) {
-  if (value === null || value === undefined || value === '') return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
-}
-
-function row(key, label, value, note = '', tone = 'neutral') {
-  return { key, label, value, note, tone };
-}
-
-/** An offset, signed as the main Mic's and the Realign value are. */
-function signedMs(ms) {
-  const rounded = Math.round(ms) || 0;
-  return `${rounded > 0 ? '+' : ''}${rounded} ms`;
-}
 
 function signedDb(db) {
   const rounded = Math.round(db * 10) / 10 || 0;

@@ -56,7 +56,6 @@
       'choir.followerRoomStale': 'Room clock unavailable; local playback paused.',
       'choir.followerVideoError': 'YouTube could not play this video on this device.',
 
-
       'song.label': 'Song',
       'song.change': 'Change song',
       'song.done': 'Done',
@@ -359,7 +358,6 @@
       'choir.followerUnmute': '開啟歌曲聲音',
       'choir.followerRoomStale': '房間時間線失效，本地播放已暫停。',
       'choir.followerVideoError': '這台裝置無法播放該 YouTube 影片。',
-
 
       'song.label': '歌曲',
       'song.change': '換歌',

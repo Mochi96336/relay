@@ -106,7 +106,6 @@ test('Technical details retains raw operational evidence as a separate developer
   assert.match(css, /\.diagnostics-panel > summary \{[\s\S]*?min-height: 44px;/);
 });
 
-
 test('retry-mic recovery becomes a self-owner user-gesture action without widening other recoveries', () => {
   const system = read('public/system-details.js');
   const liveCopy = read('public/live-i18n.js');

@@ -746,7 +746,6 @@ function clearSocketReconnect() {
   socketReconnectTimer = null;
 }
 
-
 function dispatchRelayEvent(type, detail = {}) {
   window.dispatchEvent(new CustomEvent(type, { detail }));
 }

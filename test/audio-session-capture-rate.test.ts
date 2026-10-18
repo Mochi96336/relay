@@ -146,7 +146,6 @@ test('a genuine Mic generation replacement reports the same capture restart sign
   assert.equal(session.readMic(replacement.start, 1)[0], 333);
 });
 
-
 test('Mic generation restart de-clicks the audible old/new capture splice without rewriting PCM', () => {
   const session = makeTransitionSession();
   const chunk = Math.round(RATE * 0.02);
@@ -380,7 +379,6 @@ test('Backing source-rate restart de-clicks the audible splice while keeping res
   assert.ok(Math.abs(resumed.readInt16LE(fadeSamples * 2) + amplitude) <= 1);
 });
 
-
 test('explicit media replacement retires Mic PCM without deferring a restart signal to PCM', () => {
   const session = makeSession();
   session.start(0);
@@ -408,7 +406,6 @@ test('explicit media replacement retires Mic PCM without deferring a restart sig
   const continuation = session.ingestMic(frame(12, 480, 480, 444), RATE, 1_010);
   assert.equal(continuation.captureRestarted, false);
 });
-
 
 test('bind-time Mic retirement de-clicks both sides without retaining retired PCM', () => {
   const session = makeTransitionSession();

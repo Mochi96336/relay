@@ -764,7 +764,6 @@ Object.assign(zhHant, {
   "diag.timing.ytState.cued": "已就緒",
 });
 
-
 Object.assign(en, {
   "diag.listen.heading": "Room playback · by receiver",
   "diag.listen.receiver": "Receiver",
@@ -825,7 +824,6 @@ Object.assign(zhHant, {
   "diag.listen.unavailable": "尚無收聽端診斷資料。",
   "diag.listen.none": "目前沒有房間收聽連線。"
 });
-
 
 Object.assign(en, {
   'diag.mic.bitrate.startup': 'Adaptive bitrate: high-quality startup.',

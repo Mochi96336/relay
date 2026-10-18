@@ -426,7 +426,6 @@ test('capture worklet includes padded input gaps in local level timing', async (
   assert.ok(level.rmsDbfs < level.peakDbfs);
 });
 
-
 test('capture input-gap hysteresis stays time-equivalent across sample rates', async () => {
   const referenceRate = 48_000;
   const referenceQuanta = 400;

@@ -157,7 +157,6 @@ test('rate actuation and convergence share one equality tolerance', () => {
   );
 });
 
-
 function pendingPlayThenRate(prefix: string) {
   const session = new RoomSongCommandSession();
   const play = session.begin(

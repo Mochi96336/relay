@@ -300,7 +300,6 @@ test('small clipping asks for review while sustained clipping is degraded', () =
   assert.equal(sustained.issues.find((issue) => issue.code === 'output-clipping')?.severity, 'critical');
 });
 
-
 test('controlled server shutdown is explicit review evidence', () => {
   const quality = tracker();
   quality.observeFrame(960, frameState(), mixedFrame());

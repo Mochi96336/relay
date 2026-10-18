@@ -18,7 +18,6 @@ export function parseMicVisualAnalysis(payload) {
   return { spectrumBands, f0Hz, pitchConfidence };
 }
 
-
 function trackDeviceId(track) {
   try {
     const id = track?.getSettings?.().deviceId;

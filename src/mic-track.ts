@@ -105,7 +105,6 @@ export class MicTrack {
   micLimiterResetPending = false;
   micCaptureOriginSample: number | null = null;
 
-
   constructor(options: {
     sampleRate: number;
     prebufferMs: number;
@@ -245,7 +244,6 @@ export class MicTrack {
     }
     return result;
   }
-
 
   /** Capture-native frame index to this singer's trusted room PCM timeline. */
   sourceSampleToSessionSample(sourceSample: number, sourceRate: number): number {
@@ -453,8 +451,6 @@ export class MicTrack {
     };
   }
 
-
-
   firstUnheardSample() {
     return this.lastEmittedMicSourceSample === null
       ? Number.NEGATIVE_INFINITY
@@ -484,8 +480,6 @@ export class MicTrack {
       ? target
       : current + Math.sign(deltaMs) * maximumStepMs;
   }
-
-
 
   /** What the alignment asks for, before the buffer's limits are applied. */
   get requestedMicAdvanceMs() {
@@ -645,8 +639,6 @@ export class MicTrack {
     };
   }
 
-
-
   /** How much arrived audio is left past this frame's reads; none left is starvation. */
   measureReadHeadroom(plan: MicReadPlan, expected: boolean) {
     const {
@@ -676,8 +668,6 @@ export class MicTrack {
     this.micHeadroomMs = ((this.timeline.totalSamples - micReadEnd) / this.sampleRate) * 1000;
     if (this.micHeadroomMs < 0 && expected) this.micStarvedFrames += 1;
   }
-
-
 
   /** Capture-scoped detector state; cumulative limiter evidence stays intact. */
   resetLimiterState() {
@@ -729,7 +719,6 @@ export class MicTrack {
     this.micLimiterResetPending = false;
   }
 
-
   /**
    * The limiter's look-ahead offset for sample `i`, kept on the old capture
    * while a retained restart boundary lies inside the look-ahead.
@@ -769,7 +758,6 @@ export class MicTrack {
 
     return detectOffset;
   }
-
 
   /**
    * Render ONE singer's canonical post-read PCM sample through its own gain,
@@ -819,8 +807,6 @@ export class MicTrack {
     this.lastEmittedMicSourceSample = sourceSample;
     return { voice, limited, heavilyLimited };
   }
-
-
 
   /**
    * Fills a proven same-capture hole with pitch-synchronous repetition instead
@@ -899,8 +885,6 @@ export class MicTrack {
     return Math.max(start, floor);
   }
 
-
-
   /**
    * Moves the whole Mic timeline `shift` samples later and takes the same
    * amount off the frontier correction, so every frame reads exactly the audio
@@ -926,6 +910,5 @@ export class MicTrack {
     this.frontier.reset(this.timeline.generation);
     this.clockTrim.reset();
   }
-
 
 }

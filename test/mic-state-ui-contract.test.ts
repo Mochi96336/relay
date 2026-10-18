@@ -62,7 +62,6 @@ test('Mic presence follows media availability and direct WebTransport can retain
   assert.ok(retainLease > freshPcm, 'fresh WebTransport PCM must retain the Mic lease through grace');
 });
 
-
 test('terminal browser media degradation is composed without rewriting server Mic state', () => {
   // ProductStatus reads every browser-quality fact from one fresh Mic report;
   // relay-status-projection.test.ts tests that as behaviour.

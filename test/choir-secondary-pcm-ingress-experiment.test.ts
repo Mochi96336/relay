@@ -77,7 +77,9 @@ describe('isolated Choir secondary WebSocket PCM admission', () => {
       B, 48_000, 10), false, 'anonymous transport has no Choir media authority');
     assert.equal(f.ingress.bindVerifiedSecondary(socketFor('B', 'publisher'),
       B, 48_000, 10), false, 'production publisher role cannot double-register as Choir');
+    assert.equal(f.ingress.codec, null, 'no codec to report before B binds');
     assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 10), true);
+    assert.equal(f.ingress.codec, 'pcm');
     assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 11), false);
     assert.equal(f.ingress.bindVerifiedSecondary(socketFor('B'), B, 48_000, 12), false,
       'same B ticket may not be claimed by two physical WebSockets');
@@ -90,6 +92,7 @@ describe('isolated Choir secondary WebSocket PCM admission', () => {
     assert.equal(f.ingress.disconnect(socket, 31), false);
     assert.deepEqual(f.ingress.interceptBinary(socket, raw, 32), { intercepted: false });
     assert.deepEqual(f.disconnected, [B]);
+    assert.equal(f.ingress.codec, null, 'a departed B leaves no codec behind');
   });
 
   test('malformed, unpositioned, oversized and restarted frames are intercepted but never applied', () => {
@@ -252,6 +255,7 @@ describe('isolated Choir secondary WebSocket PCM admission', () => {
       'Opus v3 is 20 ms frames at 48 kHz only');
     const socket = socketFor('B');
     assert.equal(f.ingress.bindVerifiedSecondary(socket, B, 48_000, 0, 3), true);
+    assert.equal(f.ingress.codec, 'opus');
 
     // The page's own encoder (mic-opus-worker.js), framed as mic-opus-trial.js does.
     const encoder = createOpusEncoder(

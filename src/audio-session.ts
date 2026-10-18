@@ -527,6 +527,8 @@ export class AudioSession {
         && (this.frameIndex - secondary.heardAtFrame) * this.frameSamples * 1000
           <= SECONDARY_HEARD_WINDOW_MS * this.sampleRate,
       bufferedSamples: secondary.track.timeline.totalSamples,
+      /** The rate every *Samples field above counts in. */
+      sampleRate: this.sampleRate,
     };
   }
 

@@ -62,6 +62,15 @@ export class ChoirSecondaryPcmIngressExperiment {
   /** What happened to B's frames, for /statusz: a silent B is otherwise a mystery. */
   readonly counts = { accepted: 0, rejected: {} as Record<string, number>, lastRejected: null as string | null };
 
+  /** The wire format B's bound socket sends, or null while none is bound. */
+  get codec(): 'pcm' | 'opus' | null {
+    for (const socket of this.transportBindings.values()) {
+      const bound = this.sockets.get(socket);
+      if (bound) return bound.opus ? 'opus' : 'pcm';
+    }
+    return null;
+  }
+
   onAcceptedFrame: ((frame: { generation: number; firstSampleIndex: number; pcm: Buffer },
     sampleRate: number, participantId: string, nowMs: number) => void) | null = null;
 

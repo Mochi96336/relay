@@ -1,5 +1,6 @@
 import { probeTimingDiagnostics } from './probe-timing-diagnostics.js';
 import { wsUrl } from './ws-url.js';
+import { formatTime } from './song-time.js';
 
 const armButton = document.querySelector('#arm-source');
 const stateNode = document.querySelector('#source-state');
@@ -65,14 +66,6 @@ let robotDeltaSuppressedUntil = 0;
 // between corrections.
 let offsetReportedSinceSeek = true;
 let activeBackingProbeRequestId = null;
-
-function formatTime(seconds) {
-  if (!Number.isFinite(seconds) || seconds < 0) return '--:--';
-  const whole = Math.floor(seconds);
-  const minutes = Math.floor(whole / 60);
-  const remainder = whole % 60;
-  return `${minutes}:${String(remainder).padStart(2, '0')}`;
-}
 
 function signed(value, suffix = '') {
   const number = Math.round(Number(value) || 0);

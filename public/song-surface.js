@@ -5,6 +5,7 @@ import {
   canRecoverPlayback,
   playbackLeaderHealth,
 } from './playback-recovery.js';
+import { formatTime } from './song-time.js';
 
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const stage = document.querySelector('.song-stage');
@@ -32,14 +33,6 @@ const STATE_LABELS = new Map([
   [3, 'song.state.buffering'],
   [5, 'song.state.ready'],
 ]);
-
-function formatTime(seconds) {
-  const value = Number(seconds);
-  if (!Number.isFinite(value) || value < 0) return '--:--';
-  const whole = Math.floor(value);
-  const minutes = Math.floor(whole / 60);
-  return `${minutes}:${String(whole % 60).padStart(2, '0')}`;
-}
 
 /** A room position never reads past the end of the Song it belongs to. */
 function roomPosition(room) {

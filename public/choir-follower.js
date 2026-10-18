@@ -1,4 +1,5 @@
 import { projectFollowerRoom, decideFollowerAction } from './choir-follower-clock.js';
+import { formatTime } from './song-time.js';
 
 // B uses the EXISTING Song surface. This player never becomes the room leader,
 // sends playback telemetry, or supplies a Mic acoustic calibration anchor.
@@ -70,11 +71,6 @@ function setStatus(key) {
     statusNode.textContent = key ? t(key) : '';
   }
   if (unmuteButton) unmuteButton.hidden = key !== 'choir.followerTapSound';
-}
-function formatTime(seconds) {
-  if (!Number.isFinite(seconds) || seconds < 0) return '--:--';
-  const value = Math.floor(seconds);
-  return Math.floor(value / 60) + ':' + String(value % 60).padStart(2, '0');
 }
 function resetPlayer() {
   generation++;

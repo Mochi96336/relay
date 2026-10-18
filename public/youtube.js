@@ -10,6 +10,7 @@ import {
   roomSongCommandLocalDeltaEvidence,
 } from './room-song-command-convergence.js';
 import { isNewPlayIntent, settledPlaybackState } from './song-playback-intent.js';
+import { formatTime } from './song-time.js';
 
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const input = document.querySelector('#youtube-url');
@@ -74,14 +75,6 @@ let latestPlaybackRoom = null;
 let speculativePrewarm = null;
 let outgoingHandoffId = null;
 let autoplayRecoveryRequired = false;
-
-function formatTime(seconds) {
-  if (!Number.isFinite(seconds) || seconds < 0) return '--:--';
-  const whole = Math.floor(seconds);
-  const minutes = Math.floor(whole / 60);
-  const remainder = whole % 60;
-  return `${minutes}:${String(remainder).padStart(2, '0')}`;
-}
 
 function parseVideoId(rawValue) {
   const value = rawValue.trim();

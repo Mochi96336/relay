@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import vm from 'node:vm';
 import { projectFollowerRoom, decideFollowerAction } from '../public/choir-follower-clock.js';
+import { formatTime } from '../public/song-time.js';
 
 async function fixture() {
   let now = 1000;
@@ -40,10 +41,10 @@ async function fixture() {
     },
   };
   const source = (await readFile(new URL('../public/choir-follower.js', import.meta.url), 'utf8'))
-    .replace(/^import[^\n]*\n/, '');
+    .replace(/^import[^\n]*\n/gm, '');
   vm.runInNewContext(source, {
     window, document: { querySelector: (key: string) => nodes.get(key), createElement: () => ({}) },
-    performance: { now: () => now }, projectFollowerRoom, decideFollowerAction,
+    performance: { now: () => now }, projectFollowerRoom, decideFollowerAction, formatTime,
     location: { origin: 'https://relay.test' },
     Event: class { constructor(public type: string) {} },
     CustomEvent: class { detail: any; constructor(public type: string, init: any) { this.detail = init.detail; } },

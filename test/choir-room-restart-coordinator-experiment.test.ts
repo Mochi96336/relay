@@ -793,6 +793,7 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
       'superseded token cannot be replayed');
     const b = broker.redeem(bMedia, latest.claimToken, RATE, 2, 11)!;
     assert.ok(b);
+    assert.ok(b.roomEpoch !== null, 'a room claim admits B to the room');
     assert.equal(b.participantId, 'B');
     assert.equal(b.seat, 'secondary');
     assert.ok(b.mediaEpoch > a.mediaEpoch);
@@ -855,6 +856,94 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
     assert.equal(f.coordinator.preview().secondary, 'join-required');
   });
 
+  test('a joined B keeps one media socket and its voice across rooms, and claims media with no room', () => {
+    const f = fixture();
+    const rev = f.startSong(0);
+    f.coordinator.observe(0);
+    assert.equal(f.approve(rev, 0), true);
+    type Socket = { participantId: string; role: string; open: boolean };
+    const aControl: Socket = { participantId: 'A', role: 'unknown', open: true };
+    const bControl: Socket = { participantId: 'B', role: 'unknown', open: true };
+    const bMedia: Socket = { participantId: 'B', role: 'unknown', open: true };
+    const bMediaAgain: Socket = { participantId: 'B', role: 'unknown', open: true };
+    const consent = new ChoirSecondaryConsentExperiment({
+      scopeNow: () => ({
+        roomEpoch: 1, playbackRevision: rev, videoId: VIDEO,
+        backingGeneration: 9, robotSourceGeneration: f.robot.generation,
+      }),
+      primaryStillOwnsMic: id => id === 'A' && aControl.open,
+      participantConnected: id => id === 'B' && bControl.open,
+      takeFrozenNow: () => false,
+      socketOpen: socket => (socket as Socket).open,
+      notifyParticipant: () => {}, notifySocket: () => {},
+    });
+    let joined = true;
+    const ingress = new ChoirSecondaryPcmIngressExperiment(f.coordinator,
+      socket => (socket as Socket).open);
+    ingress.liveVoiceAllowed = participantId => joined && participantId === 'B';
+    const heard: number[] = [];
+    ingress.onAcceptedFrame = frame => { heard.push(frame.firstSampleIndex); };
+    const broker = new ChoirSecondaryMediaTicketExperiment(
+      f.coordinator, consent, ingress, socket => (socket as Socket).open);
+    broker.joinClaimAllowed = socket => joined && socket === bControl;
+    const pcm = Buffer.from(new Int16Array(960).fill(2_000).buffer);
+    const packet = (sequence: number) => encodeAudioPacket({
+      source: 'mic', generation: 7, firstSampleIndex: sequence * 960, sequence, pcm,
+    });
+    const accepted = { intercepted: true, accepted: true, reason: 'accepted' };
+
+    const invite = consent.invite(aControl, 'B', 1)!;
+    assert.equal(consent.respond(bControl, invite, true, 2), true);
+    assert.ok(f.admit(1, 1, 'A', 'socket-A', 3));
+    // With a room up and B not in it, B's claim is that room's, as before.
+    const claim = broker.issue(bControl, 4)!;
+    assert.equal(claim.roomEpoch, 1);
+    const grant = broker.redeem(bMedia, claim.claimToken, RATE, 2, 5)!;
+    assert.equal(grant.roomEpoch, 1);
+    assert.deepEqual(ingress.interceptBinary(bMedia, packet(0), 20), accepted);
+    assert.equal(f.coordinator.preview().secondary, 'calibration-required');
+
+    // A seek retires the room; B's voice carries on, on the same socket.
+    assert.equal(f.songs.update(playing({ currentTime: 80 }), leader, null, 100).accepted, true);
+    assert.equal(f.coordinator.observe(100).roomEpoch, null);
+    assert.deepEqual(ingress.interceptBinary(bMedia, packet(1), 101), accepted);
+    assert.equal(ingress.sweepStale(102), 0, 'B between rooms is not stale');
+    assert.equal(ingress.liveTransportFor('B'), grant.transportId);
+
+    // The next room admits B on that socket: no new claim, no reconnect.
+    const newRevision = (f.songs.statusPayload(103) as { revision: number }).revision;
+    assert.equal(f.approve(newRevision, 103, 1), true);
+    assert.ok(f.admit(2, 2, 'A', 'socket-A2', 104));
+    const ticket = f.admit(2, 2, 'B', grant.transportId, 105)!;
+    assert.ok(ticket);
+    assert.equal(ingress.attachRoomTicket(ticket, 105), true);
+    assert.equal(ingress.attachRoomTicket(ticket, 105), false, 'a socket in a room is not attached twice');
+    assert.deepEqual(ingress.interceptBinary(bMedia, packet(2), 106), accepted);
+    assert.equal(f.coordinator.preview().secondary, 'calibration-required');
+
+    // Closing B's socket retires the room as before. With no room at all, a
+    // joined B claims media for its voice alone.
+    assert.equal(ingress.disconnect(bMedia, 107), true);
+    assert.equal(f.coordinator.observe(108).roomEpoch, null);
+    const joinClaim = broker.issue(bControl, 108)!;
+    assert.equal(joinClaim.roomEpoch, null);
+    assert.equal(broker.redeem(bControl, joinClaim.claimToken, RATE, 2, 109), null,
+      'the consent socket itself is never the media socket');
+    const again = broker.issue(bControl, 110)!;
+    const joinGrant = broker.redeem(bMediaAgain, again.claimToken, RATE, 2, 111)!;
+    assert.equal(joinGrant.roomEpoch, null);
+    assert.equal(joinGrant.mediaEpoch, null);
+    assert.deepEqual(ingress.interceptBinary(bMediaAgain, packet(3), 112), accepted);
+
+    // B's voice ends with B's join.
+    joined = false;
+    assert.deepEqual(ingress.interceptBinary(bMediaAgain, packet(4), 113),
+      { intercepted: true, accepted: false, reason: 'stale-authority' });
+    assert.equal(ingress.liveTransportFor('B'), null);
+    assert.equal(broker.issue(bControl, 114), null);
+    assert.deepEqual(heard, [0, 960, 1920, 2880]);
+  });
+
   test('failed physical B media bind retires the room and cannot replay a half-admitted seat', () => {
     const f = fixture();
     const rev = f.startSong(0);
@@ -877,7 +966,7 @@ describe('offline Choir Room Restart Coordinator uses server owned playback, rob
     const invite = consent.invite(a, 'B', 2)!;
     assert.equal(consent.respond(b, invite, true, 3), true);
     const broker = new ChoirSecondaryMediaTicketExperiment(
-      f.coordinator, consent, { bindVerifiedSecondary: () => false },
+      f.coordinator, consent, { bindVerifiedSecondary: () => false, bindJoinedSecondary: () => false },
       socket => (socket as Socket).open,
     );
     const grant = broker.issue(b, 4)!;

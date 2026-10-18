@@ -7,11 +7,11 @@ import { MIC_GAIN_KEY, storedNumber } from './device-preferences.js';
  * The second singer's publisher. B's own click on + Second Mic prepares a
  * separate AudioContext + existing capture Worklet, with actual native sample
  * rate and monotonically positioned PCM, and keeps it running while B is in.
- * It transmits v2 binary ONLY on a media socket bound to a server-issued
- * Media Epoch. It asks for one whenever the server says a duet room is ready,
- * which happens when a song plays and again after each seek or song change,
- * so B never has to press anything twice. The server keeps B silent until
- * both singers are aligned.
+ * It transmits binary ONLY on a media socket the server granted. It asks for
+ * one whenever the server says so: media-ready while no song plays (B is
+ * heard at once, beside A), room-ready when a duet room needs B. A socket B
+ * already has carries on into the next room, so a song starting or stopping
+ * never cuts B; the server measures B afresh for each song.
  *
  * Claim tokens exist only in an event-local closure and are never put in
  * URL parameters, browser storage, logs or page text.
@@ -21,7 +21,7 @@ let mediaSocket = null;
 let awaitingClaim = false;
 let attempt = 0;
 let claimTimer = null;
-/** The latest room the server announced, waiting for capture to be ready. */
+/** The server asked for media (room or none), waiting for capture to be ready. */
 let roomReady = false;
 let announcedRoomEpoch = null;
 let preparing = false;
@@ -136,8 +136,15 @@ window.addEventListener('relay-choir-media-message', (event) => {
     requestClaim();
     return;
   }
+  if (event.detail?.type === 'choir-media-ready') {
+    // No room: media for B's voice alone. A socket B has, or one on the way, serves.
+    if (awaitingClaim || mediaSocket) return;
+    roomReady = true;
+    requestClaim();
+    return;
+  }
   if (event.detail?.type === 'choir-media-rejected' && awaitingClaim) {
-    // No room yet, or it was just retired: wait for the next one.
+    // The room or join changed under the claim: wait for the server to ask again.
     closeMedia();
     notify('claim-rejected');
     return;
@@ -145,9 +152,10 @@ window.addEventListener('relay-choir-media-message', (event) => {
   if (event.detail?.type !== 'choir-secondary-media-claim'
     || !awaitingClaim || capture.rate === null) return;
   const { claimToken, roomEpoch } = event.detail;
+  // A join claim (no room) has no epoch; a room claim names the room announced.
   if (typeof claimToken !== 'string' || !/^[0-9a-f]{64}$/.test(claimToken)
-    || !Number.isSafeInteger(roomEpoch) || roomEpoch < 1
-    || roomEpoch !== announcedRoomEpoch) return;
+    || (roomEpoch !== null && (!Number.isSafeInteger(roomEpoch) || roomEpoch < 1
+      || roomEpoch !== announcedRoomEpoch))) return;
   awaitingClaim = false;
   if (claimTimer !== null) clearTimeout(claimTimer);
   claimTimer = null;
@@ -163,8 +171,8 @@ window.addEventListener('relay-choir-media-message', (event) => {
  *
  * An open socket must also be registered within MEDIA_REGISTER_TIMEOUT_MS.
  * Otherwise the server's replies stopped (authentication or registration),
- * and the socket is dropped: the server's next room-ready (every 3 s) then
- * brings a fresh claim. While it was kept, room-ready was ignored and B
+ * and the socket is dropped: the server's next room-ready or media-ready
+ * (every 3 s) then brings a fresh claim. While it was kept, room-ready was ignored and B
  * stayed in with no voice.
  */
 const DIRECT_SOCKET_OPEN_TIMEOUT_MS = 2_500;
@@ -243,8 +251,8 @@ function connectMedia(claimToken, roomEpoch, sourceRate, direct) {
     clearTimeout(registerTimer);
     if (fallBack()) return;
     if (socket !== mediaSocket) return;
-    // The room was retired (seek, song change) or the link dropped; keep the
-    // microphone and reconnect when the server announces the next room.
+    // The link dropped or B's join ended; keep the microphone and reconnect
+    // when the server next asks (room-ready or media-ready, every 3 s).
     closeMedia();
     notify('disconnected');
   });

@@ -13,7 +13,8 @@ RELAY_CHOIR_MEDIA_EXPERIMENT=1   # only together with RELAY_CHOIR_SHADOW
 - **B** is anyone else. B presses **+ 副 Mic** in the Mic row, and that one tap starts B's microphone and joins B to whoever holds the Mic. A does not approve and cannot remove B.
 - There is one B at a time. Like the Mic itself, the second Mic can be taken over: while someone is B, others see **接手副 Mic**, and pressing it replaces B (`revoked`, reason `replaced`). There is no extra card; the heading carries the duet's state, and one line under the Mic row says why a join failed or ended.
 - A join is not tied to a song. It lasts while A holds the Mic and B's page stays connected, across pauses, seeks and Takes.
-- Whenever a song plays and there is no duet room, the server creates one (`beginJoinedChoirRoom()`) and sends B `choir-room-ready`, again every 3 s until B claims it. B's page then claims its media socket. A seek or song change retires the room, and the next one is created the same way.
+- **B is heard while joined, song or no song.** With no duet room up, the server asks B's page for media (`choir-media-ready`, every 3 s until B has it), and B's join socket gets a *join claim*: B's media socket is bound for B's voice alone (`bindJoinedSecondary`), allowed while B is the joined singer and A still holds the Mic.
+- Whenever a song plays and there is no duet room, the server creates one (`beginJoinedChoirRoom()`). A B already connected is admitted to it on that same socket (`admitConnectedSecondary()`, logged `b-room-joined`), so a song starting never cuts B. A B without media is sent `choir-room-ready`, again every 3 s until B claims it. A pause, seek, song end or song change retires the room; B's socket lets go of it and carries on, and the next room admits B the same way.
 - B never becomes the N=1 publisher and has no room song commands.
 - If A gives up the Mic, B's join ends. B is **not promoted**; someone has to take the Mic explicitly.
 
@@ -33,10 +34,13 @@ B  AudioPacket v2 WS  ─┘                              MicTrack(A) + MicTrack
 
 ## What Listen and Take hear
 
-The room output is still the N=1 `AudioSession`, so Listen, Take and timing need no separate path. Once the duet room is `duet-ready` and A still owns the Mic, B joins that output as a second `MicTrack` (`syncDuetOutput()` in `server.ts`):
+The room output is still the N=1 `AudioSession`, so Listen, Take and timing need no separate path. While B is joined and connected, B is part of that output as a second `MicTrack` (`syncDuetOutput()` in `server.ts`):
+
+- With no song there is nothing to place B against, so B reads at A's advance (source `no-song`), and B's own frontier correction holds it back as far as B's audio actually arrives. Each time a song plays, B is measured afresh.
 
 - Until Content has measured both singers, B is placed by **YouTube time**, as the main Mic's sample/song fallback: B's page reports which capture sample was recorded at which point of its local YouTube (`choir-secondary-song-anchor`), the Robot reports the same for the backing, and the difference gives B's lag within seconds of the song playing.
 - Once Content has both, B's lag is A's advance plus (B − A) from the duet room. Both singers are measured against the same Robot backing, so their difference holds in any coordinates.
+- Until a song's first measurement arrives, B keeps the lag it has. A change in B's lag over 100 ms (no song to a song and back, typically a second or more) fades B out, jumps and fades B back in, instead of the 1% slew taking minutes over it.
 - A and B are summed, as two singers in one room would sound, so a harmony keeps the balance it was sung at. A sum that would pass one voice's ceiling is turned down at once and comes back up over 80 ms; a singer alone is untouched. B fades in and out over 50 ms.
 - While a Take records, an audible B keeps its lag, as A's alignment does.
 - B's gain is B's own: the media registration carries the gain B's device remembers (default 24 dB), and B's Mic slider changes it while B is in.
@@ -44,7 +48,7 @@ The room output is still the N=1 `AudioSession`, so Listen, Take and timing need
 - A voice fading out is never revived. Whoever sings next, the same B reconnecting or a C who took the seat, starts on a fresh `MicTrack` once the fade is done.
 - The room shows B `singing` only while B is allowed to sound and B's PCM has reached the mix within the last 500 ms. A B whose media stalls shows as `aligning`.
 - `/statusz` shows B under `audio.duetSecondary`. `audio.duetIngress` counts B's accepted and rejected frames, `audio.duetRoom` gives the duet room's state, `audio.duetContent` shows the Content worker's counters and last failure, and `audio.duetYoutube` shows the YouTube-time anchors and which source B's lag uses.
-- The server logs each step as `[choir] {"event":…}`: `b-joined`, `room`, `b-claim`, `b-media-registered`, `b-lag-source`, `b-heard`/`b-silent`, `b-pcm-stalled`/`b-pcm-resumed`, `b-left`. `b-page` is what B's page shows and plays (its local player state), so a B who hears no song can be explained.
+- The server logs each step as `[choir] {"event":…}`: `b-joined`, `room`, `b-claim`, `b-media-registered` (`scope` `join` or `room`), `b-room-joined`, `b-media-disconnected`, `b-lag-source` (`content`, `youtube-time` or `no-song`), `b-heard`/`b-silent`, `b-pcm-stalled`/`b-pcm-resumed`, `b-left`. `b-page` is what B's page shows and plays (its local player state), so a B who hears no song can be explained.
 
 The duet room's own rendered PCM is still only proof evidence and is not sent anywhere.
 

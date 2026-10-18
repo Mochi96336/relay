@@ -1,0 +1,100 @@
+/* Local file mode: the Mic owner's phone plays a song from its own storage.
+   It takes the place of the YouTube surface for everyone until it is closed. */
+.local-file[hidden] { display: none; }
+
+.song-stage[data-local-file="on"] .song-heading-actions,
+.song-stage[data-local-file="on"] .song-heading-title,
+.song-stage[data-local-file="on"] .song-observer,
+.song-stage[data-local-file="on"] .youtube-form,
+.song-stage[data-local-file="on"] .youtube-player-shell,
+.song-stage[data-local-file="on"] .youtube-readout,
+.song-stage[data-local-file="on"] #youtube-note,
+.song-stage[data-local-file="on"] #choir-follower-status,
+.song-stage[data-local-file="on"] #choir-follower-unmute {
+  display: none !important;
+}
+
+.local-file-now {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.local-file-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 17px;
+  font-weight: 640;
+  letter-spacing: -.01em;
+}
+.local-file-source {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dim);
+  font-size: 11px;
+}
+.local-file-now .text-action {
+  flex: none;
+  min-height: 44px;
+  font-size: 12px;
+}
+
+.local-file-transport {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+}
+.local-file-transport[hidden] { display: none; }
+.local-file-play {
+  min-width: 44px;
+  min-height: 44px;
+  font-size: 13px;
+  font-weight: 620;
+  text-align: left;
+}
+.local-file-time {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.local-file-note:empty { display: none; }
+
+/* Same row as the Mic gain control: a collapsed line that opens to sliders. */
+.local-file-mix {
+  margin-top: 10px;
+  border-top: 1px solid #202227;
+  border-bottom: 1px solid #202227;
+}
+.local-file-mix[hidden] { display: none; }
+.local-file-mix > summary {
+  min-height: 48px;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: #cfd0d3;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.local-file-mix > summary::-webkit-details-marker { display: none; }
+.local-file-mix > summary span { font-size: 13px; font-weight: 620; }
+.local-file-mix > summary output {
+  color: #b6b8bd;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.local-file-mix-body {
+  display: grid;
+  gap: 18px;
+  padding: 2px 0 14px;
+}
+.local-file-now .text-action[hidden] { display: none; }

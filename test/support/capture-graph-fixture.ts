@@ -50,6 +50,7 @@ export function captureFixture(failure: string | null = null) {
   const env: any = {
     captureGraphEpoch: 0, activeCaptureGraph: null, activeNode: null,
     mediaStream: stream, audioContext: context, publisherSessionEpoch: 1,
+    localFileMix: { connectInput: null as any },
     navigator: { mediaDevices },
     AudioWorkletNode: class { constructor() { return node('worklet'); } },
     Worker: class {

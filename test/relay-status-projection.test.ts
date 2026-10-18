@@ -82,6 +82,7 @@ function remoteFacts(overrides: Partial<RemoteStatusFacts> = {}): RemoteStatusFa
       audibility: opaque<MicFacts['audibility']>('audibility'),
       level: { warning: null, hotWindows: 0 } as unknown as MicFacts['level'],
       micGainDb: -3,
+      premixed: false,
       concealedSamples: 7_200,
       clockDrift: null,
       clockTrimPpm: 12,

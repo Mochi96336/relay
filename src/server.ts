@@ -773,6 +773,9 @@ function micMediaPath(nowMs = performance.now()) {
 function clearMicMediaAuthority() {
   micRuntime.clearMediaAuthority(performance.now());
   session.setMicExpected(false);
+  // Premixed belongs to the capture that declared it.
+  session.setMicPremixed(false);
+  localFileTitle = null;
   // An audibility or level verdict belongs to one capture, never to the next singer.
   resetMicAudibility();
   micLevel.reset();
@@ -1969,6 +1972,7 @@ function remoteStatusFacts(nowMs: number): RemoteStatusFacts {
       audibility: micAudibility.status(),
       level: micLevel.status(),
       micGainDb: session.micGainDb,
+      premixed: session.micPremixed,
       concealedSamples: session.micConcealedSampleCount,
       clockDrift: micClockDrift.estimate(),
       clockTrimPpm: session.micClockTrimPpm,
@@ -2178,6 +2182,7 @@ function productStatusFacts(nowMs: number): ProductStatusFacts {
     micOwnerId: participantSnapshot.micOwnerId,
     micOwnerNickname: micOwner?.nickname ?? null,
     duet: duetView(nowMs),
+    localFile: session.micPremixed ? { title: localFileTitle } : null,
     publisherControlConnected: micRuntime.controlConnected(),
     freshMicUplink: micRuntime.freshUplinkHealthPayload(nowMs),
     micAudibilityDegraded: mic.audibilityDegraded,
@@ -2533,7 +2538,7 @@ const mixerTimer = setInterval(() => {
       micLive: micPlayable(nowMs),
       frameSamples: frame.byteLength / 2,
       heavyLimitedSamples: evidence.heavyLimitedSamples,
-    }, () => ({ songPlaying: roomSongPlaying(nowMs), micGainDb: session.micGainDb }));
+    }, () => ({ songPlaying: roomSongPlaying(nowMs), micGainDb: session.effectiveMicGainDb }));
     if (levelChanged) reportMicLevel('window');
   });
   reportMicTimelineFolds();
@@ -2810,6 +2815,7 @@ function reportMicDevice(health: AudioUplinkHealth) {
     },
     audioSessionType: health.capture?.audioSessionType ?? null,
     gainDb: session.micGainDb,
+    premixed: session.micPremixed,
     // A page keeps the scripts it loaded. On 2026-10-16 a Mic in Germany ran
     // an app.js from before Opus and sent PCM at six times the bitrate; only
     // missing fields gave it away. null: the page predates sending its build.
@@ -2818,6 +2824,15 @@ function reportMicDevice(health: AudioUplinkHealth) {
     codec: health.transport.codec ?? null,
     codecBitrate: health.transport.codecBitrate ?? null,
   }));
+}
+
+/** What the Mic owner's local file is called, as shown to the room; null when unnamed. */
+let localFileTitle: string | null = null;
+
+function sanitizeLocalFileTitle(value: unknown) {
+  if (typeof value !== 'string') return null;
+  const title = value.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+  return title.length > 0 ? title : null;
 }
 
 /** A registration's Mic gain, clamped like set-mix; null when it names none. */
@@ -4101,6 +4116,15 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     broadcastJson(mixSettingsPayload());
     return;
   },
+  setLocalFile: (socket, payload) => {
+    if (!requireMicOwnerCommand(socket, 'set-local-file')) return;
+    // A file change on the same premixed capture; the mode itself changes
+    // only with a new capture registration.
+    if (!session.micPremixed) return;
+    localFileTitle = sanitizeLocalFileTitle(payload.title);
+    broadcastProductStatus();
+    return;
+  },
   audioUplinkHealth: (socket, payload) => {
     const health = parseAudioUplinkHealth(payload);
     if (!health) return;
@@ -4455,6 +4479,9 @@ function publisherActivated(request: {
   initialSequence?: number;
   audioPacketVersion: 1 | 2;
   requestedMicGainDb: number | null;
+  /** The phone mixed a local song into this capture (local file mode). */
+  premixed: boolean;
+  localFileTitle: string | null;
 }) {
   // The ownership change's timing invalidation and handoff preparation wait
   // until the new publisher is bound.
@@ -4510,6 +4537,15 @@ function publisherActivated(request: {
 
   micTransportGrace.cancel();
   session.setMicExpected(true);
+  if (request.premixed !== session.micPremixed) {
+    console.log('[mic-premixed]', JSON.stringify({
+      premixed: request.premixed,
+      participant: request.socket.participantId ? participantLogLabel(request.socket.participantId) : null,
+      captureGeneration: request.captureGeneration,
+    }));
+  }
+  session.setMicPremixed(request.premixed);
+  localFileTitle = request.premixed ? request.localFileTitle : null;
   if (!previousPublisher && session.active) {
     takeController.noteQualityEvent('mic-transport-connected');
   }
@@ -4539,6 +4575,8 @@ function publisherActivated(request: {
   sendJson(request.socket, sourceStatusPayload());
   sendJson(request.socket, timingCalibrationStatusPayload());
   broadcastStatus();
+  // Local file mode on or off is room state everyone's page shows.
+  broadcastProductStatus();
 
   if (participantId) {
     broadcastSessionStatus();
@@ -4686,6 +4724,8 @@ const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
       initialSequence: initialSequence ?? undefined,
       audioPacketVersion,
       requestedMicGainDb: requestedMicGainDb(payload.micGainDb),
+      premixed: payload.premixed === true,
+      localFileTitle: sanitizeLocalFileTitle(payload.localFileTitle),
     });
     return;
   },
@@ -5255,6 +5295,9 @@ function handleChoirConsentMessage(socket: RelaySocket, payload: Record<string, 
   } else if (type === 'choir-secondary-join') {
     // The joiner never names the other singer: it is whoever holds the Mic.
     accepted = participants.micOwnerId !== null
+      // A local file song exists only on the Mic owner's phone: a second
+      // singer could neither hear it nor be aligned to it.
+      && !session.micPremixed
       && micRuntime.mediaOwnerId === participants.micOwnerId
       && (payload.resume !== true || payload.expectedPrimaryId === participants.micOwnerId)
       && choirConsent.join(socket, participants.micOwnerId, nowMs, payload.resume === true);

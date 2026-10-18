@@ -61,3 +61,8 @@ test('real Opus rate changes retain codec delay and continuous decoding',()=>{
  for(let i=960;i<audio.length/2;i++){const a=5000*Math.sin((i-delay)*2*Math.PI*440/48000),b=audio.readInt16LE(i*2);dot+=a*b;aa+=a*a;bb+=b*b;}
  assert.ok(dot/Math.sqrt(aa*bb)>0.95,'rate changes preserve waveform phase and sample coordinates');
 });
+test('a premixed song floor stops congestion at 64k',()=>{
+ const p=new MicBitratePolicy();p.floor=64000;
+ for(let t=0;t<=20000;t+=1000)observe(p,t,{audioBacklogMs:600});
+ assert.equal(p.status().bitrate,64000);
+});

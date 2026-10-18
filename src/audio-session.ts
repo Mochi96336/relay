@@ -190,6 +190,8 @@ export class AudioSession {
   private sessionGeneration = 0;
 
   private readonly micGain: MicGainRamp;
+  private roomMicGainDb: number;
+  private micPremixedValue = false;
 
 
 
@@ -259,6 +261,7 @@ export class AudioSession {
     // point to exactly the same component instances owned by micTrack.
     this.mic = this.micTrack.timeline;
     this.micGain = this.micTrack.gain;
+    this.roomMicGainDb = this.micGain.targetDb;
     this.micLimiter = this.micTrack.limiter;
     this.micRawMeter = this.micTrack.meter;
     this.micCaptureRestartBoundaries = this.micTrack.captureRestarts;
@@ -433,12 +436,38 @@ export class AudioSession {
     this.bus.setBackingExpected(expected, this.running);
   }
 
+  /** The room's Mic gain setting, kept while a premixed capture overrides it. */
   get micGainDb() {
+    return this.roomMicGainDb;
+  }
+
+  /** The gain the Mic samples are actually mixed at. */
+  get effectiveMicGainDb() {
     return this.micGain.targetDb;
   }
 
+  get micPremixed() {
+    return this.micPremixedValue;
+  }
+
   setMicGainDb(value: number) {
-    this.micGain.setTargetDb(value, this.running);
+    this.roomMicGainDb = value;
+    this.applyMicGain();
+  }
+
+  /**
+   * A premixed capture already carries the singer's gain and the song: the
+   * phone mixed them before sending. Raising it by the room's voice gain would
+   * clip it, so it is mixed at unity while the room setting is kept for the
+   * next ordinary capture.
+   */
+  setMicPremixed(premixed: boolean) {
+    this.micPremixedValue = premixed;
+    this.applyMicGain();
+  }
+
+  private applyMicGain() {
+    this.micGain.setTargetDb(this.micPremixedValue ? 0 : this.roomMicGainDb, this.running);
   }
 
   /**

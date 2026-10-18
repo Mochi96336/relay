@@ -1,6 +1,7 @@
 export type MicOwnerCommand =
   | 'set-mix'
   | 'set-vocal-fine-tune'
+  | 'set-local-file'
   | 'start-timing-calibration';
 
 export type CommandActor = {

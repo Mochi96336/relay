@@ -38,6 +38,23 @@ test('AudioSession is the single source of truth for the applied Mic gain', () =
   assert.equal(session.micGainDb, 7.25);
 });
 
+test('a premixed capture is mixed at unity while the room gain setting is kept', () => {
+  const session = makeSession();
+  session.start(0);
+  session.setMicGainDb(18);
+  session.setMicPremixed(true);
+  assert.equal(session.micGainDb, 18);
+  assert.equal(session.effectiveMicGainDb, 0);
+
+  // A gain command during local file mode changes the setting, not the mix.
+  session.setMicGainDb(30);
+  assert.equal(session.micGainDb, 30);
+  assert.equal(session.effectiveMicGainDb, 0);
+
+  session.setMicPremixed(false);
+  assert.equal(session.effectiveMicGainDb, 30);
+});
+
 test('server owns Mic gain command authorization, clamping and publication', () => {
   const server = parseTypeScriptSource(
     new URL('../src/server.ts', import.meta.url),
@@ -47,9 +64,11 @@ test('server owns Mic gain command authorization, clamping and publication', () 
 
   assert.doesNotMatch(serverCode, /let\s+micGainDb\s*=/);
   assert.doesNotMatch(serverCode, /session\.setMicGainDb\(micGainDb\)/);
-  // Read through, never copied: mix health, mix settings, the Mic level
-  // monitor's per-window context, and its diagnostics status.
-  assert.equal((serverCode.match(/micGainDb:\s*session\.micGainDb/g) ?? []).length, 4);
+  // Read through, never copied: mix health, mix settings and diagnostics
+  // status report the room setting; the Mic level monitor judges the samples
+  // at the gain they are actually mixed at.
+  assert.equal((serverCode.match(/micGainDb:\s*session\.micGainDb/g) ?? []).length, 3);
+  assert.equal((serverCode.match(/micGainDb:\s*session\.effectiveMicGainDb/g) ?? []).length, 1);
 
   const commands = variableInitializerCode(server, 'commandProtocol');
   const setMix = commands.indexOf('setMix: (socket, payload) => {');

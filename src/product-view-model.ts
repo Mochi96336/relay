@@ -53,12 +53,21 @@ export type ProductDuet = {
   state: 'joined' | 'aligning' | 'singing';
 };
 
+/**
+ * Local file mode: the Mic owner's phone plays a song from its own storage and
+ * sends it already mixed with the voice. The room has no song of its own.
+ */
+export type ProductLocalFile = {
+  title: string | null;
+};
+
 export type ProductViewModelInput = {
   readiness: ReadinessSnapshot;
   participantCount: number;
   micOwnerId: string | null;
   micOwnerNickname: string | null;
   duet?: ProductDuet | null;
+  localFile?: ProductLocalFile | null;
   /** Manual calibration needs the publisher control socket, not only Mic media. */
   publisherControlConnected?: boolean;
   /** Capture-scoped browser verdict after bounded media recovery is exhausted. */
@@ -127,6 +136,7 @@ export type ProductStatus = {
       ownerNickname: string | null;
     };
     duet?: ProductDuet;
+    localFile?: ProductLocalFile;
     song: {
       state: RoomSongState;
       videoId: string | null;
@@ -371,6 +381,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
         ownerNickname: input.micOwnerNickname,
       },
       ...(input.duet && input.micOwnerId ? { duet: { ...input.duet } } : {}),
+      ...(input.localFile && input.micOwnerId ? { localFile: { ...input.localFile } } : {}),
       song: {
         state: songState(input),
         videoId: input.roomSong.videoId,

@@ -16,6 +16,8 @@ export type MicCaptureGraph = {
   readonly silent: GainNode;
   readonly captureClockOriginContextTime: number;
   readonly visualAnalysis: MicVisualAnalysis | null;
+  /** A local file's mix feeds this capture instead of the Mic alone. */
+  readonly premixed: boolean;
   dispose(): void;
   submitVisualAnalysis(pcm: ArrayBuffer): void;
   returnBuffer(buffer: ArrayBuffer): void;
@@ -31,6 +33,12 @@ export function createMicCaptureGraph(options: {
   onProcessorError: (graph: MicCaptureGraph) => void;
   onInputDeviceChanged: (graph: MicCaptureGraph) => void;
   onInputDeviceRemoved: (graph: MicCaptureGraph) => void | Promise<unknown>;
+  connectInput?: ((input: {
+    context: AudioContext;
+    stream: MediaStream;
+    source: MediaStreamAudioSourceNode;
+    capture: AudioWorkletNode;
+  }) => { disconnect(): void } | null) | null;
   mediaDevices?: Pick<MediaDevices, 'enumerateDevices' | 'addEventListener' | 'removeEventListener'>;
   AudioWorkletNodeClass?: typeof AudioWorkletNode;
   WorkerClass?: typeof Worker;

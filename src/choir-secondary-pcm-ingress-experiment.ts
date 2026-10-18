@@ -1,4 +1,4 @@
-import { Decoder } from '@evan/opus';
+import { OpusMicDecoder } from './opus-mic-decoder.js';
 import { FRAME_MAGIC } from './pcm-frame.js';
 import {
   AUDIO_PACKET_HEADER_BYTES, AUDIO_PACKET_VERSION, decodeAudioPacket,
@@ -36,8 +36,8 @@ type BoundSecondary = {
   /** v2 committed sequence identity, bounded to the recent reorder horizon. */
   latestSequence: number | null;
   seenSequences: Map<number, { start: number; end: number }>;
-  /** Opus v3 sockets only: the decoder, and where its last packet ended. */
-  opus: { decoder: Decoder | null; end: number | null } | null;
+  /** Opus v3 sockets only: the decoder (null until the first packet, or after corrupt data). */
+  opus: { decoder: OpusMicDecoder | null } | null;
 };
 
 export type ChoirIngressResult =
@@ -111,7 +111,7 @@ export class ChoirSecondaryPcmIngressExperiment {
       ticket, sampleRate: sourceRate, generation: null,
       packetWindowStartMs: nowMs, packetCount: 0,
       latestSequence: null, seenSequences: new Map(),
-      opus: packetVersion === 3 ? { decoder: null, end: null } : null,
+      opus: packetVersion === 3 ? { decoder: null } : null,
     });
     this.transportBindings.set(ticket.transportId, socket);
     return true;
@@ -268,8 +268,9 @@ export class ChoirSecondaryPcmIngressExperiment {
 
 /**
  * One Opus v3 packet to its PCM frame, as the main Mic's transport decodes
- * (audio-transport.ts): decoder state carries across contiguous packets and
- * resets at a hole, and the encoder's look-ahead is taken off the start.
+ * (audio-transport.ts): decoder state carries across packets, a hole is
+ * concealed inside the decoder (OpusMicDecoder), and the encoder's look-ahead
+ * is taken off the start.
  * Corrupt codec data is a hole, never stale decoder output.
  */
 function decodeOpusFrame(
@@ -278,18 +279,15 @@ function decodeOpusFrame(
 ): { generation: number; firstSampleIndex: number; pcm: Buffer } | null {
   if (packet.opusDelaySamples === undefined) return null;
   try {
-    opus.decoder ??= new Decoder({ channels: 1, sample_rate: 48_000 });
-    if (opus.end !== null && opus.end !== packet.firstSampleIndex) opus.decoder.reset();
-    const pcm = Buffer.from(opus.decoder.decode(packet.pcm));
+    opus.decoder ??= new OpusMicDecoder();
+    const pcm = opus.decoder.decodeAt(packet.firstSampleIndex, packet.pcm);
     if (pcm.byteLength !== packet.sampleCount * 2) throw new Error('Opus sample count mismatch');
-    opus.end = packet.firstSampleIndex + packet.sampleCount;
     const start = packet.firstSampleIndex - packet.opusDelaySamples;
     const trim = Math.max(0, -start);
     if (trim * 2 >= pcm.byteLength) return null;
     return { generation: packet.generation, firstSampleIndex: Math.max(0, start), pcm: pcm.subarray(trim * 2) };
   } catch {
     opus.decoder = null;
-    opus.end = null;
     return null;
   }
 }

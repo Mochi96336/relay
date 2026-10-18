@@ -25,7 +25,6 @@ import {
   readCaptureSettings,
 } from './capture-observability.js';
 import { MicLifecycleTransaction } from './mic-lifecycle-transaction.js';
-const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 import { splitPcmForPacketLimit } from './audio-packetizer.js';
 import { createReconnectBackoff } from './reconnect-backoff.js';
 import { wsUrl } from './ws-url.js';

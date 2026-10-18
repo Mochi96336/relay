@@ -113,10 +113,10 @@ describe('second Mic diagnostics', () => {
     const block = describeDuetTiming(duetFacts())!;
     const rows = byKey(block.rows);
     assert.equal(rows.duetMainOffset.label, 'Main Mic · Ann');
-    assert.equal(rows.duetMainOffset.value, '150 ms');
+    assert.equal(rows.duetMainOffset.value, '+150 ms', 'signed, as the main Mic and Realign show it');
     assert.equal(rows.duetMainOffset.note, 'Song content');
     assert.equal(rows.duetSecondOffset.label, 'Second Mic · Bo');
-    assert.equal(rows.duetSecondOffset.value, '180 ms');
+    assert.equal(rows.duetSecondOffset.value, '+180 ms');
     assert.match(rows.duetSecondOffset.note, /^Song content/);
     assert.equal(rows.duetSecondOffset.tone, 'ok');
   });
@@ -128,7 +128,7 @@ describe('second Mic diagnostics', () => {
       f.statusz.audio.duetSecondary.targetLagMs = 190;
     }))!.rows);
     assert.match(rows.duetSecondOffset.note, /^YouTube time estimate/);
-    assert.match(rows.duetSecondOffset.note, /Moving toward 190 ms/);
+    assert.match(rows.duetSecondOffset.note, /Moving toward \+190 ms/);
     assert.equal(rows.duetSecondOffset.tone, 'neutral');
 
     const songless = byKey(describeDuetTiming(duetFacts((f) => {
@@ -179,5 +179,21 @@ describe('second Mic blocks in Technical details', () => {
     assert.match(panel('mic'), /<p id="diag-mic-main-heading" class="diagnostic-group" hidden><\/p>/);
     assert.doesNotMatch(html, /data-diagnostics-tab="duet"/);
     assert.match(system, /renderDuet\(facts\)/);
+  });
+});
+
+describe('second Mic test tone', () => {
+  it('shows the measured Mic path, and why it was not measured', () => {
+    const measured = byKey(describeDuetTiming(duetFacts((f) => {
+      f.statusz.audio.duetProbe = { state: 'measured', micLatencyMs: 182, correlation: 0.8, failureReason: null };
+      f.statusz.audio.duetYoutube.lagSource = 'probe';
+    }))!.advanced);
+    assert.equal(measured.duetProbe.value, 'Mic path 182 ms');
+    const failed = byKey(describeDuetTiming(duetFacts((f) => {
+      f.statusz.audio.duetProbe = { state: 'failed', micLatencyMs: null, correlation: 0.1, failureReason: 'not heard (headphones?)' };
+    }))!.advanced);
+    assert.equal(failed.duetProbe.value, 'Not measured');
+    assert.equal(failed.duetProbe.note, 'not heard (headphones?)');
+    assert.equal(failed.duetProbe.tone, 'warn');
   });
 });

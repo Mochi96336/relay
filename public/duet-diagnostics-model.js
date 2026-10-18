@@ -32,6 +32,12 @@ function row(key, label, value, note = '', tone = 'neutral') {
   return { key, label, value, note, tone };
 }
 
+/** An offset, signed as the main Mic's and the Realign value are. */
+function signedMs(ms) {
+  const rounded = Math.round(ms) || 0;
+  return `${rounded > 0 ? '+' : ''}${rounded} ms`;
+}
+
 function signedDb(db) {
   const rounded = Math.round(db * 10) / 10 || 0;
   return `${rounded > 0 ? '+' : ''}${rounded} dB`;
@@ -173,7 +179,7 @@ export function describeDuetTiming({ product, source, statusz } = {}, t = englis
     ? copyOr(t, `diag.timing.method.${source.activeCalibrationKind ?? source.calibrationKind}.value`, t('diag.timing.method.measured'))
     : t('diag.timing.method.estimate');
   rows.push(row('duetMainOffset', t('diag.duet.timing.main', { name: mainName(product, t) }),
-    applied === null ? t('diag.unknown') : `${Math.round(applied)} ms`, applied === null ? '' : kind));
+    applied === null ? t('diag.unknown') : signedMs(applied), applied === null ? '' : kind));
 
   const lag = finite(secondary?.lagMs);
   const target = finite(secondary?.targetLagMs);
@@ -184,13 +190,14 @@ export function describeDuetTiming({ product, source, statusz } = {}, t = englis
   } else {
     const shown = lag ?? target;
     const notes = [lagSource === 'content' ? t('diag.duet.timing.content')
+      : lagSource === 'probe' ? t('diag.duet.timing.probe')
       : lagSource === 'youtube-time' ? t('diag.duet.timing.youtube')
         : lagSource === 'no-song' ? t('diag.duet.timing.noSong') : t('diag.duet.timing.held')];
     if (lag !== null && target !== null && Math.abs(target - lag) >= SETTLING_MS) {
-      notes.push(t('diag.duet.timing.settling', { ms: Math.round(target) }));
+      notes.push(t('diag.duet.timing.settling', { value: signedMs(target) }));
     }
-    rows.push(row('duetSecondOffset', label, `${Math.round(shown)} ms`, notes.join(t('diag.sentenceGap')),
-      lagSource === 'content' ? 'ok' : 'neutral'));
+    rows.push(row('duetSecondOffset', label, signedMs(shown), notes.join(t('diag.sentenceGap')),
+      lagSource === 'content' || lagSource === 'probe' ? 'ok' : 'neutral'));
   }
 
   return { title: t('diag.duet.timing.title'), rows, advanced: describeDuetTimingAdvanced(audio, t) };
@@ -198,6 +205,16 @@ export function describeDuetTiming({ product, source, statusz } = {}, t = englis
 
 function describeDuetTimingAdvanced(audio, t) {
   const rows = [];
+  const probe = audio.duetProbe;
+  if (probe && probe.state !== 'idle' && audio.duetSecondary) {
+    const latency = finite(probe.micLatencyMs);
+    const value = probe.state === 'measured' && latency !== null
+      ? t('diag.duet.probe.measured', { ms: latency })
+      : probe.state === 'failed' ? t('diag.duet.probe.failed') : t('diag.duet.probe.measuring');
+    rows.push(row('duetProbe', t('diag.duet.probe'), value,
+      probe.state === 'failed' && probe.failureReason ? probe.failureReason : t('diag.duet.probe.note'),
+      probe.state === 'failed' ? 'warn' : 'neutral'));
+  }
   const content = audio.duetContent;
   // Each singer's own Content lag in this song; B is placed by their difference.
   const measured = (lagMs) => (finite(lagMs) === null ? 'calibration-required' : 'ready');

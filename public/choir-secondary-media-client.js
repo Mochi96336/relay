@@ -2,6 +2,7 @@ import { sendParticipantAuthentication } from './participant-auth.js';
 import { wsUrl } from './ws-url.js';
 import { ChoirSecondaryCapture } from './choir-secondary-capture.js';
 import { MIC_GAIN_KEY, storedNumber } from './device-preferences.js';
+import { CalibrationProbePlayback } from './calibration-probe-playback.js';
 
 /**
  * The second singer's publisher. B's own click on + Second Mic prepares a
@@ -31,6 +32,29 @@ const capture = new ChoirSecondaryCapture((reason) => {
   notify('capture-failed', reason);
 });
 
+// B's test tone: the main Mic's three notes, on B's own capture clock. The
+// replies go back through the socket B joined from, under B's own names so
+// they can never be taken for the main Mic's.
+const REPLY_TYPES = {
+  'calibration-probe-played': 'choir-probe-played',
+  'calibration-probe-failed': 'choir-probe-failed',
+};
+const probePlayback = new CalibrationProbePlayback({
+  getCapture: () => ({
+    context: capture.context, sessionEpoch: capture.epoch, generation: capture.generation ?? 0,
+  }),
+  isCurrentCapture: (epoch, generation) => capture.epoch === epoch
+    && capture.generation !== null && (capture.generation >>> 0) === generation,
+  isControlOpen: () => enabled,
+  sendControl: (message) => {
+    const type = REPLY_TYPES[message.type];
+    if (!type) return { sent: false, reason: 'unknown' };
+    window.dispatchEvent(new CustomEvent('relay-choir-consent-command', { detail: { ...message, type } }));
+    return { sent: true };
+  },
+  onDisconnected: () => {},
+});
+
 function notify(state, reason = null) {
   window.dispatchEvent(new CustomEvent('relay-choir-media-connection', {
     detail: { state, reason },
@@ -49,6 +73,7 @@ function disconnect() {
 /** Drops the media socket only; capture keeps running for the next room. */
 function closeMedia() {
   ++attempt;
+  probePlayback.retire();
   awaitingClaim = false;
   if (claimTimer !== null) clearTimeout(claimTimer);
   claimTimer = null;
@@ -121,6 +146,10 @@ window.addEventListener('relay-choir-start-secondary-capture', async () => {
 
 window.addEventListener('relay-choir-media-message', (event) => {
   if (!enabled) return;
+  if (event.detail?.type === 'choir-probe') {
+    void probePlayback.play(event.detail.requestId, Number(event.detail.leadMs) || 300);
+    return;
+  }
   if (event.detail?.type === 'choir-room-ready') {
     const epoch = event.detail.roomEpoch;
     if (!Number.isSafeInteger(epoch) || epoch < 1

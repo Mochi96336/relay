@@ -360,8 +360,9 @@ test('double opt-in A/B room issues real one-use v2 B Media Epoch but no N=1 aud
     // Worker jobs complete. Stopping at 7.5s made B depend on CPU speed: A's
     // job could finish just as the remaining source window/authority expired.
     // The finite fixture still bounds the test if either job never completes.
+    const statusAudio = async () => (await (await fetch(relay.httpUrl('/statusz'))).json()).audio;
     for (let i = 0; i < mic.byteLength / frameBytes; i++) {
-      if (relay.stderr().includes('"state":"duet-ready"')) break;
+      if (i % 50 === 0 && (await statusAudio())?.duetYoutube?.lagSource === 'content') break;
       const start = i * frameBytes;
       const end = start + frameBytes;
       publisher.sendAudioPacket(mic.subarray(start, end));
@@ -377,13 +378,13 @@ test('double opt-in A/B room issues real one-use v2 B Media Epoch but no N=1 aud
       }
       await sleep(20);
     }
-    const proofDeadline = Date.now() + 4_500;
-    while (!relay.stderr().includes('"state":"duet-ready"')
-      && Date.now() < proofDeadline) await sleep(30);
-    assert.match(relay.stderr(), /\[choir-proof-ci\].*"state":"duet-ready"/,
-      'both singers must independently complete the real server-owned '
-      + 'A/B/Robot Content Worker pipeline from WebSocket PCM; '
-      + relay.stderr().slice(-2_500));
+    const proofDeadline = Date.now() + 8_000;
+    while ((await statusAudio())?.duetYoutube?.lagSource !== 'content'
+      && Date.now() < proofDeadline) await sleep(100);
+    const audio = await statusAudio();
+    assert.equal(audio?.duetYoutube?.lagSource, 'content',
+      'both singers must independently complete the server-owned Content '
+      + 'Worker measurement from WebSocket PCM; ' + JSON.stringify(audio?.duetContent));
     assert.equal(bMedia.messages.some(m => m.type === 'registered'),
       false, 'B must remain outside the N=1 publisher path after calibration');
     // B now sings in the room output, the mix Listen and Take carry, at A's
@@ -395,7 +396,7 @@ test('double opt-in A/B room issues real one-use v2 B Media Epoch but no N=1 aud
       duet = await duetSecondary();
       if (duet?.audible) break;
     }
-    assert.equal(duet?.audible, true, `B joins the room mix after duet-ready: ${JSON.stringify(duet)}`);
+    assert.equal(duet?.audible, true, `B is in the room mix once measured: ${JSON.stringify(duet)}`);
     assert.ok(Number.isFinite(duet.lagMs), 'B has a lag in room-output coordinates');
     assert.ok(duet.bufferedSamples > 0, "B's PCM reached the room output");
     // B's original consent can still revoke audio admission immediately.

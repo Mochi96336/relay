@@ -135,7 +135,7 @@ function describeDuetMicAdvanced(audio, t) {
       .map(([reason, count]) => `${reason} ×${count}`);
     const accepted = finite(ingress.accepted) ?? 0;
     rows.push(row('duetPackets', t('diag.duet.packets'),
-      t('diag.duet.packets.value', { accepted, rejected: rejected.length }),
+      t('diag.duet.packets.value', { accepted }),
       rejected.length > 0
         ? t('diag.duet.packets.rejectedNote', { reasons: rejected.join(t('diag.listSeparator')), last: ingress.lastRejected ?? '—' })
         : t('diag.duet.packets.cleanNote'),
@@ -143,14 +143,9 @@ function describeDuetMicAdvanced(audio, t) {
   }
   const secondary = audio.duetSecondary;
   if (secondary) {
-    const buffered = samplesMs(secondary.bufferedSamples, secondary.sampleRate);
+    const headroom = finite(secondary.headroomMs);
     rows.push(row('duetBuffered', t('diag.duet.buffered'),
-      buffered === null ? t('diag.unknown') : `${buffered} ms`, t('diag.duet.buffered.note')));
-  }
-  const room = audio.duetRoom;
-  if (room?.state) {
-    rows.push(row('duetRoom', t('diag.duet.room'),
-      copyOr(t, `diag.duet.room.${room.state}`, String(room.state)), copyOr(t, `diag.duet.room.${room.state}Note`)));
+      headroom === null ? t('diag.unknown') : `${headroom} ms`, t('diag.duet.buffered.note')));
   }
   return rows;
 }

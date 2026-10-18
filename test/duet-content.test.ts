@@ -91,3 +91,21 @@ test('low confidence and gappy windows are rejected with a backoff', async () =>
   assert.equal(gappy.status().lastFailureReason, 'window-gaps');
   assert.equal(gappy.stats.submitted, 0);
 });
+
+test('a pause or seek keeps placing B by the last difference; a capture restart does not', async () => {
+  // Singers alternate, A first: A measures 30 ms, B 90 ms.
+  const answers = [30, 90];
+  const content = new DuetContent({
+    sampleRate: RATE, minConfidence: 0.1,
+    analyze: async () => ({ micLagMs: answers.shift()!, confidence: 0.9 }),
+  });
+  feed(content, room(0, 0));
+  await settle(content);
+  assert.equal(content.secondaryOffsetMs, 60);
+
+  content.reset('song');
+  assert.equal(content.secondaryOffsetMs, 60, 'held until re-measured');
+  assert.equal(content.status().heldOffsetMs, 60);
+  content.reset('b-capture-restarted', { hard: true });
+  assert.equal(content.secondaryOffsetMs, null);
+});

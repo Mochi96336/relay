@@ -15,8 +15,11 @@ import { TimingWindowCollector, type TimingWindow } from './timing-window-collec
  * offset is, because both lags are measured against the same backing; so
  * the backing is observed at its raw room position, with no song mapping.
  *
- * A measurement belongs to one epoch: a song, a seek, or a capture restart on
- * either side retires it, so each song is measured afresh.
+ * A measurement belongs to one epoch. A capture restart of either singer or a
+ * new song invalidates the difference (`hard`). A pause, resume or seek only
+ * asks for a fresh measurement: the singers' devices did not change, so the
+ * last difference keeps placing B meanwhile (`soft`), rather than handing B
+ * back to a cruder estimate and jumping it twice.
  */
 
 export const DUET_CONTENT_WINDOW_SECONDS = 6;
@@ -33,6 +36,8 @@ type Singer = 'primary' | 'secondary';
 export class DuetContent {
   private readonly collectors: Record<Singer, TimingWindowCollector>;
   private readonly lags: Record<Singer, number | null> = { primary: null, secondary: null };
+  /** The last measured difference, kept across a soft reset until re-measured. */
+  private heldOffsetMs: number | null = null;
   private readonly maxGapSamples: number;
   private epoch = 0;
   private inFlight = false;
@@ -69,8 +74,14 @@ export class DuetContent {
     this.collectors.secondary.observeBacking(samples, start);
   }
 
-  /** A new song, a seek, or a capture restart: what was measured no longer holds. */
-  reset(reason: string) {
+  /**
+   * Starts a new measurement epoch. `hard`: the difference no longer holds
+   * (a capture restart, a new song). Otherwise the last difference is held
+   * until the new epoch measures both singers.
+   */
+  reset(reason: string, { hard = false }: { hard?: boolean } = {}) {
+    const offset = this.secondaryOffsetMs;
+    this.heldOffsetMs = hard ? null : offset;
     this.epoch += 1;
     this.collectors.primary.reset();
     this.collectors.secondary.reset();
@@ -81,10 +92,10 @@ export class DuetContent {
     this.lastResetReason = reason;
   }
 
-  /** B's lag relative to A in this epoch, once both are measured. */
+  /** B's lag relative to A: this epoch's, once both are measured, else the one held. */
   get secondaryOffsetMs() {
     const { primary, secondary } = this.lags;
-    return primary === null || secondary === null ? null : secondary - primary;
+    return primary === null || secondary === null ? this.heldOffsetMs : secondary - primary;
   }
 
   status() {
@@ -92,6 +103,7 @@ export class DuetContent {
       epoch: this.epoch,
       primaryLagMs: this.lags.primary,
       secondaryLagMs: this.lags.secondary,
+      heldOffsetMs: this.heldOffsetMs,
       inFlight: this.inFlight,
       ...this.stats,
       lastFailureReason: this.lastFailureReason,

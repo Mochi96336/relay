@@ -562,7 +562,10 @@ export class AudioSession {
       recentlyHeard: secondary.heardAtFrame !== null
         && (this.frameIndex - secondary.heardAtFrame) * this.frameSamples * 1000
           <= SECONDARY_HEARD_WINDOW_MS * this.sampleRate,
+      /** Everything B has sent since this track began (not a backlog). */
       bufferedSamples: secondary.track.timeline.totalSamples,
+      /** B's audio that has arrived past this frame's read: its real buffer. */
+      headroomMs: Math.round(secondary.track.micHeadroomMs),
       /** The rate every *Samples field above counts in. */
       sampleRate: this.sampleRate,
     };

@@ -417,6 +417,7 @@ const duetContent = choirMediaEnabled
   }) : null;
 /** The song epoch duetContent is measuring; null while there is nothing to measure. */
 let duetContentKey: string | null = null;
+let duetContentVideoId: string | null = null;
 const choirSecondaryIngress = choirRestartCoordinator
   ? new ChoirSecondaryPcmIngressExperiment(
     choirRestartCoordinator,
@@ -452,11 +453,11 @@ if (choirSecondaryIngress && choirRestartCoordinator) {
     if (!session.secondaryMic) {
       session.attachSecondaryMic();
       if (duetSecondaryGainDb !== null) session.setSecondaryMicGainDb(duetSecondaryGainDb);
-      duetContent?.reset('b-attached');
+      duetContent?.reset('b-attached', { hard: true });
     }
     const ingested = session.ingestSecondaryMic(frame, sampleRate, nowMs);
     if (!ingested) return;
-    if (ingested.captureRestarted) duetContent?.reset('b-capture-restarted');
+    if (ingested.captureRestarted) duetContent?.reset('b-capture-restarted', { hard: true });
     duetContent?.observeSecondary(ingested.samples, ingested.start);
   };
 }
@@ -1071,7 +1072,6 @@ function clearRobotContentTransition() {
  * write at the call site.
  */
 function revokeRobotContentMapping({ reason }: { reason: string }) {
-  duetContent?.reset('robot-mapping-revoked');
   robotPlayerOffset.reset();
   robotContentTimeline.reset();
   clearRobotContentTransition();
@@ -2511,7 +2511,7 @@ function processPublisherFrame(frame: PcmFrame) {
     resetMicAudibility();
     micLevel.reset();
     micCaptureRestarted();
-    duetContent?.reset('a-capture-restarted');
+    duetContent?.reset('a-capture-restarted', { hard: true });
   }
   if (robotContentFallbackPrimingActive()) {
     calibration.primeMic(samples, start);
@@ -2620,8 +2620,11 @@ let lastDuetAudible = false;
 let lastDuetRecentlyHeard = false;
 let lastDuetLagSource: string | null = null;
 /**
- * Measures B while a song plays and B is in the room output. Each song, seek,
- * pause or resume (a new room song revision) is measured afresh.
+ * Measures B while a song plays and B is in the room output. Each song, pause
+ * and resume, or rate change is measured afresh; a seek retires the
+ * measurement through the Robot content transition it causes. Not keyed on
+ * the room song revision: its drift corrections would retire every
+ * measurement before it finished.
  */
 function tickDuetContent(nowMs: number) {
   if (!duetContent) return;
@@ -2629,10 +2632,13 @@ function tickDuetContent(nowMs: number) {
   // The room song itself, not whether the backing is playable yet: windows
   // simply do not fill until backing arrives.
   const playing = room.state === 1 && typeof room.videoId === 'string';
-  const key = session.secondaryMic && playing ? `${room.videoId}|${room.revision}` : null;
+  const key = session.secondaryMic && playing ? `${room.videoId}|${room.playbackRate}` : null;
   if (key !== duetContentKey) {
+    // Another song is a new reference; a pause or resume of the same one is not.
+    const newSong = key !== null && duetContentVideoId !== room.videoId;
     duetContentKey = key;
-    duetContent.reset(key === null ? 'no-song' : 'song');
+    if (key !== null) duetContentVideoId = String(room.videoId);
+    duetContent.reset(key === null ? 'no-song' : newSong ? 'new-song' : 'song', { hard: newSong });
   }
   if (key !== null) duetContent.tick(nowMs);
 }

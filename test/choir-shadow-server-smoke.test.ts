@@ -361,9 +361,12 @@ test('double opt-in A/B room issues real one-use v2 B Media Epoch but no N=1 aud
     // job could finish just as the remaining source window/authority expired.
     // The finite fixture still bounds the test if either job never completes.
     const statusAudio = async () => (await (await fetch(relay.httpUrl('/statusz'))).json()).audio;
-    for (let i = 0; i < mic.byteLength / frameBytes; i++) {
+    // Twice through the clip: a window rejected on a slow host gets a retry
+    // before the song would run out.
+    const clipFrames = mic.byteLength / frameBytes;
+    for (let i = 0; i < 2 * clipFrames; i++) {
       if (i % 50 === 0 && (await statusAudio())?.duetYoutube?.lagSource === 'content') break;
-      const start = i * frameBytes;
+      const start = (i % clipFrames) * frameBytes;
       const end = start + frameBytes;
       publisher.sendAudioPacket(mic.subarray(start, end));
       robotBacking.sendPcm(backing.subarray(start, end));

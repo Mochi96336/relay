@@ -441,9 +441,10 @@ window.relayIdentityReady = (async () => {
 
     next.addEventListener('message', (event) => {
       if (socket !== next || typeof event.data !== 'string') return;
-      try {
-        handleMessage(JSON.parse(event.data));
-      } catch {}
+      // Only a malformed message is dropped; a fault in handling one surfaces.
+      let message;
+      try { message = JSON.parse(event.data); } catch { return; }
+      handleMessage(message);
     });
     next.addEventListener('close', () => {
       if (socket !== next) return;

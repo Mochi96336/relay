@@ -16,7 +16,6 @@ import { ChoirSecondaryPcmIngressExperiment } from './choir-secondary-pcm-ingres
 import { ChoirSecondaryConsentExperiment } from './choir-secondary-consent-experiment.js';
 import { ChoirSecondaryMediaTicketExperiment } from './choir-secondary-media-ticket-experiment.js';
 import { ChoirTrustedSourceMirrorExperiment } from './choir-trusted-source-mirror-experiment.js';
-import { ChoirLiveContentPipelineExperiment } from './choir-live-content-pipeline-experiment.js';
 import { authorizeChoirRestartWithLiveRoles } from './choir-server-role-policy-experiment.js';
 import { loadAudioTransportConfig } from './audio-transport-config.js';
 import { parseAudioUplinkHealth, type AudioUplinkHealth } from './audio-uplink-health.js';
@@ -74,6 +73,7 @@ import { MicTransportGraceRuntime } from './mic-transport-grace-runtime.js';
 import { watchEventLoopStalls } from './event-loop-stall.js';
 import { TimingRuntime } from './timing-runtime.js';
 import { authorizeMicOwnerCommand, type MicOwnerCommand } from './command-authority.js';
+import { createDuetContentWorkerAnalyzer, DuetContent } from './duet-content.js';
 import { decodePcmFrame, type PcmFrame } from './pcm-frame.js';
 import type { ProbeTarget } from './probe-lifecycle.js';
 import { buildReadiness } from './readiness.js';
@@ -356,7 +356,6 @@ const choirShadow = relayConfig.choirShadow
   ) : null;
 let choirConsent: ChoirSecondaryConsentExperiment | null = null;
 let choirSourceMirror: ChoirTrustedSourceMirrorExperiment | null = null;
-let choirContentPipeline: ChoirLiveContentPipelineExperiment | null = null;
 const choirRestartCoordinator = choirShadow
   ? new ChoirRoomRestartCoordinatorExperiment(
     choirShadow, youtubeTimeline, sourceRuntime,
@@ -398,7 +397,6 @@ const choirRestartCoordinator = choirShadow
         ageMs: song.ageMs ?? null, robotGeneration: sourceRuntime.generation,
       });
       choirSourceMirror?.revokeRoom(retiredRoomEpoch);
-      choirContentPipeline?.cancelRoom(retiredRoomEpoch);
     },
   ) : null;
 // B's secondary byte path is only armed after explicit double-flag
@@ -406,6 +404,19 @@ const choirRestartCoordinator = choirShadow
 // those bytes into the production N=1 Mic, backing, monitor or recording.
 /** B's own remembered Mic gain, from its media registration; null keeps the default. */
 let duetSecondaryGainDb: number | null = null;
+/**
+ * Places B against A by Content on the room output's own timeline: both
+ * singers' PCM as the mixer holds it, against the backing the main Content
+ * calibration sees.
+ */
+const duetContent = choirMediaEnabled
+  ? new DuetContent({
+    sampleRate: MIX_SAMPLE_RATE,
+    minConfidence: relayConfig.calibrationProvisionalConfidence,
+    analyze: createDuetContentWorkerAnalyzer(MIX_SAMPLE_RATE),
+  }) : null;
+/** The song epoch duetContent is measuring; null while there is nothing to measure. */
+let duetContentKey: string | null = null;
 const choirSecondaryIngress = choirRestartCoordinator
   ? new ChoirSecondaryPcmIngressExperiment(
     choirRestartCoordinator,
@@ -441,8 +452,12 @@ if (choirSecondaryIngress && choirRestartCoordinator) {
     if (!session.secondaryMic) {
       session.attachSecondaryMic();
       if (duetSecondaryGainDb !== null) session.setSecondaryMicGainDb(duetSecondaryGainDb);
+      duetContent?.reset('b-attached');
     }
-    session.ingestSecondaryMic(frame, sampleRate, nowMs);
+    const ingested = session.ingestSecondaryMic(frame, sampleRate, nowMs);
+    if (!ingested) return;
+    if (ingested.captureRestarted) duetContent?.reset('b-capture-restarted');
+    duetContent?.observeSecondary(ingested.samples, ingested.start);
   };
 }
 /**
@@ -535,9 +550,6 @@ choirSourceMirror = choirMediaEnabled && choirRestartCoordinator
       robotIsAuthoritative: backingRuntime.isRobot && sourceRuntime.connected(),
     }),
   ) : null;
-// A single bounded Worker receives isolated PCM windows. Still NO N=2 output.
-choirContentPipeline = choirMediaEnabled && choirRestartCoordinator
-  ? new ChoirLiveContentPipelineExperiment(choirRestartCoordinator) : null;
 function tickChoirShadow(nowMs: number) {
   // Authority observation never grants a singer or outputs Choir PCM.
   choirRestartCoordinator?.observe(nowMs);
@@ -631,6 +643,7 @@ function commitRobotContentTransition(plan: RobotContentTransitionCommitPlan, no
   if (!robotContentTimeline.noteBackingBoundary(plan.boundarySample, plan.context, nowMs)) return false;
 
   if (plan.discardWorkingEvidence) {
+    duetContent?.reset('robot-transition');
     calibration.restartWorkingEvidence(nowMs);
     if (contentCalibrationValidator.collecting) contentCalibrationValidator.cancel(nowMs);
   }
@@ -1058,6 +1071,7 @@ function clearRobotContentTransition() {
  * write at the call site.
  */
 function revokeRobotContentMapping({ reason }: { reason: string }) {
+  duetContent?.reset('robot-mapping-revoked');
   robotPlayerOffset.reset();
   robotContentTimeline.reset();
   clearRobotContentTransition();
@@ -1924,8 +1938,8 @@ function remoteStatusPayload() {
         duetIngress: choirSecondaryIngress
           ? { ...choirSecondaryIngress.counts, codec: choirSecondaryIngress.codec } : null,
         duetRoom: choirRestartCoordinator.preview(),
-        duetContent: choirContentPipeline
-          ? { ...choirContentPipeline.stats, lastFailureReason: choirContentPipeline.lastFailureReason }
+        duetContent: duetContent
+          ? duetContent.status()
           : null,
         duetYoutube: { lagSource: lastDuetLagSource, ...duetSampleSong.diagnostics(performance.now()) },
       } : {}),
@@ -2497,12 +2511,14 @@ function processPublisherFrame(frame: PcmFrame) {
     resetMicAudibility();
     micLevel.reset();
     micCaptureRestarted();
+    duetContent?.reset('a-capture-restarted');
   }
   if (robotContentFallbackPrimingActive()) {
     calibration.primeMic(samples, start);
   }
   calibration.observeMic(samples, start);
   contentCalibrationValidator.observeMic(samples, start);
+  if (session.secondaryMic) duetContent?.observePrimary(samples, start);
   robotContentTransitionRuntime.noteMicProgress();
 }
 
@@ -2603,6 +2619,24 @@ function duetSampleSongLagMs(nowMs: number): number | null {
 let lastDuetAudible = false;
 let lastDuetRecentlyHeard = false;
 let lastDuetLagSource: string | null = null;
+/**
+ * Measures B while a song plays and B is in the room output. Each song, seek,
+ * pause or resume (a new room song revision) is measured afresh.
+ */
+function tickDuetContent(nowMs: number) {
+  if (!duetContent) return;
+  const room = youtubeTimeline.roomStatusPayload(nowMs) as Record<string, unknown>;
+  // The room song itself, not whether the backing is playable yet: windows
+  // simply do not fill until backing arrives.
+  const playing = room.state === 1 && typeof room.videoId === 'string';
+  const key = session.secondaryMic && playing ? `${room.videoId}|${room.revision}` : null;
+  if (key !== duetContentKey) {
+    duetContentKey = key;
+    duetContent.reset(key === null ? 'no-song' : 'song');
+  }
+  if (key !== null) duetContent.tick(nowMs);
+}
+
 function syncDuetOutput() {
   const audible = session.secondaryMic?.audible === true;
   if (audible !== lastDuetAudible) {
@@ -2625,15 +2659,12 @@ function syncDuetOutput() {
     session.detachSecondaryMic();
     return;
   }
-  const { primaryId, secondaryId } = pair;
+  const { primaryId } = pair;
   const primaryOwnsMic = participants.micOwnerId === primaryId && micRuntime.mediaOwnerId === primaryId;
-  const view = choirRestartCoordinator.preview();
-  const inRoom = view.roomEpoch !== null && view.primaryId === primaryId && view.secondaryId === secondaryId;
-  const a = primaryOwnsMic && inRoom ? choirRestartCoordinator.singerAlignment(primaryId) : null;
-  const b = primaryOwnsMic && inRoom ? choirRestartCoordinator.singerAlignment(secondaryId) : null;
   // Content for both singers is the measurement; until then, B's YouTube
   // time against the Robot's places B at once. Each song is measured afresh.
-  const content = a && b ? session.requestedMicAdvanceMs + (b.advanceMs - a.advanceMs) : null;
+  const offset = primaryOwnsMic ? duetContent?.secondaryOffsetMs ?? null : null;
+  const content = offset === null ? null : session.requestedMicAdvanceMs + offset;
   const youtube = primaryOwnsMic && content === null ? duetSampleSongLagMs(nowMs) : null;
   const measured = content ?? youtube;
   // With no song there is nothing to place B against: B is read where A is,
@@ -3517,7 +3548,7 @@ let lastChoirProofTestState = '';
 const youtubeTimelineTimer = setInterval(() => {
   const nowMs = performance.now();
   tickChoirShadow(nowMs);
-  choirContentPipeline?.tick(nowMs);
+  tickDuetContent(nowMs);
   if (relayConfig.choirProofCiDiagnostics && choirRestartCoordinator) {
     const view = choirRestartCoordinator.preview();
     const identity = `${view.roomEpoch ?? 0}/${view.state}`;
@@ -4876,6 +4907,7 @@ const robotLifecycleProtocol = createRelayRobotLifecycleProtocol<RelaySocket>({
  * measuring the old capture is abandoned.
  */
 function backingCaptureRestarted() {
+  duetContent?.reset('backing-capture-restarted');
   choirSourceMirror?.sourceDiscontinuity(performance.now());
   clearRobotContentTransition();
   takeController.noteQualityEvent('backing-capture-restarted');
@@ -4931,6 +4963,10 @@ function audioUplinkReceived(socket: RelaySocket, data: Buffer) {
   }
 
   noteRobotTransitionBackingFrame(frame, samples, start, nowMs);
+  // B is placed by its lag *relative to A*, both against this same backing,
+  // so the backing's own song mapping cancels: the raw room position the
+  // mixer sums against is the right coordinate, ready before any mapping.
+  if (session.secondaryMic) duetContent?.observeBacking(samples, start);
   // Same *trusted* Robot native capture as production; no second decoder or
   // arbitrary client-supplied video/sample positions are introduced.
   if (backingRuntime.isRobot && nativeFrameMirroringSafe)

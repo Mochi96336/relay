@@ -28,7 +28,8 @@ function duetFacts(overrides: (facts: Facts) => void = () => {}): Facts {
         },
         duetIngress: { accepted: 500, rejected: {}, lastRejected: null, codec: 'opus' },
         duetRoom: { state: 'duet-ready', primaryId: 'a', secondaryId: 'b', primary: 'ready', secondary: 'ready' },
-        duetContent: { submitted: 4, applied: 2, rejected: 1, timedOut: 1, lastFailureReason: null },
+        duetContent: { submitted: 4, applied: 2, rejected: 1, timedOut: 1, lastFailureReason: null,
+          primaryLagMs: 41, secondaryLagMs: 160 },
         duetYoutube: { lagSource: 'content', mic: { ageMs: 400 }, backing: { ageMs: 900 }, calculation: null },
       },
     },
@@ -145,7 +146,7 @@ describe('second Mic diagnostics', () => {
 
   it('keeps per-singer Content readiness and anchor ages in the timing fold', () => {
     const advanced = byKey(describeDuetTiming(duetFacts((f) => {
-      f.statusz.audio.duetRoom.secondary = 'calibration-required';
+      f.statusz.audio.duetContent.secondaryLagMs = null;
       f.statusz.audio.duetContent.lastFailureReason = 'worker-timeout';
     }))!.advanced);
     assert.equal(advanced.duetReadiness.value, 'Main measured · Second measuring');

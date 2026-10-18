@@ -203,13 +203,17 @@ export function describeDuetTiming({ product, source, statusz } = {}, t = englis
 
 function describeDuetTimingAdvanced(audio, t) {
   const rows = [];
-  const room = audio.duetRoom;
-  if (room?.primaryId) {
+  const content = audio.duetContent;
+  // Each singer's own Content lag in this song; B is placed by their difference.
+  const measured = (lagMs) => (finite(lagMs) === null ? 'calibration-required' : 'ready');
+  if (content && audio.duetSecondary) {
     rows.push(row('duetReadiness', t('diag.duet.content.readiness'),
-      t('diag.duet.content.readiness.value', { main: readiness(t, room.primary), second: readiness(t, room.secondary) }),
+      t('diag.duet.content.readiness.value', {
+        main: readiness(t, measured(content.primaryLagMs)),
+        second: readiness(t, measured(content.secondaryLagMs)),
+      }),
       t('diag.duet.content.readiness.note')));
   }
-  const content = audio.duetContent;
   if (content) {
     const n = (value) => finite(value) ?? 0;
     rows.push(row('duetContent', t('diag.duet.content'),

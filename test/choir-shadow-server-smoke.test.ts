@@ -510,8 +510,10 @@ test('B joins by its own press while the song is paused; the room starts itself 
       const { mic, backing } = laggedMultibandMusicPair(12, 48_000, 120, { singerGain: .18 });
       const frameSamples = 960;
       const frameBytes = frameSamples * 2;
+      const lagSource = async () =>
+        (await (await fetch(relay.httpUrl('/statusz'))).json()).audio?.duetYoutube?.lagSource ?? null;
       for (let i = 0; i < mic.byteLength / frameBytes; i++) {
-        if (relay.stderr().includes('"state":"duet-ready"')) break;
+        if (i % 50 === 0 && await lagSource() === 'content') break;
         const start = i * frameBytes;
         publisher.sendAudioPacket(mic.subarray(start, start + frameBytes));
         robotBacking.sendPcm(backing.subarray(start, start + frameBytes));
@@ -521,9 +523,14 @@ test('B joins by its own press while the song is paused; the room starts itself 
         }));
         await sleep(20);
       }
-      const deadline = Date.now() + 4_500;
-      while (!relay.stderr().includes('"state":"duet-ready"') && Date.now() < deadline) await sleep(30);
-      assert.match(relay.stderr(), /"state":"duet-ready"/, relay.stderr().slice(-2_000));
+      // Both singers measured by Content on the room output's timeline place B.
+      const deadline = Date.now() + 8_000;
+      while (await lagSource() !== 'content' && Date.now() < deadline) await sleep(100);
+      const content = (await (await fetch(relay.httpUrl('/statusz'))).json()).audio?.duetContent;
+      assert.equal(await lagSource(), 'content', JSON.stringify(content));
+      // A and B sent the same voice at the same capture positions; each
+      // timeline is anchored on its own first arrival, a frame or so apart.
+      assert.ok(Math.abs(content.secondaryLagMs - content.primaryLagMs) < 60, JSON.stringify(content));
 
       let duet: any = null;
       for (const until = Date.now() + 2_000; Date.now() < until; await sleep(30)) {

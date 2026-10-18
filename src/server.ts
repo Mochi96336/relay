@@ -2502,7 +2502,6 @@ function reportMicRecovery(health: AudioUplinkHealth) {
   }
 }
 
-
 let lastMicDeviceReportKey: string | null = null;
 
 /**
@@ -3337,7 +3336,6 @@ const queryProtocol = createRelayQueryProtocol<RelaySocket>({
   timingCalibrationStatusPayload: () => timingCalibrationStatusPayload(),
 });
 
-
 /**
  * Starts a Take the command handler has already admitted, at the mix's
  * authoritative frame boundary.
@@ -3584,17 +3582,11 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     const nowMs = performance.now();
     const productStatus = productStatusPayload(nowMs);
     if (!productStatus.actions.canStartTake) {
-      const blockedReason = productStatus.actions.startTakeBlockedReason;
-      if (blockedReason === null) {
-        rejectTakeCommand(socket, 'start', 'product-state-invalid');
-        return;
-      }
-      rejectTakeCommand(socket, 'start', blockedReason);
+      rejectTakeCommand(socket, 'start',
+        productStatus.actions.startTakeBlockedReason ?? 'product-state-invalid');
       return;
     }
-
     startTakeAtFrame(socket, socket.participantId, commandWallClockMs, nowMs);
-    return;
   },
   stopTake: (socket, payload) => {
     if (!socket.participantId) {
@@ -3607,10 +3599,7 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
       return;
     }
 
-    const commandWallClockMs = Date.now();
-    const nowMs = performance.now();
-    stopTakeAtFrame(socket, socket.participantId, takeId, commandWallClockMs, nowMs);
-    return;
+    stopTakeAtFrame(socket, socket.participantId, takeId, Date.now(), performance.now());
   },
   releaseMic: (socket) => {
     if (!socket.participantId) return;
@@ -4750,12 +4739,6 @@ wss.on('connection', (rawSocket, request) => {
     if (authenticationProtocol.dispatch(socket, payload)) return;
     if (registrationProtocol.dispatch(socket, payload)) return;
     if (robotLifecycleProtocol.dispatch(socket, payload)) return;
-
-
-
-
-
-
   });
 
   socket.on('close', () => {

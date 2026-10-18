@@ -1,49 +1,7 @@
 import { localFileMix, localFileSurface, lostMicToAnother } from './local-file-mix.js';
 
-window.relayI18n?.registerMessages({
-  en: {
-    'localFile.open': 'Open local audio file',
-    'localFile.label': 'Local file',
-    'localFile.from': "Local file · {name}'s phone",
-    'localFile.untitled': 'Local song',
-    'localFile.close': 'Close',
-    'localFile.play': 'Play',
-    'localFile.pause': 'Pause',
-    'localFile.position': 'Position',
-    'localFile.mix': 'Mix',
-    'localFile.music': 'Song',
-    'localFile.offset': 'Voice timing',
-    'localFile.offsetEarlier': '{ms} ms earlier',
-    'localFile.offsetLater': '{ms} ms later',
-    'localFile.latency': 'Device delay of {ms} ms is already compensated.',
-    'localFile.needsMic': 'Take Mic to play.',
-    'localFile.roomSongPaused': 'Paused because the room song started.',
-    'localFile.playFailed': 'This file cannot be played.',
-    'localFile.blockedSong': 'Pause the YouTube song first.',
-    'localFile.blockedDuet': 'Not available while a second Mic is in.',
-  },
-  'zh-Hant': {
-    'localFile.open': '打開本機音檔',
-    'localFile.label': '本機音檔',
-    'localFile.from': '本機音檔 · {name} 的手機',
-    'localFile.untitled': '本機歌曲',
-    'localFile.close': '關閉',
-    'localFile.play': '播放',
-    'localFile.pause': '暫停',
-    'localFile.position': '播放位置',
-    'localFile.mix': '混音',
-    'localFile.music': '伴奏',
-    'localFile.offset': '人聲對齊',
-    'localFile.offsetEarlier': '提前 {ms} ms',
-    'localFile.offsetLater': '延後 {ms} ms',
-    'localFile.latency': '已自動補償裝置延遲 {ms} ms。',
-    'localFile.needsMic': '拿 Mic 後才能播放。',
-    'localFile.roomSongPaused': '房間的歌開始播放，已暫停。',
-    'localFile.playFailed': '這個檔案無法播放。',
-    'localFile.blockedSong': '先暫停 YouTube 歌曲。',
-    'localFile.blockedDuet': '副 Mic 在場時不能用。',
-  },
-});
+// Copy lives in i18n.js: the menu item is static markup that i18n.js
+// translates before this module loads.
 
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const $ = selector => document.querySelector(selector);

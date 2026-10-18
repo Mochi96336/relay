@@ -28,6 +28,8 @@ function initialize() {
   };
   let commandAuthority = window.relayCommandAuthority ?? authorityState();
   let commandError = null;
+  // B pressed Realign and the room has not yet said the test tone started.
+  let secondMicRequestPending = false;
   let preflightCommandPending = false;
 
   function setText(element, value) {
@@ -51,6 +53,27 @@ function initialize() {
       ? formatTimingValueMs(timingAuthority.valueMs)
       : null;
     setText(activeTimingValue, formatted ?? '—');
+  }
+
+  /** This page is the joined second Mic: Realign is B's own test tone. */
+  function selfIsSecondMic(status = latestProductStatus) {
+    const duet = status?.room?.duet;
+    return Boolean(duet?.secondaryId && duet.secondaryId === window.relayParticipantId
+      && !selfOwnsServerMic(status));
+  }
+
+  /**
+   * The second Mic's Realign: B's value is where B sits in the room output, in
+   * the same coordinates as the main Mic's, and pressing it replays only B's
+   * own three notes. The main Mic's alignment is not B's to restart.
+   */
+  function renderSecondMic() {
+    const duet = latestProductStatus.room.duet;
+    setText(activeTimingValue, formatTimingValueMs(duet.lagMs) ?? '—');
+    setHidden(false);
+    const busy = duet.realigning === true || secondMicRequestPending;
+    setDisabled(busy || productAuthority?.authorityFresh !== true);
+    setText(calibrateStatus, busy ? t('timing.aligning') : '');
   }
 
   function selfOwnsServerMic(status = latestProductStatus) {
@@ -117,6 +140,11 @@ function initialize() {
 
     setText(calibrateLabel, t('timing.realign'));
 
+    if (selfIsSecondMic()) {
+      renderSecondMic();
+      return;
+    }
+
     const authority = calibrationAuthority();
     const reason = latestAction?.startCalibrationBlockedReason ?? null;
     // Whether the action may run is the server's question and it answers it
@@ -173,6 +201,8 @@ function initialize() {
       lastKnownSnapshot: latestProductStatus,
     });
     commandError = null;
+    // The room has answered B's press, one way or the other.
+    if (latestProductStatus?.room?.duet?.realigning !== undefined) secondMicRequestPending = false;
     if (latestAction?.startCalibrationBlockedReason === 'calibration-active') {
       preflightCommandPending = false;
     }
@@ -207,6 +237,15 @@ function initialize() {
   window.addEventListener('relay-locale-changed', render);
 
   calibrateButton?.addEventListener?.('click', () => {
+    if (selfIsSecondMic()) {
+      if (calibrateButton.disabled) return;
+      secondMicRequestPending = true;
+      window.dispatchEvent(new CustomEvent('relay-choir-consent-command', {
+        detail: { type: 'choir-probe-request' },
+      }));
+      render();
+      return;
+    }
     if (!calibrationAuthority().actionable) return;
 
     // app.js sends the command over the publisher transport, but its check

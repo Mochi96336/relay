@@ -51,6 +51,10 @@ export type ProductDuet = {
   secondaryId: string;
   secondaryNickname: string | null;
   state: 'joined' | 'aligning' | 'singing';
+  /** Where B is placed in the room output (ms), for B's own Realign; null until placed. */
+  lagMs?: number | null;
+  /** B's test tone is running (B asked, or B just joined). */
+  realigning?: boolean;
 };
 
 /**

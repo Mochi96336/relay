@@ -25,6 +25,7 @@ const copy: Record<string, string> = {
 function harness(options: { selfMic?: 'live' | 'off' } = {}) {
   const windowListeners = new Map<string, Listener[]>();
   let commandCount = 0;
+  const dispatched: Array<{ type: string; detail?: any }> = [];
   let preflightCommandCount = 0;
 
   class Element {
@@ -93,8 +94,9 @@ function harness(options: { selfMic?: 'live' | 'off' } = {}) {
       windowListeners.set(type, current);
     },
     // app.js sends the command when the presenter asks for it.
-    dispatchEvent(event: { type: string }) {
+    dispatchEvent(event: { type: string; detail?: any }) {
       if (event.type === 'relay-start-timing-calibration') commandCount += 1;
+      dispatched.push(event);
       return true;
     },
   };
@@ -103,7 +105,10 @@ function harness(options: { selfMic?: 'live' | 'off' } = {}) {
     type: string;
     constructor(type: string) { this.type = type; }
   }
-  class CustomEvent extends Event {}
+  class CustomEvent extends Event {
+    detail: any;
+    constructor(type: string, init?: { detail?: any }) { super(type); this.detail = init?.detail; }
+  }
 
   runInNewContext(source, {
     window,
@@ -169,6 +174,7 @@ function harness(options: { selfMic?: 'live' | 'off' } = {}) {
     emitProductAuthority,
     emitProductStatus,
     commandCount: () => commandCount,
+    dispatched,
     preflightCommandCount: () => preflightCommandCount,
   };
 }
@@ -430,4 +436,41 @@ test('the audible boot probe still shows the room as aligning', () => {
 
   assert.equal(ui.button.disabled, true);
   assert.equal(ui.status.textContent, '對齊中…');
+});
+
+test("the second Mic's Realign shows B's own value and replays only B's test tone", () => {
+  const ui = harness({ selfMic: 'off' });
+  const status = (duet: Record<string, unknown>) => ui.emit('relay-product-status', {
+    type: 'product-status',
+    actions: { canStartCalibration: true, startCalibrationBlockedReason: null, startCalibrationMode: 'content' },
+    timing: { state: 'idle' },
+    room: {
+      mic: { ownerId: 'other', state: 'live' },
+      duet: { secondaryId: 'self', secondaryNickname: 'B', state: 'singing', ...duet },
+      song: { videoId: 'abcdefghijk' },
+    },
+  });
+  // The main Mic's own value must not be shown as B's.
+  ui.emit('relay-timing-authority', { authorityFresh: true, valueMs: 240 });
+  status({ lagMs: 85, realigning: false });
+  assert.equal(ui.button.hidden, false);
+  assert.equal(ui.button.disabled, false);
+  assert.equal(ui.value.textContent, '+85 ms');
+  assert.equal(ui.status.textContent, '');
+
+  ui.button.click();
+  assert.equal(ui.commandCount(), 0, "never the main Mic's calibration");
+  assert.equal(ui.dispatched.at(-1)?.type, 'relay-choir-consent-command');
+  assert.equal(ui.dispatched.at(-1)?.detail?.type, 'choir-probe-request');
+  assert.equal(ui.button.disabled, true, 'held until the room answers');
+
+  status({ lagMs: 85, realigning: true });
+  assert.equal(ui.button.disabled, true);
+  assert.equal(ui.status.textContent, '對齊中…');
+  status({ lagMs: 112, realigning: false });
+  assert.equal(ui.button.disabled, false);
+  assert.equal(ui.value.textContent, '+112 ms');
+
+  status({ lagMs: null, realigning: false });
+  assert.equal(ui.value.textContent, '—', 'not placed yet');
 });

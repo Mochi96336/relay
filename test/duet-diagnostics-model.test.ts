@@ -113,10 +113,10 @@ describe('second Mic diagnostics', () => {
     const block = describeDuetTiming(duetFacts())!;
     const rows = byKey(block.rows);
     assert.equal(rows.duetMainOffset.label, 'Main Mic · Ann');
-    assert.equal(rows.duetMainOffset.value, '150 ms');
+    assert.equal(rows.duetMainOffset.value, '+150 ms', 'signed, as the main Mic and Realign show it');
     assert.equal(rows.duetMainOffset.note, 'Song content');
     assert.equal(rows.duetSecondOffset.label, 'Second Mic · Bo');
-    assert.equal(rows.duetSecondOffset.value, '180 ms');
+    assert.equal(rows.duetSecondOffset.value, '+180 ms');
     assert.match(rows.duetSecondOffset.note, /^Song content/);
     assert.equal(rows.duetSecondOffset.tone, 'ok');
   });
@@ -128,7 +128,7 @@ describe('second Mic diagnostics', () => {
       f.statusz.audio.duetSecondary.targetLagMs = 190;
     }))!.rows);
     assert.match(rows.duetSecondOffset.note, /^YouTube time estimate/);
-    assert.match(rows.duetSecondOffset.note, /Moving toward 190 ms/);
+    assert.match(rows.duetSecondOffset.note, /Moving toward \+190 ms/);
     assert.equal(rows.duetSecondOffset.tone, 'neutral');
 
     const songless = byKey(describeDuetTiming(duetFacts((f) => {

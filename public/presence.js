@@ -245,12 +245,16 @@ window.relayIdentityReady = (async () => {
         'choir-secondary-song-anchor', 'choir-secondary-page', 'choir-secondary-gain',
         'choir-secondary-decline', 'choir-secondary-withdraw',
         'choir-room-begin', 'choir-secondary-media-claim-request',
-        'choir-probe-played', 'choir-probe-failed',
+        'choir-probe-played', 'choir-probe-failed', 'choir-probe-request',
       ].includes(payload.type)) return;
     if (['choir-room-begin', 'choir-secondary-media-claim-request', 'choir-secondary-join',
       'choir-secondary-song-anchor', 'choir-secondary-page', 'choir-secondary-gain',
-      'choir-probe-played', 'choir-probe-failed']
+      'choir-probe-played', 'choir-probe-failed', 'choir-probe-request']
       .includes(payload.type) && !choirMediaEnabled) return;
+    if (payload.type === 'choir-probe-request') {
+      send({ type: payload.type });
+      return;
+    }
     if (payload.type === 'choir-probe-played' || payload.type === 'choir-probe-failed') {
       send({
         type: payload.type, requestId: payload.requestId, generation: payload.generation,

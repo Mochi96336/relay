@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { Decoder } from '@evan/opus';
 import { createOpusEncoder } from '../public/mic-opus-worker.js';
 import { createMicOpusTrial } from '../public/mic-opus-trial.js';
 import { decodeAudioPacket } from '../src/audio-packet.js';
 import { createWebSocketAudioTransport } from '../src/audio-transport.js';
+import { OpusMicDecoder } from '../src/opus-mic-decoder.js';
 
 const wasm = readFileSync(new URL('../node_modules/@evan/opus/wasm/opus.wasm', import.meta.url));
 function frame(sequence: number, payload: Uint8Array, delay: number, generation = 82001) {
@@ -25,7 +25,8 @@ function transport(generation = 82001, allowOpus = true) {
 
 test('real browser WASM Opus survives reorder/duplicate and preserves delayed source coordinates', () => {
   const encoder = createOpusEncoder(wasm, 32000);
-  const decoder = new Decoder({ sample_rate: 48000, channels: 1 });
+  // The server's own decoder, fed in order: the reference for what reorder and duplicates must not change.
+  const decoder = new OpusMicDecoder();
   const receiver = transport();
   const wire: Buffer[] = [], expected: Buffer[] = [];
   for (let sequence = 0; sequence < 6; sequence++) {
@@ -33,7 +34,7 @@ test('real browser WASM Opus survives reorder/duplicate and preserves delayed so
     for (let i = 0; i < pcm.length; i++) pcm[i] = Math.round(5000 * Math.sin((sequence * 960 + i) * 2 * Math.PI * 440 / 48000));
     const encoded = encoder.encode(pcm.buffer);
     assert.ok(encoded.length <= 100, '32 kbps must materially reduce a 1920-byte PCM frame');
-    const decoded = Buffer.from(decoder.decode(encoded));
+    const decoded = decoder.decodeAt(sequence * 960, encoded);
     expected.push(sequence === 0 ? decoded.subarray(encoder.delaySamples * 2) : decoded);
     wire.push(frame(sequence, encoded, encoder.delaySamples));
   }

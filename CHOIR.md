@@ -3,8 +3,7 @@
 A second singer, B, sings beside the Mic owner, A. Off by default; with it off, Relay runs exactly the single-Mic path, and `test/audio-session-golden.test.ts` holds that N=1 PCM byte-exact.
 
 ```bash
-RELAY_CHOIR_SHADOW=1
-RELAY_CHOIR_MEDIA_EXPERIMENT=1   # both are needed
+RELAY_CHOIR=1
 ```
 
 ## Roles
@@ -26,18 +25,21 @@ Robot  backing socket ───────────────────�
 
 B's join socket (its ordinary page socket) carries the join, the claim and B's reports; only its separate media socket carries audio.
 
-- **Join** (`choir-secondary-consent-experiment.ts`): who B is, and the one socket that speaks for B. Reports from any other tab of the same participant are ignored.
-- **Claim** (`choir-secondary-media-ticket-experiment.ts`): while B has no media, the server sends `choir-media-ready` to B's join socket, at once and every 3 s. B's join socket asks for a one-use claim, and a separate, freshly authenticated media socket of B's redeems it with its registration. The server names the transport; the page names nothing but its sample rate and codec.
-- **Ingress** (`choir-secondary-pcm-ingress-experiment.ts`): B's packets, AudioPacket v2 PCM or Opus v3 (as the main Mic sends), checked and decoded. A bound socket carries nothing but B's packets, and never falls through to the main Mic or Robot routes. It carries B while B's join allows it, song or no song.
+`src/choir-runtime.ts` (`ChoirRuntime`) holds all of it; `server.ts` only calls in at its own seams (socket messages, binary frames and closes, each mix frame, captured PCM, the Robot's song anchors and probe replies). With `RELAY_CHOIR` unset there is no runtime, and second Mic messages are refused.
+
+- **Join** (`choir-seat.ts`): who B is, and the one socket that speaks for B. Reports from any other tab of the same participant are ignored.
+- **Claim** (`choir-media-claims.ts`): while B has no media, the server sends `choir-media-ready` to B's join socket, at once and every 3 s. B's join socket asks for a one-use claim, and a separate, freshly authenticated media socket of B's redeems it with its registration. The server names the transport; the page names nothing but its sample rate and codec.
+- **Ingress** (`choir-ingress.ts`): B's packets, AudioPacket v2 PCM or Opus v3 (as the main Mic sends), checked and decoded. A bound socket carries nothing but B's packets, and never falls through to the main Mic or Robot routes. It carries B while B's join allows it, song or no song.
 - **Room output**: B is a second `MicTrack` in the N=1 `AudioSession`, so Listen, Take and timing need no separate path. `MicTrack` holds each singer's PCM timeline, gain, limiter and read head.
+- On B's page, `public/choir-ui.js` holds the second Mic's controls, `public/choir-media-client.js` claims and drives B's media socket, and `public/choir-secondary-capture.js` captures B's Mic.
 - B's page plays the room's YouTube locally inside the normal Song player (`public/choir-follower.js`). It starts **muted**, which any browser lets a script play, so B keeps time at once; it is then unmuted. Where sound needs a tap (iOS pauses a scripted unmute), it plays on muted and B is asked to tap the YouTube player. B's playback position is never treated as room time.
 
 ## Where B is placed
 
-`syncDuetOutput()` in `server.ts` gives B a lag of its own, from the first of these that has one:
+`ChoirRuntime` gives B a lag of its own on every mix frame, from the first of these that has one:
 
-1. **Content** (`duet-content.ts`): while a song plays, six-second windows of each singer's PCM against the raw Robot backing, as the mixer holds them, analysed off-thread (`choir-content-analysis-worker.mjs`). B reads at A's advance plus (B − A). Both are measured against the same backing, so the difference holds in any coordinates.
-2. **Test tone** (`duet-probe.ts`): the main Mic's three notes, played once on B's phone when B's capture arrives, and again when B presses its own Realign. B is silent in the room while they sound. B's lag is B's Mic path minus the Robot's own backing path (kept apart from whoever sings, so a headphone A does not block it) plus the Robot player offset.
+1. **Content** (`choir-content.ts`): while a song plays, six-second windows of each singer's PCM against the raw Robot backing, as the mixer holds them, analysed off-thread (`choir-content-analysis-worker.mjs`). B reads at A's advance plus (B − A). Both are measured against the same backing, so the difference holds in any coordinates.
+2. **Test tone** (`choir-probe.ts`): the main Mic's three notes, played once on B's phone when B's capture arrives, and again when B presses its own Realign. B is silent in the room while they sound. B's lag is B's Mic path minus the Robot's own backing path (kept apart from whoever sings, so a headphone A does not block it) plus the Robot player offset.
 3. **YouTube time**: B's page reports which capture sample was recorded at which point of its local YouTube (`choir-secondary-song-anchor`), the Robot reports the same for the backing, and the difference places B within seconds of the song playing.
 4. **No song**: B reads at A's advance, and B's own frontier correction holds it back as far as B's audio actually arrives.
 

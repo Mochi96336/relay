@@ -6,9 +6,9 @@ import { encodePcmFrame } from '../src/pcm-frame.js';
 import { AUDIO_PACKET_HEADER_BYTES } from '../src/audio-packet.js';
 import { encodeAudioPacket } from '../src/audio-packet.js';
 import {
-  ChoirSecondaryPcmIngressExperiment,
+  ChoirIngress,
   type ChoirIngressResult,
-} from '../src/choir-secondary-pcm-ingress-experiment.js';
+} from '../src/choir-ingress.js';
 
 type Socket = { participantId?: string; role: string; open: boolean };
 function bytes(generation = 7, start = 0, samples = 960): Buffer {
@@ -25,7 +25,7 @@ function socketFor(participantId?: string, role = 'unknown'): Socket {
 function fixture() {
   const accepted: Array<{ participantId: string; generation: number | null; at: number }> = [];
   let joined = true;
-  const ingress = new ChoirSecondaryPcmIngressExperiment(
+  const ingress = new ChoirIngress(
     socket => (socket as Socket).open,
     participantId => joined && participantId === 'B',
   );

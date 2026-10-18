@@ -2,7 +2,7 @@ import './live-i18n.js';
 // Evaluated before this module: + 副 Mic must not be tappable before the
 // media client listens for the capture its tap starts. As a separate page
 // script it could finish loading seconds later, and the tap was lost.
-import './choir-secondary-media-client.js';
+import './choir-media-client.js';
 
 /**
  * The second Mic's controls, in the Mic row like Take Mic: + 副 Mic to join
@@ -15,10 +15,8 @@ const joinButton = document.querySelector('#choir-invite-open');
 const leaveButton = document.querySelector('#choir-withdraw');
 
 let available = false;
-let resumeSupported = false;
 let session = null;
 let authorityFresh = false;
-let mediaEnabled = false;
 let joined = false;
 let pending = false;
 let joinScope = null;
@@ -37,13 +35,13 @@ function myId() {
     ? window.relayParticipantId : null;
 }
 function canJoin() {
-  return available && authorityFresh && mediaEnabled && Boolean(myId())
+  return available && authorityFresh && Boolean(myId())
     && typeof session?.micOwnerId === 'string' && session.micOwnerId !== myId()
     && session?.micConnected === true && !joined && !roomLocalFile;
 }
 function publishCommand(type, fields = {}) {
   if (!available || !authorityFresh) return false;
-  window.dispatchEvent(new CustomEvent('relay-choir-consent-command', {
+  window.dispatchEvent(new CustomEvent('relay-choir-command', {
     detail: { type, ...fields },
   }));
   return true;
@@ -61,7 +59,7 @@ function render() {
   if (joined) document.body.dataset.choirGuest = 'joined';
   else delete document.body.dataset.choirGuest;
   window.dispatchEvent(new CustomEvent('relay-choir-guest-state', {
-    detail: { enabled: available && joined && mediaEnabled },
+    detail: { enabled: available && joined },
   }));
 }
 function resetJoin() {
@@ -79,7 +77,7 @@ function resetJoin() {
 // intent and running microphone survive for 15 s. Only the same room owner
 // and server may resume it, through fresh authenticated server admission.
 function resumeIfReady() {
-  if (!recovering || !authorityFresh || !available || !mediaEnabled) return;
+  if (!recovering || !authorityFresh || !available) return;
   if (!joinScope || typeof joinScope.serverIncarnation !== 'string'
     || session?.micOwnerId !== joinScope.primaryId
     || session?.serverIncarnation !== joinScope.serverIncarnation) {
@@ -97,7 +95,6 @@ function resumeIfReady() {
 }
 function recoverControl() {
   if (!joined || recovering || !joinScope) return;
-  if (!resumeSupported) { resetJoin(); return; }
   recovering = true;
   window.dispatchEvent(new Event('relay-choir-pause-secondary-media'));
   pending = false;
@@ -115,17 +112,9 @@ window.addEventListener('relay-presence-state', (event) => {
   resumeIfReady();
   render();
 });
-window.addEventListener('relay-choir-consent-availability', (event) => {
+window.addEventListener('relay-choir-availability', (event) => {
   available = event.detail?.available === true;
-  resumeSupported = event.detail?.resumeSupported === true;
-  if (!available) {
-    resetJoin();
-  }
-  render();
-});
-window.addEventListener('relay-choir-media-mode', (event) => {
-  mediaEnabled = event.detail?.enabled === true;
-  if (!mediaEnabled) resetJoin();
+  if (!available) resetJoin();
   resumeIfReady();
   render();
 });
@@ -137,7 +126,7 @@ window.addEventListener('relay-product-status', (event) => {
   roomLocalFile = localFile;
   render();
 });
-window.addEventListener('relay-choir-consent-message', (event) => {
+window.addEventListener('relay-choir-message', (event) => {
   if (!available || !authorityFresh) return;
   const message = event.detail;
   if (message?.type === 'choir-consent-rejected') {
@@ -166,7 +155,7 @@ window.addEventListener('relay-choir-consent-message', (event) => {
   }
 });
 window.addEventListener('relay-choir-media-connection', (event) => {
-  if (!mediaEnabled || !joinScope || (!joined && !pending)) return;
+  if (!available || !joinScope || (!joined && !pending)) return;
   // Media reconnects on its own for each room; only a microphone that will
   // not open needs the singer. Leave rather than sit joined but silent.
   if (event.detail?.state !== 'capture-failed') return;
@@ -176,7 +165,7 @@ window.addEventListener('relay-choir-media-connection', (event) => {
 // What B's page shows and plays, for the server log: on change (at most once
 // a second) and every 10 s while joined.
 window.addEventListener('relay-choir-follower-report', (event) => {
-  if (!joined || !mediaEnabled) return;
+  if (!joined || !available) return;
   const report = JSON.stringify(event.detail ?? null);
   const nowMs = performance.now();
   if ((report === lastReport && nowMs - lastReportAtMs < 10_000) || nowMs - lastReportAtMs < 1_000) return;
@@ -206,4 +195,4 @@ leaveButton?.addEventListener('click', () => {
 });
 render();
 window.dispatchEvent(new Event('relay-request-presence-state'));
-window.dispatchEvent(new Event('relay-request-choir-media-mode'));
+window.dispatchEvent(new Event('relay-request-choir-availability'));

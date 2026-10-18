@@ -120,9 +120,9 @@ export class ProbeLeg {
   }
 }
 
-export type DuetProbeState = 'idle' | 'robot' | 'requested' | 'analyzing' | 'measured' | 'failed';
+export type ChoirProbeState = 'idle' | 'robot' | 'requested' | 'analyzing' | 'measured' | 'failed';
 
-export type DuetProbeOptions = ProbeLegConfig & {
+export type ChoirProbeOptions = ProbeLegConfig & {
   secondary: ProbeLegTimeline;
   backing: ProbeLegTimeline;
   /** The Robot route's own leg, kept by the server; null when none is valid. */
@@ -138,8 +138,8 @@ export type DuetProbeOptions = ProbeLegConfig & {
 /** Ids above any the boot probe's own counter will reach, so replies cannot be confused. */
 const REQUEST_ID_BASE = 1_000_000_000;
 
-export class DuetProbe {
-  state: DuetProbeState = 'idle';
+export class ChoirProbe {
+  state: ChoirProbeState = 'idle';
   failureReason: string | null = null;
   /** B's Mic path: where its notes landed after the moment they were due. */
   micLatencyMs: number | null = null;
@@ -148,7 +148,7 @@ export class DuetProbe {
   private nextRequestId = REQUEST_ID_BASE;
   private leg: ProbeLeg | null = null;
 
-  constructor(private readonly options: DuetProbeOptions) {}
+  constructor(private readonly options: ChoirProbeOptions) {}
 
   /** B's notes are out or being looked for: keep B out of the room output. */
   get silencing() {

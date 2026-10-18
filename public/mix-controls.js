@@ -117,7 +117,7 @@ function sendSecondaryGain() {
   if (!secondaryActive) return;
   storeNumber(MIC_GAIN_KEY, micGainDb());
   secondaryGainSentAtMs = performance.now();
-  window.dispatchEvent(new CustomEvent('relay-choir-consent-command', {
+  window.dispatchEvent(new CustomEvent('relay-choir-command', {
     detail: { type: 'choir-secondary-gain', micGainDb: micGainDb() },
   }));
 }

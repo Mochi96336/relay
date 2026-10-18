@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { ChoirSecondaryConsentExperiment } from '../src/choir-secondary-consent-experiment.js';
+import { ChoirSeat } from '../src/choir-seat.js';
 
 type Socket = { participantId?: string; open: boolean };
 const A = 'participant-AAAAAAA1';
@@ -16,7 +16,7 @@ function fixture() {
   let bConnected = true;
   let cConnected = true;
   const delivered: Array<{ target: string; payload: Record<string, unknown> }> = [];
-  const consent = new ChoirSecondaryConsentExperiment({
+  const consent = new ChoirSeat({
     primaryStillOwnsMic: id => id === owner && liveMedia,
     holdsMic: id => id === owner,
     participantConnected: id => (id === B && bConnected) || (id === C && cConnected),

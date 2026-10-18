@@ -12,7 +12,7 @@ async function openFixture(page, participantId, micOwnerId = null) {
     // The join tap really starts capture now. Keep it pending: these tests are
     // about the controls, and a fixture microphone failing would leave the join.
     if (navigator.mediaDevices) navigator.mediaDevices.getUserMedia = () => new Promise(() => {});
-    window.addEventListener('relay-choir-consent-command', event => {
+    window.addEventListener('relay-choir-command', event => {
       window.__choirSent.push(event.detail);
     });
     // The fixture keeps answering product-status without a duet; as the real
@@ -25,7 +25,7 @@ async function openFixture(page, participantId, micOwnerId = null) {
     window.__mixControls = mix;
     window.__primaryMixChanges = 0;
     mix.listenForSingerInput({ onMix: () => window.__primaryMixChanges++ });
-    await import('/choir-consent-ui.js');
+    await import('/choir-ui.js');
     window.dispatchEvent(new CustomEvent('relay-presence-state', {
       detail: {
         authorityFresh: true,
@@ -42,11 +42,10 @@ async function openFixture(page, participantId, micOwnerId = null) {
 }
 
 const enable = page => page.evaluate(() => {
-  window.dispatchEvent(new CustomEvent('relay-choir-consent-availability', { detail: { available: true, resumeSupported: true } }));
-  window.dispatchEvent(new CustomEvent('relay-choir-media-mode', { detail: { enabled: true } }));
+  window.dispatchEvent(new CustomEvent('relay-choir-availability', { detail: { available: true } }));
 });
 const consent = (page, detail) => page.evaluate(detail => window.dispatchEvent(
-  new CustomEvent('relay-choir-consent-message', { detail })), detail);
+  new CustomEvent('relay-choir-message', { detail })), detail);
 const duet = (page, secondaryId) => page.evaluate(secondaryId => {
   window.__fixtureDuet = secondaryId ? { secondaryId, state: 'singing' } : null;
   window.dispatchEvent(new CustomEvent('relay-product-status', {
@@ -176,7 +175,7 @@ test('a refused or ended second Mic restores its join button without an extra st
   await expect(open).toBeVisible();
 
   await page.evaluate(() => window.dispatchEvent(new CustomEvent(
-    'relay-choir-consent-availability', { detail: { available: false } })));
+    'relay-choir-availability', { detail: { available: false } })));
   await expect(open).toBeHidden();
   await expect(page.locator('#choir-withdraw')).toBeHidden();
 });

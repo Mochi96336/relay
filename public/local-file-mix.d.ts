@@ -9,6 +9,18 @@ export function roundTripLatencySeconds(input: {
 }): number;
 export function songDelaySeconds(roundTripSeconds: number, offsetMs: number): number;
 
+export function localFileSurface(input: {
+  fileOpen: boolean;
+  myId: string | null | undefined;
+  micOwnerId: string | null;
+  roomLocalFile: unknown;
+}): 'owner' | 'standby' | 'observer' | 'none';
+export function lostMicToAnother(input: {
+  previousOwnerId: string | null;
+  nextOwnerId: string | null;
+  myId: string | null | undefined;
+}): boolean;
+
 /** What mic-capture-graph hands the input hook; nodes are Web Audio nodes in a page. */
 export type LocalFileCaptureInput = {
   context: any;

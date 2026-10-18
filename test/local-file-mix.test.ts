@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   LocalFileMix,
+  localFileSurface,
+  lostMicToAnother,
   roundTripLatencySeconds,
   songDelaySeconds,
 } from '../public/local-file-mix.js';
@@ -212,4 +214,42 @@ test('closing the file unlinks the capture and reports a mode change', () => {
   assert.equal(context.nodes.filter(n => n.edges.has(input.capture)).length, 0);
   // The capture graph's own dispose afterwards is harmless.
   handle?.disconnect();
+});
+
+test('a Mic session that ends does not start the song again on the next Mic', async () => {
+  const h = harness();
+  h.mix.open(h.file('a.wav'));
+  const first = fakeContext();
+  h.mix.connectInput(h.capture(first));
+  await h.mix.play();
+  h.elements[0].currentTime = 30;
+  first.close();
+
+  h.mix.connectInput(h.capture(fakeContext()));
+  h.elements[1].emit('loadedmetadata');
+  await Promise.resolve();
+  assert.equal(h.elements[1].currentTime, 30, 'the position is kept');
+  assert.equal(h.elements[1].paused, true, 'but the singer presses Play');
+});
+
+test('the song area follows who holds the Mic', () => {
+  const surface = (fileOpen: boolean, micOwnerId: string | null, roomLocalFile: unknown = null) =>
+    localFileSurface({ fileOpen, myId: 'me', micOwnerId, roomLocalFile });
+  assert.equal(surface(true, 'me'), 'owner');
+  assert.equal(surface(true, null), 'owner');
+  // A file opened before taking over: the current singer's song stays visible.
+  assert.equal(surface(true, 'other'), 'standby');
+  assert.equal(surface(false, 'other', { title: 'x' }), 'observer');
+  assert.equal(surface(false, 'other'), 'none');
+  assert.equal(surface(false, 'me', { title: 'x' }), 'none');
+});
+
+test('only a handoff from this phone to another ends its local file', () => {
+  const lost = (previousOwnerId: string | null, nextOwnerId: string | null) =>
+    lostMicToAnother({ previousOwnerId, nextOwnerId, myId: 'me' });
+  assert.equal(lost('me', 'other'), true);
+  assert.equal(lost('me', null), false, 'a reconnect grace or a release is not a handoff');
+  assert.equal(lost('other', 'me'), false);
+  assert.equal(lost('other', 'third'), false);
+  assert.equal(lost(null, 'other'), false);
 });

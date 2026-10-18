@@ -357,7 +357,7 @@ window.relayIdentityReady = (async () => {
       return;
     }
     if ([
-      'choir-room-ready', 'choir-media-rejected',
+      'choir-room-ready', 'choir-media-ready', 'choir-media-rejected',
       'choir-secondary-media-claim',
     ].includes(message.type)) {
       if (choirMediaEnabled) window.dispatchEvent(new CustomEvent(

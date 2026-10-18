@@ -95,6 +95,29 @@ describe('isolated Choir secondary WebSocket PCM admission', () => {
     assert.equal(f.ingress.codec, null, 'a departed B leaves no codec behind');
   });
 
+  test('a socket bound by B\'s join alone carries B only while the join allows it', () => {
+    const f = fixture();
+    const socket: Socket = { participantId: 'B', role: 'unknown', open: true };
+    assert.equal(f.ingress.bindJoinedSecondary(socket, 'B', 'join-B', 48_000, 0), false,
+      'no join predicate: every socket stays room-only');
+    let joined = true;
+    f.ingress.liveVoiceAllowed = (participantId) => joined && participantId === 'B';
+    assert.equal(f.ingress.bindJoinedSecondary(socketFor('A'), 'B', 'join-B', 48_000, 0), false,
+      'auth identity must match the joined singer');
+    assert.equal(f.ingress.bindJoinedSecondary(socket, 'B', 'join-B', 48_000, 0), true);
+    assert.equal(f.ingress.liveTransportFor('B'), 'join-B');
+    const heard: number[] = [];
+    f.ingress.onAcceptedFrame = (frame) => { heard.push(frame.firstSampleIndex); };
+    assert.equal(boundResult(f.ingress.interceptBinary(socket, bytes(), 10)).accepted, true);
+    assert.equal(f.accepted.length, 0, 'no room took it as evidence');
+    joined = false;
+    assert.deepEqual(f.ingress.interceptBinary(socket, bytes(7, 960), 20),
+      { intercepted: true, accepted: false, reason: 'stale-authority' });
+    assert.equal(f.ingress.liveTransportFor('B'), null);
+    assert.deepEqual(heard, [0]);
+    assert.equal(f.ingress.disconnect(socket, 30), false, 'no room singer to revoke');
+  });
+
   test('malformed, unpositioned, oversized and restarted frames are intercepted but never applied', () => {
     const f = fixture();
     const socket: Socket = { participantId: 'B', role: 'unknown', open: true };

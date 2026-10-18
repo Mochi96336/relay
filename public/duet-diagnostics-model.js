@@ -163,7 +163,8 @@ function readiness(t, value) {
 /**
  * The main Mic and B side by side on the Timing tab: each singer's
  * compensation and what it rests on. B's comes from the song content of both
- * singers or, until that is measured, from YouTube time; they are named apart.
+ * singers or, until that is measured, from YouTube time, and with no song it
+ * follows the main Mic; each is named apart.
  */
 export function describeDuetTiming({ product, source, statusz } = {}, t = english) {
   const duet = duetOf(product);
@@ -188,7 +189,8 @@ export function describeDuetTiming({ product, source, statusz } = {}, t = englis
   } else {
     const shown = lag ?? target;
     const notes = [lagSource === 'content' ? t('diag.duet.timing.content')
-      : lagSource === 'youtube-time' ? t('diag.duet.timing.youtube') : t('diag.duet.timing.held')];
+      : lagSource === 'youtube-time' ? t('diag.duet.timing.youtube')
+        : lagSource === 'no-song' ? t('diag.duet.timing.noSong') : t('diag.duet.timing.held')];
     if (lag !== null && target !== null && Math.abs(target - lag) >= SETTLING_MS) {
       notes.push(t('diag.duet.timing.settling', { ms: Math.round(target) }));
     }

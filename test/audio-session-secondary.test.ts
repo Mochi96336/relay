@@ -183,6 +183,37 @@ describe('AudioSession second singer', () => {
     assert.equal(session.secondaryMic, null, 'dropped once fully silent');
   });
 
+  test('a lag change too large to ease fades B out, jumps, and fades B back in', () => {
+    const session = makeSession();
+    session.start(0);
+    session.ingestBacking(frame(silence(4_000)), RATE, 0);
+    session.ingestMic(frame(silence(4_000)), RATE, 0);
+    session.setAlignment({ calibratedMicLagMs: 0 });
+    session.attachSecondaryMic();
+    session.setSecondaryMicGainDb(0);
+    session.ingestSecondaryMic(frame(square(4_000, 16_000, 96)), RATE, 0);
+    session.setSecondaryMicLag(0);
+    drainAll(session, 600 + 200);
+    assert.equal(session.secondaryMic!.blend, 1);
+
+    // A small correction eases, as the main Mic's do: 1% of a frame per frame.
+    session.setSecondaryMicLag(50);
+    drainAll(session, 600 + 220);
+    assert.ok(session.secondaryMic!.lagMs! > 0 && session.secondaryMic!.lagMs! < 1,
+      `easing toward 50 ms (${session.secondaryMic!.lagMs})`);
+
+    // A song's measurement after no song: far too far to ease.
+    session.setSecondaryMicLag(450);
+    assert.equal(session.secondaryMic!.targetLagMs, 450);
+    assert.equal(session.secondaryMic!.audible, true, 'still the singer in the room, only moving');
+    drainAll(session, 600 + 300);
+    const back = session.secondaryMic!;
+    assert.equal(back.lagMs, 450, 'jumped once silent, not eased over minutes');
+    assert.ok(back.blend > 0, 'and fading back in');
+    drainAll(session, 600 + 400);
+    assert.equal(session.secondaryMic!.blend, 1);
+  });
+
   test('a voice fading out is never revived: the next singer starts on a fresh track', () => {
     const session = makeSession();
     session.start(0);

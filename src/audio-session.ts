@@ -453,7 +453,7 @@ export class AudioSession {
     this.secondary = {
       track: new MicTrack(this.micTrackOptions),
       audible: false, blend: 0, detaching: false, sumGain: 1,
-      gapSamples: 0, starvedSamples: 0, mixedFrames: 0, heardAtFrame: null,
+      gapSamples: 0, starvedSamples: 0, mixedFrames: 0, heardAtFrame: null, pendingLagMs: null,
     };
     return true;
   }
@@ -478,20 +478,27 @@ export class AudioSession {
    * The second singer's read-ahead, in the same coordinates as the main
    * Mic's. Null silences it (faded) without dropping its PCM. The first lag,
    * or one set while it is silent, applies at once; later changes ease in
-   * exactly as the main Mic's runtime corrections do.
+   * exactly as the main Mic's runtime corrections do. A change too large to
+   * ease (from no song to a song's measurement and back, often a second or
+   * more, which the 1% slew would take minutes over) fades B out, jumps and
+   * fades B back in.
    */
   setSecondaryMicLag(lagMs: number | null) {
     const secondary = this.secondary;
     if (!secondary) return;
+    secondary.pendingLagMs = null;
     if (lagMs === null || !Number.isFinite(lagMs)) {
       secondary.audible = false;
       return;
     }
     const track = secondary.track;
-    if (track.alignmentState.calibratedMicLagMs === null || secondary.blend === 0 || !this.running) {
+    const current = track.alignmentState.calibratedMicLagMs;
+    if (current === null || secondary.blend === 0 || !this.running) {
       track.alignmentState = { ...track.alignmentState, calibratedMicLagMs: lagMs };
+    } else if (Math.abs(lagMs - current) > SECONDARY_JUMP_MS) {
+      secondary.pendingLagMs = lagMs;
     }
-    track.calibratedMicLagTargetMs = lagMs;
+    if (secondary.pendingLagMs === null) track.calibratedMicLagTargetMs = lagMs;
     if (!secondary.detaching) secondary.audible = true;
   }
 
@@ -517,7 +524,7 @@ export class AudioSession {
       audible: secondary.audible,
       blend: secondary.blend,
       lagMs: secondary.track.alignmentState.calibratedMicLagMs,
-      targetLagMs: secondary.track.calibratedMicLagTargetMs,
+      targetLagMs: secondary.pendingLagMs ?? secondary.track.calibratedMicLagTargetMs,
       gainDb: secondary.track.gain.targetDb,
       gapSamples: secondary.gapSamples,
       starvedSamples: secondary.starvedSamples,
@@ -545,6 +552,7 @@ export class AudioSession {
     track.frontier.reset(track.timeline.generation);
     track.gain.reset();
     track.calibratedMicLagTargetMs = track.alignmentState.calibratedMicLagMs;
+    secondary.pendingLagMs = null;
     // Its PCM is gone, and the frame count may restart.
     secondary.heardAtFrame = null;
     if (stopping) {
@@ -1256,7 +1264,7 @@ export class AudioSession {
       evidenceMissing,
       audibleMissing: sourceSample < 0 || evidenceMissing,
     });
-    const target = secondary.audible ? 1 : 0;
+    const target = secondary.audible && secondary.pendingLagMs === null ? 1 : 0;
     secondary.blend = secondary.blend < target
       ? Math.min(target, secondary.blend + duet.blendStep)
       : Math.max(target, secondary.blend - duet.blendStep);
@@ -1288,6 +1296,12 @@ export class AudioSession {
     if (read.evidence.gapSamples + read.evidence.frontierMissingSamples < this.frameSamples) {
       secondary.heardAtFrame = this.frameIndex;
     }
+    // Faded out for a jump: B comes back in at the new lag from the next frame.
+    if (secondary.pendingLagMs !== null && secondary.blend === 0) {
+      track.alignmentState = { ...track.alignmentState, calibratedMicLagMs: secondary.pendingLagMs };
+      track.calibratedMicLagTargetMs = secondary.pendingLagMs;
+      secondary.pendingLagMs = null;
+    }
     trimPcmTimeline(track.timeline, startSample - this.retentionSamples);
     track.captureRestarts.trimBefore(startSample - this.retentionSamples);
     track.clipping.trimBefore(startSample - this.retentionSamples);
@@ -1297,6 +1311,8 @@ export class AudioSession {
 
 /** How long B takes to fade in or out of the room mix. */
 const SECONDARY_BLEND_MS = 50;
+/** A change in B's lag larger than this fades out and jumps instead of easing. */
+const SECONDARY_JUMP_MS = 100;
 /** How recent B's PCM must be for B to count as singing, not just allowed to. */
 const SECONDARY_HEARD_WINDOW_MS = 500;
 /** How fast the A+B sum comes back up after a peak turned it down. */
@@ -1315,6 +1331,8 @@ type SecondaryVoice = {
   mixedFrames: number;
   /** The last mix frame that held any of B's PCM; null before the first. */
   heardAtFrame: number | null;
+  /** A lag too far to ease to, applied once B has faded out; null otherwise. */
+  pendingLagMs: number | null;
 };
 
 type SecondaryFrame = {

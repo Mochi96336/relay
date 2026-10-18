@@ -130,6 +130,11 @@ describe('second Mic diagnostics', () => {
     assert.match(rows.duetSecondOffset.note, /Moving toward 190 ms/);
     assert.equal(rows.duetSecondOffset.tone, 'neutral');
 
+    const songless = byKey(describeDuetTiming(duetFacts((f) => {
+      f.statusz.audio.duetYoutube.lagSource = 'no-song';
+    }))!.rows);
+    assert.match(songless.duetSecondOffset.note, /^No song/);
+
     const none = byKey(describeDuetTiming(duetFacts((f) => {
       f.statusz.audio.duetYoutube.lagSource = null;
       f.statusz.audio.duetSecondary.lagMs = null;

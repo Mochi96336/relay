@@ -135,7 +135,11 @@ function initialize() {
     }
 
     if (latestProductStatus && (!authority.authorityFresh || !authority.commandChannelFresh)) {
-      const relevant = owner || latestAction?.canStartCalibration === true || running;
+      // Only a page that holds or is publishing the Mic can realign. The
+      // room-level canStartCalibration says the room could; it put every
+      // listener's Realign on screen as "Reconnecting…", since a listener has
+      // no command channel to be fresh.
+      const relevant = owner || commandAuthority?.authorized === true;
       setHidden(!relevant);
       setDisabled(true);
       setText(calibrateStatus, relevant ? t('timing.reconnecting') : '');

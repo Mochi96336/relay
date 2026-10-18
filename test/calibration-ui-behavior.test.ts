@@ -286,6 +286,31 @@ test('last-known calibration stays visible but non-actionable while ProductStatu
   assert.equal(ui.commandCount(), 0);
 });
 
+test('a listener never sees Realign, let alone as reconnecting', () => {
+  const ui = harness({ selfMic: 'off' });
+  // What app.js publishes on a page that is not publishing the Mic.
+  const listenerChannel = () => ui.emit('relay-command-authority', authorityState({
+    lastKnownSnapshot: null, commandChannelFresh: false, authorized: false,
+  }));
+  ui.emitProductStatus({
+    canStartCalibration: true,
+    startCalibrationBlockedReason: null,
+    startCalibrationMode: 'content',
+  });
+  listenerChannel();
+  // A listener's page has no Mic command channel: it is never "fresh".
+  assert.equal(ui.button.hidden, true);
+  assert.equal(ui.status.textContent, '');
+  ui.emitProductStatus({
+    canStartCalibration: false,
+    startCalibrationBlockedReason: 'calibration-active',
+    startCalibrationMode: 'content',
+  });
+  listenerChannel();
+  assert.equal(ui.button.hidden, true);
+  assert.equal(ui.status.textContent, '');
+});
+
 test('stale command transport is non-actionable', () => {
   const ui = harness({ selfMic: 'live' });
   ui.emitProductStatus({

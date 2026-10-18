@@ -245,10 +245,21 @@ window.relayIdentityReady = (async () => {
         'choir-secondary-song-anchor', 'choir-secondary-page', 'choir-secondary-gain',
         'choir-secondary-decline', 'choir-secondary-withdraw',
         'choir-room-begin', 'choir-secondary-media-claim-request',
+        'choir-probe-played', 'choir-probe-failed',
       ].includes(payload.type)) return;
     if (['choir-room-begin', 'choir-secondary-media-claim-request', 'choir-secondary-join',
-      'choir-secondary-song-anchor', 'choir-secondary-page', 'choir-secondary-gain']
+      'choir-secondary-song-anchor', 'choir-secondary-page', 'choir-secondary-gain',
+      'choir-probe-played', 'choir-probe-failed']
       .includes(payload.type) && !choirMediaEnabled) return;
+    if (payload.type === 'choir-probe-played' || payload.type === 'choir-probe-failed') {
+      send({
+        type: payload.type, requestId: payload.requestId, generation: payload.generation,
+        ...(payload.type === 'choir-probe-played'
+          ? { timingDiagnostics: payload.timingDiagnostics }
+          : { reason: typeof payload.reason === 'string' ? payload.reason.slice(0, 200) : 'unspecified' }),
+      });
+      return;
+    }
     if (payload.type === 'choir-secondary-join') {
       send({ type: payload.type, ...(payload.resume === true
         ? { resume: true, expectedPrimaryId: payload.expectedPrimaryId } : {}) });
@@ -358,7 +369,7 @@ window.relayIdentityReady = (async () => {
     }
     if ([
       'choir-room-ready', 'choir-media-ready', 'choir-media-rejected',
-      'choir-secondary-media-claim',
+      'choir-secondary-media-claim', 'choir-probe',
     ].includes(message.type)) {
       if (choirMediaEnabled) window.dispatchEvent(new CustomEvent(
         'relay-choir-media-message', { detail: message },

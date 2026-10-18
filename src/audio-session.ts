@@ -828,6 +828,27 @@ export class AudioSession {
     return readPcmEvidence(this.mic, startSample, count);
   }
 
+  /** The second singer's timeline, as `readMic` reads the main Mic's; silence with no B. */
+  readSecondaryMic(startSample: number, count: number) {
+    const timeline = this.secondary?.track.timeline;
+    return timeline ? readPcmRange(timeline, startSample, count) : new Int16Array(Math.max(0, count));
+  }
+
+  /** Missing-source evidence for the range `readSecondaryMic` reads; null with no B. */
+  readSecondaryMicEvidence(startSample: number, count: number) {
+    const timeline = this.secondary?.track.timeline;
+    return timeline ? readPcmEvidence(timeline, startSample, count) : null;
+  }
+
+  get secondaryMicTotalSamples() {
+    return this.secondary?.track.timeline.totalSamples ?? 0;
+  }
+
+  /** The capture generation of B's PCM on the timeline; null with no B. */
+  get secondaryMicGeneration() {
+    return this.secondary?.track.timeline.generation ?? null;
+  }
+
   /** The same window into the captured song, for locating a probe in it. */
   readBacking(startSample: number, count: number) {
     return readPcmRange(this.backing, startSample, count);

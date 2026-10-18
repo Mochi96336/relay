@@ -74,6 +74,7 @@ import { watchEventLoopStalls } from './event-loop-stall.js';
 import { TimingRuntime } from './timing-runtime.js';
 import { authorizeMicOwnerCommand, type MicOwnerCommand } from './command-authority.js';
 import { createDuetContentWorkerAnalyzer, DuetContent } from './duet-content.js';
+import { DuetProbe } from './duet-probe.js';
 import { decodePcmFrame, type PcmFrame } from './pcm-frame.js';
 import type { ProbeTarget } from './probe-lifecycle.js';
 import { buildReadiness } from './readiness.js';
@@ -597,6 +598,37 @@ const PROBE_ANALYSIS_TIMEOUT_MS = Math.max(
   relayConfig.probeAnalysisTimeoutMs,
   PROBE_SEARCH_MARGIN_MS + PROBE_REFERENCE_MS + 5_000,
 );
+/**
+ * B's own test tone, once per B capture: the boot probe's Mic leg for the
+ * second singer, sent to the page B joined from.
+ */
+const duetProbe = choirMediaEnabled ? new DuetProbe({
+  sampleRate: MIX_SAMPLE_RATE,
+  leadMs: PROBE_LEAD_MS,
+  searchMarginMs: PROBE_SEARCH_MARGIN_MS,
+  minCorrelation: PROBE_MIN_CORRELATION,
+  replyTimeoutMs: PROBE_REPLY_TIMEOUT_MS,
+  analysisTimeoutMs: PROBE_ANALYSIS_TIMEOUT_MS,
+  send: (request) => {
+    const nowMs = performance.now();
+    const secondaryId = choirConsent?.activeJoin(nowMs)?.secondaryId ?? null;
+    for (const raw of wss.clients) {
+      const socket = raw as RelaySocket;
+      if (socket.participantId === secondaryId && socket.readyState === WebSocket.OPEN
+        && choirConsent?.isJoinSocket(socket, nowMs)) {
+        sendJson(socket, { type: 'choir-probe', ...request });
+        return true;
+      }
+    }
+    return false;
+  },
+  sessionSampleAt: (atMs) => session.sessionSampleAt(atMs),
+  totalSamples: () => session.secondaryMicTotalSamples,
+  generation: () => session.secondaryMicGeneration,
+  read: (start, count) => session.readSecondaryMic(start, count),
+  evidence: (start, count) => session.readSecondaryMicEvidence(start, count),
+}) : null;
+let lastDuetProbeState: string | null = null;
 
 const bootProbeRuntime = new BootProbeRuntime({
   maxAttempts: PROBE_MAX_ATTEMPTS,
@@ -1941,6 +1973,7 @@ function remoteStatusPayload() {
         duetContent: duetContent
           ? duetContent.status()
           : null,
+        duetProbe: duetProbe ? duetProbe.status() : null,
         duetYoutube: { lagSource: lastDuetLagSource, ...duetSampleSong.diagnostics(performance.now()) },
       } : {}),
     },
@@ -2665,14 +2698,36 @@ function syncDuetOutput() {
     session.detachSecondaryMic();
     return;
   }
-  const { primaryId } = pair;
+  const { primaryId, secondaryId } = pair;
   const primaryOwnsMic = participants.micOwnerId === primaryId && micRuntime.mediaOwnerId === primaryId;
+  // B's test tone, once per B capture, as B arrives (never mid-song): the
+  // Robot leg comes from the boot probe, so it needs one to have run.
+  const backingLatencyMs = bootProbeRuntime.calibrationResult?.backingLatencyMs ?? null;
+  const captureGeneration = session.secondaryMicGeneration;
+  if (duetProbe && backingLatencyMs !== null && captureGeneration !== null
+    && !session.secondaryMic.audible && !takeBlocksCalibration()) {
+    duetProbe.begin(`${secondaryId}:${captureGeneration}`, nowMs);
+  }
+  duetProbe?.tick(nowMs);
+  if (duetProbe && duetProbe.state !== lastDuetProbeState) {
+    lastDuetProbeState = duetProbe.state;
+    logChoir('b-probe', duetProbe.status());
+  }
+  // B stays out of the room output while its notes sound.
+  if (duetProbe?.silencing) {
+    session.setSecondaryMicLag(null);
+    return;
+  }
   // Content for both singers is the measurement; until then, B's YouTube
   // time against the Robot's places B at once. Each song is measured afresh.
   const offset = primaryOwnsMic ? duetContent?.secondaryOffsetMs ?? null : null;
   const content = offset === null ? null : session.requestedMicAdvanceMs + offset;
-  const youtube = primaryOwnsMic && content === null ? duetSampleSongLagMs(nowMs) : null;
-  const measured = content ?? youtube;
+  // Then B's test tone, the main Mic's boot measurement for B; then YouTube time.
+  const probe = primaryOwnsMic && content === null && roomSongPlaying(nowMs)
+    ? duetProbe?.advanceMs(backingLatencyMs, currentDeltaMs(nowMs), currentPlaybackRate(nowMs)) ?? null
+    : null;
+  const youtube = primaryOwnsMic && content === null && probe === null ? duetSampleSongLagMs(nowMs) : null;
+  const measured = content ?? probe ?? youtube;
   // With no song there is nothing to place B against: B is read where A is,
   // and B's own frontier correction holds it back when its audio arrives
   // later. While a song plays, a lapse in measurement keeps B where it was
@@ -2683,7 +2738,8 @@ function syncDuetOutput() {
     && (!roomSongPlaying(nowMs) || session.secondaryMic.targetLagMs === null);
   const lag = measured ?? (songless ? session.requestedMicAdvanceMs : null);
   if (lag === null) return;
-  const source = content !== null ? 'content' : youtube !== null ? 'youtube-time' : 'no-song';
+  const source = content !== null ? 'content' : probe !== null ? 'probe'
+    : youtube !== null ? 'youtube-time' : 'no-song';
   if (source !== lastDuetLagSource) {
     logChoir('b-lag-source', { source, lagMs: Math.round(lag) });
     lastDuetLagSource = source;
@@ -5271,12 +5327,24 @@ let lastSecondaryPageReport = '';
 function handleChoirSecondaryReport(socket: RelaySocket, payload: Record<string, unknown>): boolean {
   const type = payload.type;
   if (type !== 'choir-secondary-song-anchor' && type !== 'choir-secondary-page'
-    && type !== 'choir-secondary-gain') return false;
+    && type !== 'choir-secondary-gain' && type !== 'choir-probe-played'
+    && type !== 'choir-probe-failed') return false;
   const nowMs = performance.now();
   const joined = choirConsent?.activeJoin(nowMs) ?? null;
   // Only the socket B joined from speaks for B, as only it may claim B's media.
   if (!joined || socket.participantId !== joined.secondaryId || socket.role !== 'unknown'
     || !choirConsent?.isJoinSocket(socket, nowMs)) return true;
+  if (type === 'choir-probe-played') {
+    duetProbe?.played({
+      requestId: payload.requestId, generation: payload.generation,
+      timingDiagnostics: payload.timingDiagnostics,
+    }, nowMs);
+    return true;
+  }
+  if (type === 'choir-probe-failed') {
+    duetProbe?.clientFailed({ requestId: payload.requestId, reason: payload.reason });
+    return true;
+  }
   if (type === 'choir-secondary-gain') {
     const gainDb = requestedMicGainDb(payload.micGainDb);
     if (gainDb === null || gainDb === duetSecondaryGainDb) return true;

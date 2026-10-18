@@ -57,6 +57,7 @@ async function fixture({ direct = false } = {}) {
     .replace(/^import[^\n]*\n/gm, '');
   vm.runInNewContext(source, {
     window, WebSocket: FakeSocket, ChoirSecondaryCapture: Capture,
+    CalibrationProbePlayback: class { play() {} retire() {} },
     wsUrl: ({ direct: viaDirect = false } = {}) => (viaDirect && direct ? 'wss://pi.test/ws' : 'wss://relay.test/ws'),
     sendParticipantAuthentication: (socket: FakeSocket) => { socket.send(JSON.stringify({ type: 'participant-authenticate' })); return true; },
     MIC_GAIN_KEY: 'mic-gain', storedNumber: () => null,

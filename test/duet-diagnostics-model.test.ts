@@ -181,3 +181,19 @@ describe('second Mic blocks in Technical details', () => {
     assert.match(system, /renderDuet\(facts\)/);
   });
 });
+
+describe('second Mic test tone', () => {
+  it('shows the measured Mic path, and why it was not measured', () => {
+    const measured = byKey(describeDuetTiming(duetFacts((f) => {
+      f.statusz.audio.duetProbe = { state: 'measured', micLatencyMs: 182, correlation: 0.8, failureReason: null };
+      f.statusz.audio.duetYoutube.lagSource = 'probe';
+    }))!.advanced);
+    assert.equal(measured.duetProbe.value, 'Mic path 182 ms');
+    const failed = byKey(describeDuetTiming(duetFacts((f) => {
+      f.statusz.audio.duetProbe = { state: 'failed', micLatencyMs: null, correlation: 0.1, failureReason: 'not heard (headphones?)' };
+    }))!.advanced);
+    assert.equal(failed.duetProbe.value, 'Not measured');
+    assert.equal(failed.duetProbe.note, 'not heard (headphones?)');
+    assert.equal(failed.duetProbe.tone, 'warn');
+  });
+});

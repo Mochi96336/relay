@@ -50,8 +50,10 @@ describe('B joins the Mic owner by its own press', () => {
     const f = fixture();
     assert.equal(f.consent.join(f.b, null), false, 'no Mic owner');
     assert.equal(f.consent.join(f.a, A), false, 'the Mic owner is not their own second singer');
-    assert.equal(f.consent.join({ open: true }, A), false, 'an unauthenticated socket');
-    assert.equal(f.consent.join({ participantId: B, open: false }, A), false, 'a closed socket');
+    const anonymous: Socket = { open: true };
+    const closed: Socket = { participantId: B, open: false };
+    assert.equal(f.consent.join(anonymous, A), false, 'an unauthenticated socket');
+    assert.equal(f.consent.join(closed, A), false, 'a closed socket');
     f.setLiveMedia(false);
     assert.equal(f.consent.join(f.b, A), false, 'A is not sending yet');
     f.setLiveMedia(true);

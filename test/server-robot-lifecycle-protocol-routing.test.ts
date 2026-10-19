@@ -23,14 +23,14 @@ test('server still owns Robot source lifecycle authority and effects', () => {
   assert.match(server, /robotPlayerOffset\.reset\(\)/);
   assert.match(server, /robotContentTimeline\.reset\(\)/);
   assert.match(server, /clearRobotContentTransition\(\)/);
-  assert.match(server, /dropLegacyCalibrationForRobot\(\)/);
+  assert.match(server, /calibrationCoordinator\.retireLegacyForRobot\(/);
   assert.match(server, /syncAppliedCalibration\(\)/);
   assert.match(server, /broadcastJson\(sourceStatusPayload\(\)\)/);
   assert.match(server, /broadcastJson\(timingCalibrationStatusPayload\(\)\)/);
 
   assert.doesNotMatch(
     protocol,
-    /InfrastructureCapabilityRuntime|SourceRuntime|TakeController|infrastructureCapability\.|sourceRuntime\.|takeController\.|robotPlayerOffset\.|robotContentTimeline\.|dropLegacyCalibrationForRobot|syncAppliedCalibration|sendJson|broadcastJson|performance\.now/,
+    /InfrastructureCapabilityRuntime|SourceRuntime|TakeController|infrastructureCapability\.|sourceRuntime\.|takeController\.|robotPlayerOffset\.|robotContentTimeline\.|calibrationCoordinator|syncAppliedCalibration|sendJson|broadcastJson|performance\.now/,
   );
 });
 

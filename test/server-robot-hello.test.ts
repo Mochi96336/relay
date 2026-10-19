@@ -21,7 +21,7 @@ test('Robot hello keeps infrastructure and SourceRuntime attach authority in ser
   assert.doesNotMatch(hello, /robotPlayerOffset\.reset\(\)/);
   assert.doesNotMatch(hello, /robotContentTimeline\.reset\(\)/);
   assert.doesNotMatch(hello, /clearRobotContentTransition\(\)/);
-  assert.doesNotMatch(hello, /dropLegacyCalibrationForRobot\(\)/);
+  assert.doesNotMatch(hello, /calibrationCoordinator\.retireLegacyForRobot\(\)/);
   assert.doesNotMatch(hello, /syncAppliedCalibration\(\)/);
   assert.doesNotMatch(hello, /broadcastJson\(/);
 });

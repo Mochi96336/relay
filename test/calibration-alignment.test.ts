@@ -318,3 +318,91 @@ for (const gate of ['Take', 'route', 'context', 'delta', 'path', 'collection', '
     assert.deepEqual(f.reapplied, []);
   });
 }
+
+test('boot retention acknowledges a confirmed target already active under content authority', () => {
+  const f = fixture();
+  f.seed('content', 160);
+  f.state.targetLag = 160;
+  f.alignment.sync();
+  f.seed('boot-probe', 160);
+  assert.equal(f.alignment.sync(), false, 'no read-head movement is needed');
+  assert.deepEqual(f.alignment.authority, { revision: 2, kind: 'boot-probe' });
+  assert.equal(f.audio.alignment.calibratedMicLagMs, 160);
+});
+
+test('boot retention acknowledges an unchanged pipeline-only target without Song', () => {
+  const f = fixture();
+  f.seed('content', 120);
+  f.state.targetLag = 120;
+  f.alignment.sync();
+  f.seed('boot-probe', 160);
+  f.state.song = false;
+  assert.equal(f.alignment.sync(), false);
+  assert.deepEqual(f.alignment.authority, { revision: 2, kind: 'boot-probe' });
+  assert.equal(f.audio.alignment.calibratedMicLagMs, 120);
+});
+
+test('boot retention keeps the new revision pending through Take and quiet-delta holds', () => {
+  const f = fixture();
+  f.seed('boot-probe', 160);
+  f.alignment.sync();
+  f.seed('boot-probe', 160);
+  f.state.takeBlocked = true;
+  assert.equal(f.alignment.sync(), false);
+  assert.equal(f.alignment.authority?.revision, 1);
+  f.state.takeBlocked = false;
+  f.state.deltaFresh = false;
+  assert.equal(f.alignment.sync(), false);
+  assert.equal(f.alignment.authority?.revision, 1);
+  f.state.deltaFresh = true;
+  assert.equal(f.alignment.sync(), false);
+  assert.equal(f.alignment.authority?.revision, 2);
+});
+
+test('boot retention cannot acknowledge a total until its stored delta matches the current coordinate', () => {
+  const f = fixture();
+  f.seed('boot-probe', 160);
+  f.alignment.sync();
+  f.seed('boot-probe', 160);
+  f.state.deltaMs = 50;
+  assert.equal(f.alignment.sync(), false);
+  assert.equal(f.alignment.authority?.revision, 1);
+  f.state.deltaMs = 40;
+  assert.equal(f.alignment.sync(), false);
+  assert.equal(f.alignment.authority?.revision, 2);
+});
+
+test('boot retention replaces a previous content slew target even when the read head already equals the boot result', () => {
+  const f = fixture();
+  f.seed('content', 310);
+  f.state.targetLag = 310;
+  f.alignment.sync();
+  f.timing.prepareContentValidationSlew(2);
+  f.seed('content', 510);
+  f.state.targetLag = 510;
+  f.alignment.sync();
+  assert.equal(f.audio.alignment.calibratedMicLagMs, 310);
+  assert.equal(f.audio.calibratedMicLagTarget, 510);
+  f.seed('boot-probe', 310);
+  assert.equal(f.alignment.sync(), true, 'retire the old slew target without moving the current read head');
+  assert.equal(f.audio.alignment.calibratedMicLagMs, 310);
+  assert.equal(f.audio.calibratedMicLagTarget, 310);
+  assert.deepEqual(f.alignment.authority, { revision: 3, kind: 'boot-probe' });
+  let mixedFrames = 0;
+  f.audio.drain(() => { mixedFrames++; }, 500, 5);
+  assert.ok(mixedFrames > 0);
+  assert.equal(f.audio.alignment.calibratedMicLagMs, 310, 'later frames must not follow the retired content target');
+});
+
+test('session stop clears the applied marker even while Take finalization blocks normal synchronization', () => {
+  const f = fixture();
+  f.seed('boot-probe', 160);
+  f.alignment.sync();
+  f.state.takeBlocked = true;
+  f.audio.stop();
+  f.alignment.sessionStopped();
+  assert.equal(f.alignment.sync(), false);
+  assert.equal(f.alignment.authority, null);
+  assert.equal(f.audio.alignment.calibratedMicLagMs, null);
+  assert.equal(f.measurement.confirmedResult?.micLagMs, 160, 'measurement history remains with its own owner');
+});

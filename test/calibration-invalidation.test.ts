@@ -73,7 +73,7 @@ function fixture(options: {
       expireRequest: () => {}, finishAnalysis: () => {}, startIfReady: () => {}, restart: () => {},
     },
     route: { robotActive: () => false, bootSettled: () => true, sweepContentTransition: () => {} },
-    alignment: { apply, reapplyBoot: () => {} },
+    alignment: { apply, reapplyBoot: () => {}, sessionStopped: () => { state.appliedLag = null; events.push('alignment-stopped'); } },
     silentSides: () => [], timingChanged, sourceChanged,
   };
   const coordinator = new CalibrationCoordinator(1_500, host);
@@ -223,6 +223,8 @@ test('stopping the session clears all timing strategies and opens a fresh automa
   f.validate();
   f.coordinator.reset();
   assert.equal(f.state.probeEvidence, false);
+  assert.equal(f.state.appliedLag, null);
+  assert.equal(f.events[0], 'alignment-stopped');
   assert.equal(f.content.validation.hasBaseline, false);
   assert.equal(f.content.measurement.confirmedResult, null);
   assert.equal(f.timing.calibrationKind, 'none');

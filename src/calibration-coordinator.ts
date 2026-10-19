@@ -14,6 +14,7 @@ export type CalibrationCoordinatorHost = {
   alignment: {
     apply(): boolean;
     reapplyBoot(nowMs: number): void;
+    sessionStopped(): void;
   };
   silentSides(beforeMs: number): string[];
   timingChanged(): void;
@@ -112,6 +113,7 @@ export class CalibrationCoordinator {
   /** Called after AudioSession has stopped; observers publish the whole stop. */
   reset() {
     const { probe, content, timing } = this.host;
+    this.host.alignment.sessionStopped();
     probe.clear();
     content.clearValidationBaseline();
     content.measurement.reset();

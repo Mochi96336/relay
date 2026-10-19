@@ -47,6 +47,7 @@ function fixture() {
         return state.changed;
       },
       reapplyBoot: () => events.push('reapply'),
+      sessionStopped: () => events.push('alignment-stopped'),
     },
     silentSides: (beforeMs) => { silenceReads.push(beforeMs); return state.silent; },
     timingChanged: () => events.push('timing'),

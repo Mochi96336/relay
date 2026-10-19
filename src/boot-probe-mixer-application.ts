@@ -2,6 +2,7 @@ export type BootProbeCalibrationApplicability = 'apply' | 'hold' | 'revoke';
 
 export type BootProbeMixerApplicationInput = {
   activeMicLagMs: number | null;
+  calibratedMicLagTarget: number | null;
   roomHasSong: boolean;
   resultMicLagMs: number | null;
   pathDifferenceMs: number | null;
@@ -12,11 +13,22 @@ export type BootProbeMixerApplicationInput = {
   currentDeltaMs: number;
 };
 
+/** Retain acknowledges current authority; hold leaves a new confirmation pending. */
 export type BootProbeMixerApplicationDecision =
   | { kind: 'hold' }
+  | { kind: 'retain' }
   | { kind: 'set'; micLagMs: number | null };
 
 const STORED_DELTA_MATCH_EPSILON_MS = 0.001;
+
+function confirmedTargetDecision(
+  input: BootProbeMixerApplicationInput,
+  micLagMs: number,
+): BootProbeMixerApplicationDecision {
+  return input.activeMicLagMs === micLagMs && input.calibratedMicLagTarget === micLagMs
+    ? { kind: 'retain' }
+    : { kind: 'set', micLagMs };
+}
 
 /**
  * Decides how an already-confirmed Boot Probe result may drive the live mixer.
@@ -37,9 +49,7 @@ export function decideBootProbeMixerApplication(
     && !input.calibrationStale
     && input.completedContextMatches
   ) {
-    return input.activeMicLagMs === input.pathDifferenceMs
-      ? { kind: 'hold' }
-      : { kind: 'set', micLagMs: input.pathDifferenceMs };
+    return confirmedTargetDecision(input, input.pathDifferenceMs);
   }
 
   if (input.applicability === 'hold') return { kind: 'hold' };
@@ -66,17 +76,7 @@ export function decideBootProbeMixerApplication(
     return { kind: 'hold' };
   }
 
-  if (input.activeMicLagMs !== null) {
-    if (
-      input.resultMicLagMs !== null
-      && input.activeMicLagMs !== input.resultMicLagMs
-    ) {
-      return { kind: 'set', micLagMs: input.resultMicLagMs };
-    }
-    return { kind: 'hold' };
-  }
-
   return input.resultMicLagMs === null
     ? { kind: 'hold' }
-    : { kind: 'set', micLagMs: input.resultMicLagMs };
+    : confirmedTargetDecision(input, input.resultMicLagMs);
 }

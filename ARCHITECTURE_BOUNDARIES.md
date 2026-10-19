@@ -133,6 +133,13 @@ validation retain their own PCM windows, analysis cancellation and evidence
 checks. `BootProbeCoordinator` owns the separate probe transaction; physical
 transport and mapper readiness remain ports supplied by the server.
 
+`CalibrationCoordinator` owns the shared schedule: service collection, expire
+probe requests, retire inherited route authority, synchronize alignment, analyze
+and request probes, reapply the boot baseline, reconcile content mapping, then
+admit content work. It also owns manual boot replacement and immediate legacy
+route retirement. The server takes its periodic mix-health snapshot after this
+transaction so telemetry sees the alignment settled by that tick.
+
 ### A measurement is a stage only if it occupies the room
 
 Timing is measured by strategies that cost the room very different things, and

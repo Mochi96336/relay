@@ -22,6 +22,6 @@ test('Backing registration keeps infrastructure admission, validation and role c
   assert.doesNotMatch(backing, /clearRobotContentTransition\(/);
   assert.doesNotMatch(backing, /takeController\.noteQualityEvent\('backing-transport/);
   assert.doesNotMatch(backing, /session\.setBackingExpected\(/);
-  assert.doesNotMatch(backing, /dropLegacyCalibrationForRobot\(/);
+  assert.doesNotMatch(backing, /calibrationCoordinator\.retireLegacyForRobot\(/);
   assert.doesNotMatch(backing, /startLiveSource\(/);
 });

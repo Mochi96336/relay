@@ -42,6 +42,8 @@ const MAX_MIC_GAIN_DB = 40;
 // through a PipeWire sink into backing:stdin. Advice that names the extension
 // is wrong there, and this page is the same page in both deployments.
 const ROBOT_MODE = new URLSearchParams(location.search).get('robot') === '1';
+for (const node of document.querySelectorAll('[data-extension-only]')) node.hidden = ROBOT_MODE;
+for (const node of document.querySelectorAll('[data-robot-only]')) node.hidden = !ROBOT_MODE;
 const INFRASTRUCTURE_KEY = new URLSearchParams(location.hash.slice(1)).get('infra') ?? '';
 
 let socket = null;
@@ -562,7 +564,7 @@ function renderSourceStatus(message) {
     : `network ${signed(message.micNetworkCompensationMs, ' ms')}`;
 
   captureState.textContent = !message.connected
-    ? 'Capture not connected · click the Relay extension icon on this tab.'
+    ? `Capture not connected · ${ROBOT_MODE ? '等待 backing bridge（robot-source.sh）連上。' : 'click the Relay extension icon on this tab.'}`
     : message.backingStreaming === false
       ? `⚠ 擷取來源已連線，但沒有音訊送進來${ROBOT_MODE ? ' · 檢查 backing bridge 與 PipeWire 路由。' : ' · 這個分頁重整過的話，請再點一次 Relay 擴充功能圖示。'}`
       : `● Capture connected · ${message.sampleRate ?? '--'} Hz · ${micState} · buffer ${message.prebufferMs ?? '--'} ms · timing ${timing}`;

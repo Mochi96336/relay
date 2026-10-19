@@ -11,7 +11,7 @@
     <main class="shell">
       <p class="eyebrow">RELAY / DESKTOP SOURCE</p>
       <h1>YouTube source</h1>
-      <p class="intro">這個分頁只跑在 Relay 電腦上。它讀 Server timeline，自動載入手機正在播的同一支 YouTube，然後讓 Chrome 擴充功能擷取這個分頁的實際輸出。</p>
+      <p class="intro">這個分頁只跑在 Relay 電腦上。它讀 Server timeline，自動載入手機正在播的同一支 YouTube，<span data-extension-only>然後讓 Chrome 擴充功能擷取這個分頁的實際輸出。</span><span data-robot-only hidden>Robot 的 PipeWire 路由再把這個分頁的實際輸出送回 Relay。</span></p>
 
       <section class="panel" aria-live="polite">
         <strong id="source-state">Waiting for phone timeline</strong>
@@ -85,13 +85,14 @@
         <div class="test-heading">
           <div>
             <strong>Chrome capture</strong>
-            <span>在這個分頁按 Relay 擴充功能圖示。連上後，它會把 tab audio 轉成 PCM 丟回本機 Relay。</span>
+            <span data-extension-only>在這個分頁按 Relay 擴充功能圖示。連上後，它會把 tab audio 轉成 PCM 丟回本機 Relay。</span>
+            <span data-robot-only hidden>Robot 模式不需要擴充功能：robot-source.sh 把 Chromium 的輸出經 PipeWire 送進 backing:stdin。</span>
           </div>
         </div>
         <p id="capture-state" class="hint">Capture not connected.</p>
       </section>
 
-      <p class="note">順序只要一次：手機開始 YouTube → 這頁按 Enable source audio → 在這頁點擴充功能。Mic 暫時斷線後可直接重連，不需要重新 Open source。</p>
+      <p class="note" data-extension-only>順序只要一次：手機開始 YouTube → 這頁按 Enable source audio → 在這頁點擴充功能。Mic 暫時斷線後可直接重連，不需要重新 Open source。</p>
     </main>
     <script type="module" src="/source.js"></script>
     <script type="module" src="/robot-player-watchdog.js"></script>

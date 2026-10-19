@@ -44,7 +44,7 @@ test('a joined B sets its own Mic gain, as the Mic owner does', async () => {
   assert.match(css, /body\[data-choir-guest="joined"\] \.mic-live-control \{\s*display: block;/);
   assert.match(mix, /storedNumber\(MIC_GAIN_KEY, 0, 40\)/);
   assert.match(mix, /type: 'choir-secondary-gain', micGainDb: micGainDb\(\)/);
-  assert.match(presence, /payload\.type === 'choir-secondary-gain'[\s\S]*?send\(\{ type: payload\.type, micGainDb: payload\.micGainDb \}\)/);
+  assert.match(presence, /choirCommandMessage\(event\.detail\)/);
   assert.match(runtime, /case 'choir-secondary-gain'[\s\S]*?session\.setSecondaryMicGainDb\(gainDb\)/);
 });
 
@@ -66,7 +66,7 @@ test('B starts its Mic only on its own tap and connects when the server asks for
   assert.match(app, /^import '\.\/choir-media-client\.js';/m);
   // The join tap itself starts capture: browsers require a gesture for the Mic.
   assert.match(app, /relay-choir-start-secondary-capture[\s\S]*?publishCommand\('choir-secondary-join'\)/);
-  assert.match(presence, /payload\.type === 'choir-secondary-join'/);
+  assert.match(presence, /import \{ choirCommandMessage \} from '\.\/choir-commands\.js'/);
   assert.match(media, /type === 'choir-media-ready'[\s\S]*?requestClaim\(\)/);
   assert.doesNotMatch(media, /roomEpoch|choir-room-ready/);
   assert.match(media, /wsUrl\(\{ compress: false \}\)/);

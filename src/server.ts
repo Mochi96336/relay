@@ -2502,7 +2502,6 @@ function reportMicRecovery(health: AudioUplinkHealth) {
   }
 }
 
-
 let lastMicDeviceReportKey: string | null = null;
 
 /**
@@ -2753,6 +2752,27 @@ function probeGeneration(target: ProbeTarget) {
   return target === 'mic' ? session.micGeneration : session.backingGeneration;
 }
 
+/** One boot probe side's timeline, as the mixer holds it. */
+function probeTimeline(target: ProbeTarget) {
+  return target === 'mic'
+    ? {
+      totalSamples: session.micTotalSamples,
+      read: (start: number, count: number) => session.readMic(start, count),
+      evidence: (start: number, count: number) => session.readMicEvidence(start, count),
+    }
+    : {
+      totalSamples: session.backingTotalSamples,
+      read: (start: number, count: number) => session.readBacking(start, count),
+      evidence: (start: number, count: number) => session.readBackingEvidence(start, count),
+    };
+}
+
+function peakMagnitude(samples: Int16Array) {
+  let peak = 0;
+  for (const sample of samples) peak = Math.max(peak, Math.abs(sample));
+  return peak;
+}
+
 function bootProbeContext() {
   return {
     sessionGeneration: session.generation,
@@ -2972,7 +2992,7 @@ function maybeFinishProbeAnalysis(nowMs: number) {
   const waiting = bootProbeRuntime.pendingAnalysis;
   if (!waiting) return;
 
-  const reached = waiting.target === 'mic' ? session.micTotalSamples : session.backingTotalSamples;
+  const reached = probeTimeline(waiting.target).totalSamples;
   const needed = waiting.windowStart + waiting.windowSamples;
   const sessionCurrent = session.active
     && waiting.sessionGeneration === session.generation;
@@ -3012,9 +3032,8 @@ function maybeFinishProbeAnalysis(nowMs: number) {
   const analysis = bootProbeRuntime.takeAnalysis();
   if (!analysis) return;
 
-  const rangeEvidence = analysis.target === 'mic'
-    ? session.readMicEvidence(analysis.windowStart, analysis.windowSamples)
-    : session.readBackingEvidence(analysis.windowStart, analysis.windowSamples);
+  const timeline = probeTimeline(analysis.target);
+  const rangeEvidence = timeline.evidence(analysis.windowStart, analysis.windowSamples);
   const evidenceDecision = decideBootProbeAnalysisEvidence({
     gapSamples: rangeEvidence.gapSamples,
     frontierMissingSamples: rangeEvidence.frontierMissingSamples,
@@ -3029,32 +3048,18 @@ function maybeFinishProbeAnalysis(nowMs: number) {
     return;
   }
 
-  const window = analysis.target === 'mic'
-    ? session.readMic(analysis.windowStart, analysis.windowSamples)
-    : session.readBacking(analysis.windowStart, analysis.windowSamples);
+  const window = timeline.read(analysis.windowStart, analysis.windowSamples);
   const { offsetSamples, correlation } = locateProbe(window, MIX_SAMPLE_RATE);
   const actualSample = analysis.windowStart + offsetSamples;
   const latencyMs = ((actualSample - analysis.targetSample) / MIX_SAMPLE_RATE) * 1000;
   bootProbeRuntime.noteCorrelation(analysis.target, correlation);
 
   if (PROBE_DEBUG) {
-    let peak = 0;
-    for (let i = 0; i < window.length; i += 1) {
-      const magnitude = Math.abs(window[i]);
-      if (magnitude > peak) peak = magnitude;
-    }
     const controlSeconds = 20;
-    const recent = analysis.target === 'mic'
-      ? session.readMic(reached - MIX_SAMPLE_RATE * controlSeconds, MIX_SAMPLE_RATE * controlSeconds)
-      : session.readBacking(reached - MIX_SAMPLE_RATE * controlSeconds, MIX_SAMPLE_RATE * controlSeconds);
-    let recentPeak = 0;
-    for (let i = 0; i < recent.length; i += 1) {
-      const magnitude = Math.abs(recent[i]);
-      if (magnitude > recentPeak) recentPeak = magnitude;
-    }
+    const recent = timeline.read(reached - MIX_SAMPLE_RATE * controlSeconds, MIX_SAMPLE_RATE * controlSeconds);
     console.log(
       `[probe] ${analysis.target} correlation=${correlation.toFixed(3)} latencyMs=${latencyMs.toFixed(0)}`
-      + ` windowPeak=${peak} recent${controlSeconds}sPeak=${recentPeak}`
+      + ` windowPeak=${peakMagnitude(window)} recent${controlSeconds}sPeak=${peakMagnitude(recent)}`
       + ` windowStart=${analysis.windowStart} needed=${needed} reached=${reached}`,
     );
   }
@@ -3337,7 +3342,6 @@ const queryProtocol = createRelayQueryProtocol<RelaySocket>({
   timingCalibrationStatusPayload: () => timingCalibrationStatusPayload(),
 });
 
-
 /**
  * Starts a Take the command handler has already admitted, at the mix's
  * authoritative frame boundary.
@@ -3584,17 +3588,11 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     const nowMs = performance.now();
     const productStatus = productStatusPayload(nowMs);
     if (!productStatus.actions.canStartTake) {
-      const blockedReason = productStatus.actions.startTakeBlockedReason;
-      if (blockedReason === null) {
-        rejectTakeCommand(socket, 'start', 'product-state-invalid');
-        return;
-      }
-      rejectTakeCommand(socket, 'start', blockedReason);
+      rejectTakeCommand(socket, 'start',
+        productStatus.actions.startTakeBlockedReason ?? 'product-state-invalid');
       return;
     }
-
     startTakeAtFrame(socket, socket.participantId, commandWallClockMs, nowMs);
-    return;
   },
   stopTake: (socket, payload) => {
     if (!socket.participantId) {
@@ -3610,7 +3608,6 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     const commandWallClockMs = Date.now();
     const nowMs = performance.now();
     stopTakeAtFrame(socket, socket.participantId, takeId, commandWallClockMs, nowMs);
-    return;
   },
   releaseMic: (socket) => {
     if (!socket.participantId) return;
@@ -4750,12 +4747,6 @@ wss.on('connection', (rawSocket, request) => {
     if (authenticationProtocol.dispatch(socket, payload)) return;
     if (registrationProtocol.dispatch(socket, payload)) return;
     if (robotLifecycleProtocol.dispatch(socket, payload)) return;
-
-
-
-
-
-
   });
 
   socket.on('close', () => {

@@ -23,9 +23,12 @@ function fixture() {
     content: {
       measurement,
       clearValidationBaseline: () => events.push('clear-validation'),
+      cancelValidation: () => { events.push('cancel-validation'); return true; },
       tick: () => events.push(`content:${state.mappingRevision}`),
     },
     probe: {
+      clear: () => events.push('probe-clear'),
+      abandon: () => events.push('probe-abandon'),
       expireRequest: () => { events.push('expire'); },
       finishAnalysis: () => { events.push('analyze'); },
       startIfReady: () => { events.push('probe-start'); },

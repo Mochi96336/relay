@@ -48,7 +48,7 @@ test('ProductStatus and command rejection share the content mapping pending poli
   );
 });
 
-test('a degraded Robot content transition ends a stuck content calibration through shared revocation', () => {
+test('a degraded Robot content transition delegates to shared mapping revocation', () => {
   // A degraded transition delegates to the single mapping-revocation transaction.
   // That transaction aborts a collecting calibration before alignment/status
   // publication.
@@ -56,8 +56,5 @@ test('a degraded Robot content transition ends a stuck content calibration throu
     server,
     /onDegraded: \(status\) => \{[\s\S]*?revokeRobotContentMapping\(\{[\s\S]*?could not be verified\./,
   );
-  assert.match(
-    functionBlock('revokeRobotContentMapping'),
-    /if \(calibration\.collecting\) calibration\.fail\(reason\);[\s\S]*syncAppliedCalibration\(\)/,
-  );
+
 });

@@ -646,10 +646,7 @@ function micControlClosed(socket: RelaySocket) {
     maybeStopLiveSourceWhenUnarmed();
   }
 
-  if (calibration.collecting) {
-    calibration.fail('Microphone disconnected during calibration.');
-  }
-  if (cancelActiveContentValidation()) broadcastJson(timingCalibrationStatusPayload());
+  calibrationCoordinator.interruptContent('Microphone disconnected during calibration.', performance.now());
   broadcastStatus();
   return true;
 }
@@ -880,21 +877,7 @@ function revokeRobotContentMapping({ reason }: { reason: string }) {
   // still match the live context and be re-applied after a fresh delta.
   sourceRuntime.invalidateMapping();
 
-  // Discard an idle primed backup before aborting a collecting run. A
-  // collecting CalibrationSession keeps its own working evidence; the
-  // generation fence above already prevents any primed evidence from being
-  // reused in a reference frame where it was not measured.
-  calibration.discardPrimedContent();
-  clearContentValidationBaseline();
-
-  // Analysis is asynchronous. A worker that survives this generation change
-  // would otherwise promote evidence captured in the retired frame while
-  // stamping it with the context that is live when analysis completes.
-  if (calibration.collecting) calibration.fail(reason);
-
-  syncAppliedCalibration();
-  broadcastJson(sourceStatusPayload());
-  broadcastJson(timingCalibrationStatusPayload());
+  calibrationCoordinator.mappingRevoked(reason);
 }
 
 /**
@@ -1154,10 +1137,6 @@ const calibrationCoordinator = new CalibrationCoordinator(COLLECTION_SILENCE_GRA
   timingChanged: () => broadcastJson(timingCalibrationStatusPayload()),
   sourceChanged: () => broadcastJson(sourceStatusPayload()),
 });
-
-function clearContentValidationBaseline() {
-  contentCalibration.clearValidationBaseline();
-}
 
 function cancelActiveContentValidation(nowMs = performance.now()) {
   return contentCalibration.cancelValidation(nowMs);
@@ -1887,15 +1866,7 @@ function revokePublisherTransport(message: string) {
  * along with the timing kind and the auto-calibration schedule.
  */
 function invalidateMicTiming(message: string) {
-  clearBootCalibrationState();
-  clearContentValidationBaseline();
-  if (calibration.collecting) calibration.fail(message);
-  else calibration.reset();
-  timingRuntime.clearCalibrationKind();
-  timingRuntime.resetAutoCalibrationSchedule();
-  syncAppliedCalibration();
-  broadcastJson(timingCalibrationStatusPayload());
-  broadcastJson(sourceStatusPayload());
+  calibrationCoordinator.invalidateTiming(message);
 }
 
 /**
@@ -1907,11 +1878,7 @@ function invalidateMicTiming(message: string) {
  * explain what changed.
  */
 function retireMicCaptureTiming() {
-  clearBootCalibrationState();
-  clearContentValidationBaseline();
-  syncAppliedCalibration();
-  broadcastJson(timingCalibrationStatusPayload());
-  broadcastJson(sourceStatusPayload());
+  calibrationCoordinator.micCaptureReplaced();
 }
 
 const sampleSongFallback = new SampleSongFallback();
@@ -1969,19 +1936,14 @@ function startLiveSource() {
 function restartLiveSourceAfterMicReconnect() {
   if (!session.active || !backingRuntime.connected()) return;
   refreshLiveMicNetworkCompensation();
-  if (calibration.collecting) {
-    calibration.fail('Microphone reconnected during calibration. Start calibration again.');
-  }
-  if (cancelActiveContentValidation()) broadcastJson(timingCalibrationStatusPayload());
+  calibrationCoordinator.interruptContent(
+    'Microphone reconnected during calibration. Start calibration again.', performance.now(),
+  );
   broadcastJson(sourceStatusPayload());
 }
 
 function abandonProbeRun() {
   bootProbe.abandon();
-}
-
-function clearBootCalibrationState() {
-  bootProbe.clear();
 }
 
 /**
@@ -1996,15 +1958,11 @@ function stopLiveSource() {
   backingRuntime.retireRobotRoute();
   if (session.active) {
     takeController.endMix();
-    clearBootCalibrationState();
-    clearContentValidationBaseline();
     robotPlayerOffset.reset();
     robotContentTimeline.reset();
     clearRobotContentTransition();
     session.stop();
-    calibration.reset();
-    timingRuntime.clearCalibrationKind();
-    timingRuntime.resetAutoCalibrationSchedule();
+    calibrationCoordinator.reset();
     broadcastJson(timingCalibrationStatusPayload());
     broadcastJson(sourceStatusPayload());
     broadcastStatus();
@@ -2076,22 +2034,7 @@ function expireBackingGrace() {
  */
 function micCaptureRestarted() {
   takeController.noteQualityEvent('mic-capture-restarted');
-  abandonProbeRun();
-  clearContentValidationBaseline();
-
-  if (calibration.collecting) {
-    // CalibrationSession.fail() owns its settled publication callback, so
-    // do not publish the same transition a second time from this path.
-    calibration.fail('Microphone capture restarted during calibration. Start calibration again.');
-    return;
-  }
-
-  syncAppliedCalibration();
-  // Timing must be visible before source status for a new capture
-  // generation, otherwise observers can briefly pair the new source with
-  // stale applied timing.
-  broadcastJson(timingCalibrationStatusPayload());
-  broadcastJson(sourceStatusPayload());
+  calibrationCoordinator.captureRestarted('mic');
 }
 
 function processPublisherFrame(frame: PcmFrame) {
@@ -3667,15 +3610,6 @@ function robotSourceActivated(previous: RelaySocket | null, replaced: boolean) {
   if (replaced && previous) {
     sendJson(previous, { type: 'robot-source-replaced' });
     takeController.noteQualityEvent('robot-source-replaced');
-    abandonProbeRun();
-    // Replacing the active Robot source bumps the source generation, so a
-    // calibration still in flight belongs to a reference frame that is gone.
-    // Its async analysis is stamped with the context live at completion, so
-    // it has to be aborted here rather than allowed to promote under the new
-    // generation.
-    if (calibration.collecting) {
-      calibration.fail('The Robot source changed during calibration. Start calibration again.');
-    }
   } else if (!previous && session.active) {
     takeController.noteQualityEvent('robot-source-connected');
   }
@@ -3684,10 +3618,7 @@ function robotSourceActivated(previous: RelaySocket | null, replaced: boolean) {
   robotPlayerOffset.reset();
   robotContentTimeline.reset();
   clearRobotContentTransition();
-  calibrationCoordinator.retireLegacyForRobot(performance.now());
-  syncAppliedCalibration();
-  broadcastJson(sourceStatusPayload());
-  broadcastJson(timingCalibrationStatusPayload());
+  calibrationCoordinator.robotSourceActivated(replaced, performance.now());
 }
 
 const robotLifecycleProtocol = createRelayRobotLifecycleProtocol<RelaySocket>({
@@ -3714,17 +3645,7 @@ function backingCaptureRestarted() {
   robotBackingPath = null;
   clearRobotContentTransition();
   takeController.noteQualityEvent('backing-capture-restarted');
-  abandonProbeRun();
-  clearContentValidationBaseline();
-
-  if (calibration.collecting) {
-    calibration.fail('Backing capture restarted during calibration. Start calibration again.');
-    return;
-  }
-
-  syncAppliedCalibration();
-  broadcastJson(timingCalibrationStatusPayload());
-  broadcastJson(sourceStatusPayload());
+  calibrationCoordinator.captureRestarted('backing');
 }
 
 /**
@@ -3800,18 +3721,7 @@ function robotSourceClosed(socket: RelaySocket) {
   robotPlayerOffset.reset();
   robotContentTimeline.reset();
   clearRobotContentTransition();
-  abandonProbeRun();
-  // Detaching the Robot source bumps the source generation, so any calibration
-  // still in flight was measured in a reference frame that no longer exists.
-  // Its analysis runs asynchronously and is stamped with the context that is
-  // live when the worker answers, so leaving it alive lets evidence from the
-  // old generation be promoted under the new one.
-  if (calibration.collecting) {
-    calibration.fail('The Robot source changed during calibration. Start calibration again.');
-  }
-  syncAppliedCalibration();
-  broadcastJson(sourceStatusPayload());
-  broadcastJson(timingCalibrationStatusPayload());
+  calibrationCoordinator.robotSourceDisconnected();
 }
 
 /** The Desktop Source (backing) closed: the mix stops expecting the song. */
@@ -3822,10 +3732,7 @@ function backingClosed(socket: RelaySocket) {
   clearRobotContentTransition();
   backingRuntime.detach(socket);
   session.setBackingExpected(false);
-  if (calibration.collecting) {
-    calibration.fail('Desktop Source disconnected during calibration.');
-  }
-  if (cancelActiveContentValidation()) broadcastJson(timingCalibrationStatusPayload());
+  calibrationCoordinator.interruptContent('Desktop Source disconnected during calibration.', performance.now());
   broadcastJson(sourceStatusPayload());
   broadcastStatus();
 }

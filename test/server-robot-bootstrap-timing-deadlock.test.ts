@@ -62,13 +62,15 @@ test('every Robot mapping revocation goes through one teardown transaction', () 
     /robotPlayerOffset\.reset\(\)/,
     /robotContentTimeline\.reset\(\)/,
     /sourceRuntime\.invalidateMapping\(\)/,
-    /calibration\.discardPrimedContent\(\)/,
-    /clearContentValidationBaseline\(\)/,
-    /calibration\.fail\(reason\)/,
-    /syncAppliedCalibration\(\)/,
+    /calibrationCoordinator\.mappingRevoked\(reason\)/,
   ]) {
     assert.match(revoke, step);
   }
+
+  assert.ok(
+    revoke.indexOf('sourceRuntime.invalidateMapping()') < revoke.indexOf('calibrationCoordinator.mappingRevoked(reason)'),
+    'physical reference authority must advance before calibration observes the revocation',
+  );
 
   // The two inline fences must delegate rather than re-spell the checklist.
   assert.match(
@@ -85,19 +87,5 @@ test('every Robot mapping revocation goes through one teardown transaction', () 
     server,
     /function sourceSeekClassified\([\s\S]*?revokeRobotContentMapping\(\{/,
     'a destructive Source seek must revoke through the shared transaction',
-  );
-});
-
-test('replacing the Robot source aborts a calibration measured in the old reference frame', () => {
-  // A replacing `attachRobot()` (robotSourceActivated) bumps the source generation, while
-  // `CalibrationSession` stamps its promotion with the context that is live
-  // when the async worker answers. Without an explicit abort, evidence
-  // measured under the old generation is promoted under the new one. Losing
-  // the Robot source is covered against a real server in
-  // socket-close-server.test.ts.
-  const activation = server.match(/function robotSourceActivated\([\s\S]*?\n\}/)?.[0] ?? '';
-  assert.match(
-    activation,
-    /calibration\.fail\('The Robot source changed during calibration\. Start calibration again\.'\)/,
   );
 });

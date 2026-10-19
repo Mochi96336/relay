@@ -13,18 +13,17 @@ import { localFileMix } from './local-file-mix.js';
 const micBitratePolicy = new MicBitratePolicy();
 const micCodecConfig = await fetch('/mic-codec-config', { cache: 'no-store', signal: AbortSignal.timeout(3000) })
   .then(response => response.ok ? response.json() : { opus: false }).catch(() => ({ opus: false }));
-let micOpus = null;
 import { classifyCaptureDispatch } from './capture-dispatch.js';
 import { shouldRequestAudioResume } from './audio-context-recovery.js';
 import { MicCaptureRecoveryWatchdog } from './mic-capture-recovery.js';
-import { MicStartupCancelledError, MicStartupGate } from './mic-startup.js';
+import { MicStartupCancelledError } from './mic-startup.js';
+import { PublisherSession } from './publisher-session.js';
 import {
   captureClippingSnapshot,
   captureLevelSnapshot,
   enforceUnprocessedCapture,
   readCaptureSettings,
 } from './capture-observability.js';
-import { MicLifecycleTransaction } from './mic-lifecycle-transaction.js';
 import { splitPcmForPacketLimit } from './audio-packetizer.js';
 import { createReconnectBackoff } from './reconnect-backoff.js';
 import { wsUrl } from './ws-url.js';
@@ -79,25 +78,15 @@ const PUBLISHER_BROADCAST_TYPES = [
 ];
 const MIC_CAPTURE_WATCHDOG_INTERVAL_MS = 250;
 
-let socket = null;
 let socketReconnectTimer = null;
-let audioContext = null;
-let mediaStream = null;
-let activeNode = null;
-let activeCaptureGraph = null;
 const captureClockRecovery = new CaptureClockRecovery();
-let captureGraphEpoch = 0;
-let captureGraphRebuildPromise = null;
 let captureWatchdogTimer = null;
-let publisherActive = false;
 let publisherAuthorityFresh = false;
 let publisherMixSettingsFresh = false;
 let publisherSourceStatusFresh = false;
-let publisherStarting = false;
-let publisherStartRequest = null;
-const micStartup = new MicStartupGate();
+const publisherSession = new PublisherSession({ closeMedia: () => audioTransport.close() });
+const micStartup = publisherSession.startup;
 const micCaptureRecovery = new MicCaptureRecoveryWatchdog();
-const micLifecycle = new MicLifecycleTransaction();
 const publisherCommandLiveness = new PublisherCommandLiveness();
 let publishedPublisherCommandChannelFresh = false;
 let latestLocalMicLevel = null;
@@ -106,13 +95,12 @@ let roomSongAvailable = null;
 let roomCanStartCalibration = null;
 let pendingPublisherTakeoverOwnerId = null;
 const calibrationProbePlayback = new CalibrationProbePlayback({
-  getCapture: () => ({ context: audioContext, sessionEpoch: publisherSessionEpoch, generation: captureGeneration >>> 0 }),
+  getCapture: () => ({ context: publisherSession.context, sessionEpoch: publisherSession.epoch, generation: publisherSession.generation >>> 0 }),
   isCurrentCapture: isCurrentPublisherCapture,
-  isControlOpen: () => socket?.readyState === WebSocket.OPEN,
+  isControlOpen: () => publisherSession.socket?.readyState === WebSocket.OPEN,
   sendControl: (message) => audioTransport.sendControlJson(message),
   onDisconnected: markPublisherAuthorityStale,
 });
-let publisherSessionEpoch = 0;
 
 let captureInputGapSamples = 0;
 
@@ -126,33 +114,25 @@ function resetPublisherHealthRequestCorrelation() {
 let captureInputMuted = false;
 let publisherControlConnections = 0;
 let audioUplinkHealthTimer = null;
-// Seeded from the clock, not 0: a page reload starts a new module scope and
-// would otherwise reuse the same first-ever generation number, which the
-// server take as "nothing changed" and skip re-anchoring the mic timeline to
-// the new capture. Wire format is a Uint32 (see framePcm below); the seconds
-// component keeps this unique across any reload that is not the same
-// millisecond as a previous one, which a real reload never is.
-let captureGeneration = Date.now() >>> 0;
-let captureGenerationReason = 'page-initialized';
 let captureSampleCursor = 0;
 let sampleSongCapture = null;
 window.addEventListener('relay:sample-song-anchor-request', (event) => {
   const request = event.detail;
   const anchor = sampleSongCapture;
-  if (!request || !anchor || !publisherActive || !audioContext
-      || audioContext.state !== 'running' || anchor.generation !== captureGeneration) return;
+  if (!request || !anchor || !publisherSession.active || !publisherSession.context
+      || publisherSession.context.state !== 'running' || anchor.generation !== publisherSession.generation) return;
   const age = performance.now() - anchor.observedAt;
   if (age < 0 || age > 250) return;
   const sampledAt = Number(request.sampledAtPerformanceMs);
-  const contextAtObservation = audioContext.currentTime;
+  const contextAtObservation = publisherSession.context.currentTime;
   const now = performance.now();
   if (!Number.isFinite(sampledAt) || now - sampledAt < 0 || now - sampledAt > 100) return;
   const index = anchor.firstSampleIndex
-    + (contextAtObservation - anchor.contextTime + (sampledAt - now) / 1000) * audioContext.sampleRate;
+    + (contextAtObservation - anchor.contextTime + (sampledAt - now) / 1000) * publisherSession.context.sampleRate;
   if (!Number.isFinite(index)) return;
   request.captureAnchor = {
-    generation: captureGeneration, sampleRate: audioContext.sampleRate,
-    sampleIndex: anchor.firstSampleIndex, mediaDeltaSeconds: (anchor.firstSampleIndex - index) / audioContext.sampleRate, uncertaintyMs: 40,
+    generation: publisherSession.generation, sampleRate: publisherSession.context.sampleRate,
+    sampleIndex: anchor.firstSampleIndex, mediaDeltaSeconds: (anchor.firstSampleIndex - index) / publisherSession.context.sampleRate, uncertaintyMs: 40,
   };
 });
 let capturePacketSequence = 0;
@@ -199,18 +179,18 @@ function audioUplinkHealthPayload(healthRequestId) {
   return {
     type: 'audio-uplink-health',
     version: 1,
-    captureGeneration: captureGeneration >>> 0,
+    captureGeneration: publisherSession.generation >>> 0,
     healthRequestId,
-    captureGenerationReason,
+    captureGenerationReason: publisherSession.generationReason,
     capturedSamples: captureSampleCursor,
     capturedAtPerformanceMs: performance.now(),
     captureClock: {
-      contextSeconds: audioContext?.currentTime ?? null,
-      originContextSeconds: activeCaptureGraph?.captureClockOriginContextTime ?? null,
+      contextSeconds: publisherSession.context?.currentTime ?? null,
+      originContextSeconds: publisherSession.graph?.captureClockOriginContextTime ?? null,
       lastChunkContextSeconds: sampleSongCapture?.contextTime ?? null,
       lastChunkSampleIndex: sampleSongCapture?.firstSampleIndex ?? null,
       lastChunkObservedAtMs: sampleSongCapture?.observedAt ?? null,
-      sampleRate: audioContext?.sampleRate ?? null,
+      sampleRate: publisherSession.context?.sampleRate ?? null,
     },
     inputGapSamples: captureInputGapSamples,
     inputGapActive: micCaptureRecovery.status().inputGapActive,
@@ -220,20 +200,20 @@ function audioUplinkHealthPayload(healthRequestId) {
     captureLevel: captureLevelSnapshot(latestLocalMicLevel),
     ...uplinkEvidenceReport(latestLocalMicLevel),
     controlReconnects: Math.max(0, publisherControlConnections - 1),
-    transport: { ...audioTransport.stats(), codec: micOpus ? 'opus' : 'pcm16',
-      codecBitrate: micOpus ? micOpus.bitrate : (audioContext?.sampleRate ?? 48000) * 16,
-      ...(micOpus ? { codecBitrateReason: micBitratePolicy.status().reason } : {}) },
+    transport: { ...audioTransport.stats(), codec: publisherSession.encoder ? 'opus' : 'pcm16',
+      codecBitrate: publisherSession.encoder ? publisherSession.encoder.bitrate : (publisherSession.context?.sampleRate ?? 48000) * 16,
+      ...(publisherSession.encoder ? { codecBitrateReason: micBitratePolicy.status().reason } : {}) },
   };
 }
 
 function adaptMicBitrate() {
-  if (!micOpus || !publisherActive) return;
+  if (!publisherSession.encoder || !publisherSession.active) return;
   const stats = audioTransport.stats();
   const recovery = stats.recovery;
   const nowMs = performance.now();
   const decision = micBitratePolicy.observe({
-    nowMs, generation: captureGeneration, path: stats.path,
-    eligible: document.visibilityState !== 'hidden' && audioContext?.state === 'running'
+    nowMs, generation: publisherSession.generation, path: stats.path,
+    eligible: document.visibilityState !== 'hidden' && publisherSession.context?.state === 'running'
       && !captureInputMuted && !micCaptureRecovery.status().inputGapActive
       && sampleSongCapture !== null && nowMs - sampleSongCapture.observedAt < 1500,
     congestedRejects: stats.webSocketCongestedRejects + stats.webTransportCongestedRejects,
@@ -242,13 +222,13 @@ function adaptMicBitrate() {
     queueAgeMs: stats.path === 'websocket' ? recovery.queueAgeMs : 0,
     mixPlayable: recovery.mixPlayable,
   });
-  micOpus.setBitrate(decision.bitrate);
+  publisherSession.encoder.setBitrate(decision.bitrate);
 }
 
 function sendAudioUplinkHealth() {
   maintainPublisherCommandChannel();
   adaptMicBitrate();
-  if (!publisherActive || socket?.readyState !== WebSocket.OPEN) return false;
+  if (!publisherSession.active || publisherSession.socket?.readyState !== WebSocket.OPEN) return false;
   const sentAtMs = performance.now();
   const healthRequestId = publisherCommandLiveness.beginHealthRequest(sentAtMs);
   if (healthRequestId === null) return false;
@@ -275,8 +255,8 @@ function captureSnapshot() {
   return {
     nowMs: performance.now(),
     visible: document.visibilityState !== 'hidden',
-    contextState: audioContext?.state ?? 'closed',
-    contextTime: audioContext?.currentTime ?? 0,
+    contextState: publisherSession.context?.state ?? 'closed',
+    contextTime: publisherSession.context?.currentTime ?? 0,
     sampleCursor: captureSampleCursor,
     inputMuted: captureInputMuted,
   };
@@ -288,8 +268,8 @@ function stopCaptureWatchdog() {
 }
 
 function startCaptureWatchdog(
-  sessionEpoch = publisherSessionEpoch,
-  expectedGeneration = captureGeneration >>> 0,
+  sessionEpoch = publisherSession.epoch,
+  expectedGeneration = publisherSession.generation >>> 0,
 ) {
   stopCaptureWatchdog();
   captureWatchdogTimer = setInterval(() => {
@@ -297,7 +277,7 @@ function startCaptureWatchdog(
     const decision = micCaptureRecovery.observe(captureSnapshot());
     if (decision.resume) resumePublisherAudioContext();
     if (decision.rebuild) void rebuildPublisherCaptureGraph('pcm-stall');
-    if (!captureGraphRebuildPromise && captureClockRecovery.observe(captureSnapshot())) {
+    if (!publisherSession.recovering && captureClockRecovery.observe(captureSnapshot())) {
       void rebuildPublisherAudioContext();
     }
   }, MIC_CAPTURE_WATCHDOG_INTERVAL_MS);
@@ -308,39 +288,27 @@ function advanceCaptureGeneration(reason) {
   // AudioContext.resume() continuation and nodes already scheduled into the
   // future before changing the capture-clock identity.
   calibrationProbePlayback.retire();
-  captureGeneration = ((captureGeneration >>> 0) + 1) >>> 0;
-  captureGenerationReason = reason;
+  publisherSession.advanceGeneration(reason);
   captureSampleCursor = 0;
   sampleSongCapture = null;
   capturePacketSequence = 0;
   micBitratePolicy.reset();
-  micOpus?.setBitrate(128000);
-  micOpus?.reset(captureGeneration);
+  publisherSession.encoder?.setBitrate(128000);
+  publisherSession.encoder?.reset(publisherSession.generation);
   captureInputGapSamples = 0;
   resetUplinkEvidence();
-  captureInputMuted = mediaStream?.getAudioTracks?.()[0]?.muted === true;
+  captureInputMuted = publisherSession.stream?.getAudioTracks?.()[0]?.muted === true;
   latestLocalMicLevel = null;
   audioTransport.resetStats();
   dispatchRelayEvent('relay-microphone-capture-generation', {
-    captureGeneration: captureGeneration >>> 0,
+    captureGeneration: publisherSession.generation >>> 0,
     reason,
   });
-  return captureGeneration >>> 0;
-}
-
-function disposeCaptureGraph(graph) {
-  graph?.dispose();
+  return publisherSession.generation >>> 0;
 }
 
 function captureGraphIsCurrent(graph) {
-  return Boolean(
-    graph
-    && activeCaptureGraph === graph
-    && graph.epoch === captureGraphEpoch
-    && isCurrentPublisherSession(graph.sessionEpoch)
-    && mediaStream === graph.stream
-    && audioContext === graph.context
-  );
+  return publisherSession.isCurrentGraph(graph);
 }
 
 function rebuildCaptureForInputDeviceChange(graph) {
@@ -349,7 +317,7 @@ function rebuildCaptureForInputDeviceChange(graph) {
 
 function announceCaptureRecovered() {
   dispatchRelayEvent('relay-microphone-recovered', {
-    captureGeneration: captureGeneration >>> 0,
+    captureGeneration: publisherSession.generation >>> 0,
     sampleCursor: captureSampleCursor,
   });
   sendAudioUplinkHealth();
@@ -399,7 +367,7 @@ function handleCaptureWorkletMessage(event, graph) {
         };
         dispatchRelayEvent('relay-local-mic-level', {
           active: true,
-          captureGeneration: captureGeneration >>> 0,
+          captureGeneration: publisherSession.generation >>> 0,
           peakDbfs,
           rmsDbfs,
           spectrumBands,
@@ -457,7 +425,7 @@ function handleCaptureWorkletMessage(event, graph) {
   captureSampleCursor += pcm.byteLength / 2;
   if (Number.isFinite(pcmMessage.capturedAtContextTime)) {
     sampleSongCapture = {
-      generation: captureGeneration, firstSampleIndex: chunkFirstSampleIndex,
+      generation: publisherSession.generation, firstSampleIndex: chunkFirstSampleIndex,
       contextTime: pcmMessage.capturedAtContextTime, observedAt: performance.now(),
     };
   }
@@ -483,8 +451,8 @@ function handleCaptureWorkletMessage(event, graph) {
 
   submitMicVisualAnalysis(graph, pcm);
 
-  if (micOpus) {
-    if (micOpus.encode(pcm, capturePacketSequence, chunkFirstSampleIndex)) {
+  if (publisherSession.encoder) {
+    if (publisherSession.encoder.encode(pcm, capturePacketSequence, chunkFirstSampleIndex)) {
       capturePacketSequence = (capturePacketSequence + 1) >>> 0;
     }
     returnCaptureBuffer(graph, pcm);
@@ -504,7 +472,7 @@ function handleCaptureWorkletMessage(event, graph) {
     const segment = pending.shift();
     const firstSampleIndex = chunkFirstSampleIndex + segment.sampleOffset;
     const sequence = capturePacketSequence;
-    const packet = framePcm(segment.pcm, captureGeneration, sequence, firstSampleIndex);
+    const packet = framePcm(segment.pcm, publisherSession.generation, sequence, firstSampleIndex);
     let sendResult = audioTransport.send(packet);
 
     if (!sendResult.sent && sendResult.reason === 'packet-too-large') {
@@ -567,7 +535,7 @@ function handleCaptureProcessorError(graph) {
 
 function installCaptureGraph(sessionEpoch, captureStream, captureContext) {
   const graph = createMicCaptureGraph({
-    epoch: captureGraphEpoch + 1,
+    epoch: publisherSession.graphEpoch + 1,
     sessionEpoch, stream: captureStream, context: captureContext,
     isCurrent: captureGraphIsCurrent,
     onCaptureMessage: handleCaptureWorkletMessage,
@@ -578,10 +546,7 @@ function installCaptureGraph(sessionEpoch, captureStream, captureContext) {
   });
   // No callback is admitted until all graph resources are installed. Neither
   // failed preparation nor graph disposal owns publisher stream/context teardown.
-  captureGraphEpoch = graph.epoch;
-  activeCaptureGraph = graph;
-  activeNode = graph.capture;
-  return graph;
+  return publisherSession.adoptGraph(sessionEpoch, graph) ? graph : null;
 }
 
 // recorder.js reads this so it can warn when Solo recording is started on the
@@ -589,7 +554,7 @@ function installCaptureGraph(sessionEpoch, captureStream, captureContext) {
 window.relayActiveRole = null;
 
 function publisherCommandChannelFresh(nowMs = performance.now()) {
-  return socket?.readyState === WebSocket.OPEN
+  return publisherSession.socket?.readyState === WebSocket.OPEN
     && publisherCommandLiveness.status(nowMs).fresh;
 }
 
@@ -600,7 +565,7 @@ function publisherCommandAuthority(serverAllowed = true) {
       && publisherSourceStatusFresh,
     lastKnownSnapshot: lastKnownControls(),
     commandChannelFresh: publisherCommandChannelFresh(),
-    authorized: publisherActive,
+    authorized: publisherSession.active,
     serverAllowed,
   });
 }
@@ -625,12 +590,12 @@ function maintainPublisherCommandChannel() {
   const state = publisherCommandLiveness.status(performance.now());
   if (
     state.reconnect
-    && publisherActive
-    && socket?.readyState === WebSocket.OPEN
+    && publisherSession.active
+    && publisherSession.socket?.readyState === WebSocket.OPEN
   ) {
     publishPublisherCommandAuthority();
     updateSingerControls();
-    const staleSocket = socket;
+    const staleSocket = publisherSession.socket;
     try {
       staleSocket.close(4000, 'publisher command ack stale');
     } catch {
@@ -653,14 +618,13 @@ function markPublisherAuthorityStale() {
   updateSingerControls();
 }
 
-function setPublisherActive(active) {
-  publisherActive = Boolean(active);
-  if (!publisherActive) resetPublisherCommandFreshness();
+function publishLocalMicState() {
+  if (!publisherSession.active) resetPublisherCommandFreshness();
   // listen.js / recorder.js consume the legacy role, while Presence consumes
   // the explicit local lifecycle event so Release never depends on a server
   // ownership snapshot arriving first.
-  window.relayActiveRole = publisherActive ? 'publisher' : null;
-  dispatchRelayEvent('relay-microphone-local-state', { active: publisherActive });
+  window.relayActiveRole = publisherSession.active ? 'publisher' : null;
+  dispatchRelayEvent('relay-microphone-local-state', { active: publisherSession.active });
   publishPublisherCommandAuthority();
 }
 
@@ -749,17 +713,16 @@ function dispatchRelayEvent(type, detail = {}) {
 }
 
 function finishMicrophoneSession(reason, { releaseMic = false } = {}) {
-  return micLifecycle.run({
+  return publisherSession.end({
     stop: () => stop({ releaseMic }),
-    isCurrent: (stoppedEpoch) => publisherSessionEpoch === stoppedEpoch,
     onEnded: () => dispatchRelayEvent('relay-microphone-ended', { reason }),
   });
 }
 
 function handleServerMessage(
   message,
-  sessionEpoch = publisherSessionEpoch,
-  expectedGeneration = captureGeneration >>> 0,
+  sessionEpoch = publisherSession.epoch,
+  expectedGeneration = publisherSession.generation >>> 0,
 ) {
   if (message.type === 'error') {
     // Protocol errors are not transport failures. Retrying the publisher after
@@ -889,17 +852,12 @@ function handleServerMessage(
   if (message.type === 'mix-health') return;
 }
 
-function canKeepPublishing() {
-  return publisherActive && Boolean(mediaStream) && Boolean(audioContext);
-}
-
 function isCurrentPublisherSession(sessionEpoch) {
-  return publisherSessionEpoch === sessionEpoch && canKeepPublishing();
+  return publisherSession.isCurrentSession(sessionEpoch);
 }
 
 function isCurrentPublisherCapture(sessionEpoch, expectedGeneration) {
-  return isCurrentPublisherSession(sessionEpoch)
-    && (captureGeneration >>> 0) === (expectedGeneration >>> 0);
+  return publisherSession.isCurrentCapture(sessionEpoch, expectedGeneration);
 }
 
 /**
@@ -913,10 +871,10 @@ function isCurrentPublisherCapture(sessionEpoch, expectedGeneration) {
  * phone, and the only way out was releasing and re-taking the microphone.
  */
 function resumePublisherAudioContext() {
-  if (!publisherActive || !audioContext) return;
-  if (!shouldRequestAudioResume(audioContext.state)) return;
+  if (!publisherSession.active || !publisherSession.context) return;
+  if (!shouldRequestAudioResume(publisherSession.context.state)) return;
   try {
-    const pending = audioContext.resume();
+    const pending = publisherSession.context.resume();
     if (pending && typeof pending.catch === 'function') {
       pending.catch((error) => console.warn('Microphone AudioContext resume failed', error));
     }
@@ -926,21 +884,21 @@ function resumePublisherAudioContext() {
 }
 
 function beginCaptureRecovery(reason) {
-  if (!publisherActive || !audioContext) return;
+  if (!publisherSession.active || !publisherSession.context) return;
   micCaptureRecovery.beginRecovery(captureSnapshot(), reason);
   resumePublisherAudioContext();
 }
 
 function recoverPublisherAudio() {
-  if (!publisherActive) return;
+  if (!publisherSession.active) return;
   const foreground = micCaptureRecovery.noteForeground(captureSnapshot());
   resumePublisherAudioContext();
   if (foreground.rebuild) void rebuildPublisherCaptureGraph('foreground-discontinuity');
 }
 
 function schedulePublisherReconnect(
-  sessionEpoch = publisherSessionEpoch,
-  expectedGeneration = captureGeneration >>> 0,
+  sessionEpoch = publisherSession.epoch,
+  expectedGeneration = publisherSession.generation >>> 0,
 ) {
   if (!isCurrentPublisherCapture(sessionEpoch, expectedGeneration)) return;
   clearSocketReconnect();
@@ -956,23 +914,18 @@ function schedulePublisherReconnect(
   socketReconnectTimer = timer;
 }
 
-function adoptSocket(ws) {
-  const previous = socket;
-  socket = ws;
+function adoptSocket(ws, sessionEpoch, expectedGeneration) {
+  if (!publisherSession.bindSocket(sessionEpoch, expectedGeneration, ws)) return false;
   resetPublisherHealthRequestCorrelation();
   resetPublisherCommandFreshness();
   publishPublisherCommandAuthority();
   updateSingerControls();
-  if (previous && previous !== ws) {
-    try {
-      previous.close();
-    } catch {}
-  }
+  return true;
 }
 
 async function connectPublisherSocket(
-  sessionEpoch = publisherSessionEpoch,
-  expectedGeneration = captureGeneration >>> 0,
+  sessionEpoch = publisherSession.epoch,
+  expectedGeneration = publisherSession.generation >>> 0,
 ) {
   if (!isCurrentPublisherCapture(sessionEpoch, expectedGeneration)) return;
   clearSocketReconnect();
@@ -983,18 +936,19 @@ async function connectPublisherSocket(
     return;
   }
 
-  adoptSocket(ws);
+  if (!adoptSocket(ws, sessionEpoch, expectedGeneration)) return;
+  if (!isCurrentPublisherCapture(sessionEpoch, expectedGeneration) || publisherSession.socket !== ws) return;
   publisherReconnectBackoff.noteConnected(performance.now());
 
   const registration = {
     type: 'register',
     role: 'publisher',
-    sampleRate: audioContext.sampleRate,
+    sampleRate: publisherSession.context.sampleRate,
     captureGeneration: expectedGeneration,
     initialSequence: capturePacketSequence >>> 0,
     audioPacketVersion: AUDIO_PACKET_VERSION,
     // The capture this registration describes already holds a local song.
-    premixed: activeCaptureGraph?.premixed === true,
+    premixed: publisherSession.graph?.premixed === true,
   };
   micBitratePolicy.floor = registration.premixed ? 64000 : 32000;
   if (registration.premixed) registration.localFileTitle = localFileMix.title;
@@ -1007,15 +961,15 @@ async function connectPublisherSocket(
   }
   ws.send(JSON.stringify({ type: 'broadcast-subscribe', types: PUBLISHER_BROADCAST_TYPES }));
   ws.send(JSON.stringify(registration));
-  audioTransport.bind(ws, { sampleRate: audioContext.sampleRate });
+  audioTransport.bind(ws, { sampleRate: publisherSession.context.sampleRate });
   publisherCommandLiveness.begin(expectedGeneration, performance.now());
   refreshPublisherCommandChannel();
   publisherControlConnections += 1;
 
   ws.addEventListener('message', (event) => {
-    if (socket === ws) publisherCommandLiveness.noteInbound(performance.now());
+    if (publisherSession.socket === ws) publisherCommandLiveness.noteInbound(performance.now());
     if (
-      socket !== ws
+      publisherSession.socket !== ws
       || !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
       || typeof event.data !== 'string'
     ) return;
@@ -1023,11 +977,11 @@ async function connectPublisherSocket(
   });
 
   ws.addEventListener('close', () => {
-    if (socket !== ws) return;
+    if (publisherSession.socket !== ws) return;
     publisherReconnectBackoff.noteClosed(performance.now());
     calibrationProbePlayback.cancelPending();
     audioTransport.unbind(ws);
-    socket = null;
+    publisherSession.detachSocket(ws);
     resetPublisherHealthRequestCorrelation();
     resetPublisherCommandFreshness();
     publishPublisherCommandAuthority();
@@ -1046,10 +1000,10 @@ async function connectPublisherSocket(
 function restartPublisherConnectionForGeneration(sessionEpoch, generation) {
   if (!isCurrentPublisherCapture(sessionEpoch, generation)) return;
   clearSocketReconnect();
-  const previous = socket;
+  const previous = publisherSession.socket;
   if (previous) {
     audioTransport.unbind(previous);
-    socket = null;
+    publisherSession.detachSocket(previous);
     resetPublisherHealthRequestCorrelation();
     resetPublisherCommandFreshness();
     publishPublisherCommandAuthority();
@@ -1069,72 +1023,58 @@ function restartPublisherConnectionForGeneration(sessionEpoch, generation) {
 // A Worklet replacement preserves the old context clock. Sustained clock loss
 // needs a new context and a new capture generation; keep the existing track.
 function rebuildPublisherAudioContext() {
-  if (captureGraphRebuildPromise) return captureGraphRebuildPromise;
-  const sessionEpoch = publisherSessionEpoch;
-  const expectedGeneration = captureGeneration >>> 0;
-  const oldContext = audioContext;
-  const stream = mediaStream;
-  const graph = activeCaptureGraph;
-  let replacement = null;
-  let committed = false;
-  let timeout;
-  const current = () => isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
-    && audioContext === oldContext && mediaStream === stream && activeCaptureGraph === graph;
-  const promise = Promise.resolve().then(async () => {
-    if (!current()) return false;
-    replacement = new AudioContext({ latencyHint: 'interactive', ...(micCodecConfig.opus ? { sampleRate: 48000 } : {}) });
-    const prepared = replacement;
-    await Promise.race([
-      (async () => {
-        await prepared.audioWorklet.addModule('/capture-worklet.js');
-        if (!current()) return;
-        await prepared.resume();
-      })(),
-      new Promise((_, reject) => {
-        timeout = setTimeout(() => reject(new Error('AudioContext recovery timed out')), 3000);
-      }),
-    ]);
-    if (!current()) return false;
-    if (prepared.state !== 'running') throw new Error('Replacement AudioContext is not running');
-    committed = true;
-    disposeCaptureGraph(graph);
-    activeCaptureGraph = null;
-    activeNode = null;
-    audioContext = prepared;
-    replacement = null;
-    // The old context's state handler no longer owns the current publisher.
-    void oldContext?.close().catch(() => {});
-    prepared.addEventListener('statechange', () => {
-      if (!publisherActive || audioContext !== prepared) return;
-      if (prepared.state === 'closed') {
-        void finishMicrophoneSession('context-closed', { releaseMic: false }).catch(console.error);
-      } else if (shouldRequestAudioResume(prepared.state)) {
-        beginCaptureRecovery(`context-${prepared.state}`);
+  return publisherSession.recover(async (snapshot, current) => {
+    const { epoch: sessionEpoch, stream } = snapshot;
+    let replacement = null;
+    let committed = false;
+    let timeout;
+    try {
+      replacement = new AudioContext({ latencyHint: 'interactive', ...(micCodecConfig.opus ? { sampleRate: 48000 } : {}) });
+      const prepared = replacement;
+      await Promise.race([
+        (async () => {
+          await prepared.audioWorklet.addModule('/capture-worklet.js');
+          if (!current()) return;
+          await prepared.resume();
+        })(),
+        new Promise((_, reject) => {
+          timeout = setTimeout(() => reject(new Error('AudioContext recovery timed out')), 3000);
+        }),
+      ]);
+      if (!current()) return false;
+      if (prepared.state !== 'running') throw new Error('Replacement AudioContext is not running');
+      if (!publisherSession.replaceContext(snapshot, prepared)) return false;
+      committed = true;
+      replacement = null;
+      prepared.addEventListener('statechange', () => {
+        if (!publisherSession.active || publisherSession.context !== prepared) return;
+        if (prepared.state === 'closed') {
+          void finishMicrophoneSession('context-closed', { releaseMic: false }).catch(console.error);
+        } else if (shouldRequestAudioResume(prepared.state)) {
+          beginCaptureRecovery(`context-${prepared.state}`);
+        }
+      });
+      const generation = advanceCaptureGeneration('context-clock-underfed');
+      if (!isCurrentPublisherCapture(sessionEpoch, generation)) return false;
+      if (!installCaptureGraph(sessionEpoch, stream, prepared)) return false;
+      micCaptureRecovery.noteGraphRebuilt(captureSnapshot());
+      restartPublisherConnectionForGeneration(sessionEpoch, generation);
+      startCaptureWatchdog(sessionEpoch, generation);
+      console.warn('Microphone AudioContext replaced after sustained clock loss');
+      return true;
+    } catch (error) {
+      console.warn('Microphone AudioContext recovery failed', error);
+      // Failed preparation leaves existing capture intact; a committed failure
+      // needs the bounded user-gesture Retry Mic path for this session only.
+      if (committed && isCurrentPublisherSession(sessionEpoch)) {
+        void finishMicrophoneSession('context-rebuild-failed', { releaseMic: false }).catch(console.error);
       }
-    });
-    const generation = advanceCaptureGeneration('context-clock-underfed');
-    installCaptureGraph(sessionEpoch, stream, prepared);
-    micCaptureRecovery.noteGraphRebuilt(captureSnapshot());
-    restartPublisherConnectionForGeneration(sessionEpoch, generation);
-    startCaptureWatchdog(sessionEpoch, generation);
-    console.warn('Microphone AudioContext replaced after sustained clock loss');
-    return true;
-  }).catch((error) => {
-    console.warn('Microphone AudioContext recovery failed', error);
-    // A failure from a retired session must not stop a newer Mic session.
-    // Preparation failure leaves the existing capture intact. Only a failure
-    // after retiring its graph needs the bounded user-gesture Retry Mic path.
-    if (committed && isCurrentPublisherSession(sessionEpoch)) {
-      void finishMicrophoneSession('context-rebuild-failed', { releaseMic: false }).catch(console.error);
+      return false;
+    } finally {
+      clearTimeout(timeout);
+      if (replacement) void replacement.close().catch(() => {});
     }
-    return false;
-  }).finally(() => {
-    clearTimeout(timeout);
-    if (replacement) void replacement.close().catch(() => {});
-    if (captureGraphRebuildPromise === promise) captureGraphRebuildPromise = null;
   });
-  captureGraphRebuildPromise = promise;
-  return promise;
 }
 
 // Opening or closing a local file changes what the capture carries, and Relay
@@ -1142,8 +1082,8 @@ function rebuildPublisherAudioContext() {
 // switch at a sample boundary: no voice-gain samples are mixed as premixed or
 // the other way round.
 function syncLocalFileMode() {
-  const graph = activeCaptureGraph;
-  if (!publisherActive || !graph || graph.premixed === localFileMix.active) return;
+  const graph = publisherSession.graph;
+  if (!publisherSession.active || !graph || graph.premixed === localFileMix.active) return;
   void rebuildPublisherCaptureGraph('local-file-mode').then((rebuilt) => {
     if (rebuilt) syncLocalFileMode();
   });
@@ -1152,67 +1092,41 @@ localFileMix.addEventListener('change', (event) => {
   const kind = event.detail?.kind;
   if (kind === 'mode') syncLocalFileMode();
   // Another file on the same premixed capture: only its name changes for the room.
-  if (kind === 'file' && activeCaptureGraph?.premixed && socket?.readyState === WebSocket.OPEN) {
+  if (kind === 'file' && publisherSession.graph?.premixed && publisherSession.socket?.readyState === WebSocket.OPEN) {
     try {
-      socket.send(JSON.stringify({ type: 'set-local-file', title: localFileMix.title }));
+      publisherSession.socket.send(JSON.stringify({ type: 'set-local-file', title: localFileMix.title }));
     } catch {}
   }
 });
 
 function rebuildPublisherCaptureGraph(reason) {
-  if (captureGraphRebuildPromise) return captureGraphRebuildPromise;
+  return publisherSession.recover(async (snapshot) => {
+    const { epoch: sessionEpoch, context: captureContext, stream: captureStream } = snapshot;
+    try {
+      if (!publisherSession.dropGraph(snapshot)) return false;
+      const generation = advanceCaptureGeneration(reason);
+      restartPublisherConnectionForGeneration(sessionEpoch, generation);
+      if (!isCurrentPublisherCapture(sessionEpoch, generation)) return false;
 
-  const sessionEpoch = publisherSessionEpoch;
-  const expectedGeneration = captureGeneration >>> 0;
-  const captureContext = audioContext;
-  const captureStream = mediaStream;
-  const replacedGraph = activeCaptureGraph;
-
-  const promise = Promise.resolve().then(() => {
-    if (
-      !isCurrentPublisherCapture(sessionEpoch, expectedGeneration)
-      || audioContext !== captureContext
-      || mediaStream !== captureStream
-      || activeCaptureGraph !== replacedGraph
-    ) return false;
-
-    disposeCaptureGraph(replacedGraph);
-    if (activeCaptureGraph === replacedGraph) activeCaptureGraph = null;
-    if (activeNode === replacedGraph?.capture) activeNode = null;
-
-    const generation = advanceCaptureGeneration(reason);
-    restartPublisherConnectionForGeneration(sessionEpoch, generation);
-    if (!isCurrentPublisherCapture(sessionEpoch, generation)) return false;
-
-    installCaptureGraph(sessionEpoch, captureStream, captureContext);
-    micCaptureRecovery.noteGraphRebuilt(captureSnapshot());
-    startCaptureWatchdog(sessionEpoch, generation);
-    return true;
-  }).catch((error) => {
-    console.warn('Microphone capture graph rebuild failed', error);
-    if (isCurrentPublisherSession(sessionEpoch)) {
-      void finishMicrophoneSession('capture-rebuild-failed', {
-        // Rebuild failure is the same recoverable local-source class as a
-        // hardware-ended track. Do not bypass the server reconnect grace with
-        // an explicit room-Mic release.
-        releaseMic: false,
-      }).catch(console.error);
+      if (!installCaptureGraph(sessionEpoch, captureStream, captureContext)) return false;
+      micCaptureRecovery.noteGraphRebuilt(captureSnapshot());
+      startCaptureWatchdog(sessionEpoch, generation);
+      return true;
+    } catch (error) {
+      console.warn('Microphone capture graph rebuild failed', error);
+      if (isCurrentPublisherSession(sessionEpoch)) {
+        // Local source failure preserves server reconnect grace for Retry Mic.
+        void finishMicrophoneSession('capture-rebuild-failed', { releaseMic: false }).catch(console.error);
+      }
+      return false;
     }
-    return false;
-  }).finally(() => {
-    if (captureGraphRebuildPromise === promise) captureGraphRebuildPromise = null;
   });
-
-  captureGraphRebuildPromise = promise;
-  return promise;
 }
 
 async function stop({ releaseMic = true } = {}) {
   // Revoke this session before any asynchronous close can yield. Everything
   // after the first await is allowed to touch only captured old resources.
-  const stoppedEpoch = ++publisherSessionEpoch;
-  micStartup.cancel();
-  publisherStarting = false;
+  const retired = publisherSession.retire();
   calibrationProbePlayback.retire();
   clearSocketReconnect();
   stopAudioUplinkHealthReporting();
@@ -1220,54 +1134,18 @@ async function stop({ releaseMic = true } = {}) {
   micCaptureRecovery.stop();
   captureClockRecovery.reset();
 
-  const closingSocket = socket;
-  const closingStream = mediaStream;
-  const closingGraph = activeCaptureGraph;
-  const closingNode = activeNode;
-  const closingContext = audioContext;
-  const wasPublisherActive = publisherActive;
-
-  socket = null;
+  const closing = retired.finish({ releaseMic });
   resetPublisherHealthRequestCorrelation();
   resetPublisherCommandFreshness();
-  mediaStream = null;
-  activeCaptureGraph = null;
-  activeNode = null;
-  captureGraphEpoch += 1;
-  captureGraphRebuildPromise = null;
-  audioContext = null;
-  micOpus?.close();
-  micOpus = null;
   audioTransport.fallback.setEncodedBitrate(null);
-
-  const shouldReleaseMic = releaseMic && wasPublisherActive;
-  if (shouldReleaseMic && closingSocket?.readyState === WebSocket.OPEN) {
-    try {
-      closingSocket.send(JSON.stringify({ type: 'release-mic' }));
-    } catch {}
-  }
-
-  if (wasPublisherActive) audioTransport.close();
   pendingPublisherTakeoverOwnerId = null;
-  if (closingSocket) {
-    try {
-      closingSocket.close();
-    } catch {}
-  }
-  if (closingStream) closingStream.getTracks().forEach((track) => track.stop());
-  if (closingGraph) disposeCaptureGraph(closingGraph);
-  else if (closingNode) {
-    try {
-      closingNode.disconnect();
-    } catch {}
-  }
-  setPublisherActive(false);
+  publishLocalMicState();
 
   latestLocalMicLevel = null;
   captureAppliedSettings = null;
   dispatchRelayEvent('relay-local-mic-level', {
     active: false,
-    captureGeneration: captureGeneration >>> 0,
+    captureGeneration: publisherSession.generation >>> 0,
     peakDbfs: null,
     rmsDbfs: null,
     spectrumBands: null,
@@ -1281,12 +1159,8 @@ async function stop({ releaseMic = true } = {}) {
   publisherButton.disabled = false;
   updateSingerControls();
 
-  if (closingContext) {
-    try {
-      await closingContext.close();
-    } catch {}
-  }
-  return stoppedEpoch;
+  await closing;
+  return retired.epoch;
 }
 
 async function startPublisher(takeoverExpectedOwnerId = null) {
@@ -1294,14 +1168,13 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
     throw new Error('Microphone capture is unavailable. On a phone, open Relay through HTTPS.');
   }
 
-  const startup = micStartup.begin();
-  publisherStarting = true;
+  const startup = publisherSession.beginStartup();
   publisherButton.disabled = true;
   updateSingerControls();
   pendingPublisherTakeoverOwnerId = takeoverExpectedOwnerId;
 
   let preparedEncoder = null;
-  const ownsEncoder = () => preparedEncoder !== null && publisherActive && micOpus === preparedEncoder;
+  const ownsEncoder = () => preparedEncoder !== null && publisherSession.active && publisherSession.encoder === preparedEncoder;
   try {
     // Browser permission promises are not abortable on every supported phone.
     // The gate gives the UI a deadline and stops a stream that resolves after
@@ -1359,7 +1232,7 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
     if (micCodecConfig.opus && preparedContext.sampleRate !== 48000) throw new Error('Opus trial requires 48 kHz capture');
     const captureContext = preparedContext;
     captureContext.addEventListener('statechange', () => {
-      if (!publisherActive || audioContext !== captureContext) return;
+      if (!publisherSession.active || publisherSession.context !== captureContext) return;
       if (captureContext.state === 'closed') {
         // A closed AudioContext is terminal: resume() cannot revive it and the
         // capture watchdog deliberately rebuilds only while the context is
@@ -1387,28 +1260,28 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
     if (!micStartup.isCurrent(startup)) throw new MicStartupCancelledError();
 
     // Transfer ownership before any active-state event can invoke teardown.
-    micStartup.complete(startup);
-    mediaStream = preparedStream;
-    audioContext = preparedContext;
-    micOpus = preparedEncoder;
-    if (micOpus) audioTransport.fallback.setEncodedBitrate(micOpus.bitrate);
-    const sessionEpoch = ++publisherSessionEpoch;
-    const captureStream = mediaStream;
+    const sessionEpoch = publisherSession.activate(startup, {
+      stream: preparedStream, context: preparedContext, encoder: preparedEncoder,
+    });
+    if (sessionEpoch === null) throw new MicStartupCancelledError();
+    if (publisherSession.encoder) audioTransport.fallback.setEncodedBitrate(publisherSession.encoder.bitrate);
+    const captureStream = publisherSession.stream;
     captureAppliedSettings = readCaptureSettings(captureStream);
-    setPublisherActive(true);
-    publisherStarting = false;
+    publishLocalMicState();
+    if (!isCurrentPublisherSession(sessionEpoch)) return;
 
     // A websocket reconnect keeps this generation. Only a true capture-clock
     // boundary (new Mic session or rebuilt graph) advances it.
     const generation = advanceCaptureGeneration('publisher-start');
+    if (!isCurrentPublisherCapture(sessionEpoch, generation)) return;
     publisherControlConnections = 0;
     startAudioUplinkHealthReporting();
 
     // Track lifetime belongs to the Mic session, not to one graph generation.
     // Rebuilding a stuck worklet must not make later mute/unmute/ended events stale.
     const captureIsCurrent = () => isCurrentPublisherSession(sessionEpoch)
-      && mediaStream === captureStream
-      && audioContext !== null;
+      && publisherSession.stream === captureStream
+      && publisherSession.context !== null;
     const [track] = captureStream.getAudioTracks();
     let captureConfigurationRefreshPromise = null;
     const refreshCaptureConfiguration = () => {
@@ -1425,8 +1298,8 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
         // and may surface that only as configurationchange. Do not send an old-
         // generation health snapshot after observing a new physical input.
         if (
-          activeCaptureGraph
-          && rebuildCaptureForInputDeviceChange(activeCaptureGraph)
+          publisherSession.graph
+          && rebuildCaptureForInputDeviceChange(publisherSession.graph)
         ) return;
         sendAudioUplinkHealth();
       })().catch((error) => {
@@ -1462,7 +1335,7 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
 
     captureClockRecovery.reset();
     micCaptureRecovery.start(captureSnapshot(), 'startup');
-    installCaptureGraph(sessionEpoch, captureStream, captureContext);
+    if (!installCaptureGraph(sessionEpoch, captureStream, captureContext)) return;
     startCaptureWatchdog(sessionEpoch, generation);
 
     publisherButton.disabled = true;
@@ -1484,14 +1357,15 @@ async function requestPublisherStart(
   takeoverExpectedOwnerId = null,
   { preserveMicOwnership = false } = {},
 ) {
-  if (publisherStartRequest) return publisherStartRequest;
-
-  const request = (async () => {
+  return publisherSession.requestStart(async () => {
     try {
       // A self-owner recovery must replace the damaged local capture without
       // opening a room-ownership race. Ordinary Take Mic/takeover still releases
       // any prior local Mic before acquiring through the normal server path.
-      await stop({ releaseMic: !preserveMicOwnership });
+      // A retired session finishes its own cleanup independently of a retry.
+      if (publisherSession.active || publisherSession.starting) {
+        await stop({ releaseMic: !preserveMicOwnership });
+      }
       await startPublisher(takeoverExpectedOwnerId);
     } catch (error) {
       if (error?.code === 'mic-startup-cancelled') return;
@@ -1503,14 +1377,7 @@ async function requestPublisherStart(
         takeoverExpectedOwnerId,
       });
     }
-  })();
-
-  publisherStartRequest = request;
-  try {
-    await request;
-  } finally {
-    if (publisherStartRequest === request) publisherStartRequest = null;
-  }
+  });
 }
 
 window.addEventListener('relay-product-status', (event) => {
@@ -1536,7 +1403,7 @@ window.addEventListener('relay-retry-microphone', () => {
 
 function notePublisherBackgrounded() {
   calibrationProbePlayback.retire();
-  if (!publisherActive) return;
+  if (!publisherSession.active) return;
 
   // iOS may freeze timers immediately after the lifecycle edge, so do not
   // rely on a later hidden-state health report to fence media-path diagnosis.
@@ -1555,7 +1422,7 @@ window.addEventListener('pagehide', notePublisherBackgrounded);
 window.addEventListener('pageshow', recoverPublisherAudio);
 
 window.addEventListener('relay-release-microphone', () => {
-  if (!publisherActive) return;
+  if (!publisherSession.active) return;
   finishMicrophoneSession('released', {
     releaseMic: true,
   }).catch(console.error);

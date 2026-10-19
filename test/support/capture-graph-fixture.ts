@@ -1,18 +1,19 @@
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { PublisherSession, type PublisherEncoder } from '../../public/publisher-session.js';
 import { functionCode, parseTypeScriptSource, variableInitializerCode } from './source-contract.js';
 const { classifyCaptureDispatch } = await import(new URL('../../public/capture-dispatch.js', import.meta.url).href);
 const { splitPcmForPacketLimit } = await import(new URL('../../public/audio-packetizer.js', import.meta.url).href);
 const { createMicCaptureGraph, parseMicVisualAnalysis } = await import(new URL('../../public/mic-capture-graph.js', import.meta.url).href);
 
-export function captureFixture(failure: string | null = null) {
+export function captureFixture(failure: string | null = null, encoder: PublisherEncoder | null = null) {
   const effects: string[] = [];
   const nodes: any[] = [], workers: any[] = [];
   const messages: any[] = [];
   const events = new Map<string, Set<(...args: any[]) => void>>();
   const track = { readyState: 'live', deviceId: 'mic-a', stops: 0,
     getSettings() { return { deviceId: this.deviceId }; }, stop() { this.stops++; } };
-  const stream = { getAudioTracks: () => [track] };
+  const stream = { getAudioTracks: () => [track], getTracks: () => [track] };
   const check = (at: string) => { if (failure === at) throw new Error(at); };
   const mediaDevices = {
     enumerations: 0,
@@ -47,8 +48,14 @@ export function captureFixture(failure: string | null = null) {
   const context = { sampleRate: 48000, currentTime: 3, closes: 0, destination: {},
     createMediaStreamSource: () => node('source'), createGain: () => node('gain'),
     close() { this.closes++; } };
+  const publisherSession = new PublisherSession({ closeMedia() {} });
+  publisherSession.activate(publisherSession.beginStartup(), {
+    stream: stream as unknown as MediaStream, context: context as unknown as AudioContext, encoder,
+  });
   const env: any = {
-    captureGraphEpoch: 0, activeCaptureGraph: null, activeNode: null,
+    publisherSession,
+    get captureGraphEpoch() { return publisherSession.graphEpoch; },
+    get activeCaptureGraph() { return publisherSession.graph; },
     mediaStream: stream, audioContext: context, publisherSessionEpoch: 1,
     localFileMix: { connectInput: null as any },
     navigator: { mediaDevices },
@@ -84,13 +91,13 @@ export function captureFixture(failure: string | null = null) {
   });
   env.parseMicVisualAnalysis = parseMicVisualAnalysis;
   const scope = vm.createContext(env);
-  for (const name of ['disposeCaptureGraph', 'captureGraphIsCurrent',
+  for (const name of ['captureGraphIsCurrent',
     'rebuildCaptureForInputDeviceChange', 'handleCaptureProcessorError',
     'submitMicVisualAnalysis', 'returnCaptureBuffer', 'installCaptureGraph']) {
     vm.runInContext(functionCode(source, name), scope);
   }
   return {
-    env, nodes, workers, mediaDevices, context, stream, track, effects, events, messages,
+    env, publisherSession, nodes, workers, mediaDevices, context, stream, track, effects, events, messages,
     setFailure(value: string | null) { failure = value; },
     usePcmHandler(overrides: Record<string, unknown> = {}) {
       Object.assign(env, {
@@ -110,7 +117,7 @@ export function captureFixture(failure: string | null = null) {
       vm.runInContext(functionCode(source, 'handleCaptureWorkletMessage'), scope);
     },
     install() { return vm.runInContext('installCaptureGraph(1, mediaStream, audioContext)', scope); },
-    dispose(graph = env.activeCaptureGraph) { env.target = graph; vm.runInContext('disposeCaptureGraph(target)', scope); },
+    dispose(graph = env.activeCaptureGraph) { env.target = graph; graph?.dispose(); },
     analyze(graph: any, pcm: ArrayBuffer) { env.target = graph; env.pcm = pcm; vm.runInContext('submitMicVisualAnalysis(target, pcm)', scope); },
     returnBuffer(graph: any, pcm: ArrayBuffer) { env.target = graph; env.pcm = pcm; vm.runInContext('returnCaptureBuffer(target, pcm)', scope); },
     flush: async () => { for (let n = 0; n < 8; n++) await Promise.resolve(); },

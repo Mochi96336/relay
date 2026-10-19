@@ -159,7 +159,7 @@ test('publisher binds websocket media with the actual AudioContext sample rate',
   const app = await readFile(appUrl, 'utf8');
   assert.match(
     app,
-    /audioTransport\.bind\(ws, \{ sampleRate: audioContext\.sampleRate \}\)/,
+    /audioTransport\.bind\(ws, \{ sampleRate: publisherSession\.context\.sampleRate \}\)/,
     'production publisher reconnects must preserve the active capture rate in the fallback budget',
   );
 });
@@ -170,14 +170,10 @@ test('active publisher JSON is bounded while admission and terminal release rema
   assert.match(app, /'relay-start-timing-calibration'[\s\S]*audioTransport\.sendControlJson\(\{ type: 'start-timing-calibration' \}\)/);
   assert.match(app, /function sendMixSettings\(\)[\s\S]*audioTransport\.sendControlJson\(\{\s*type: 'set-mix'/);
   assert.match(app, /audioTransport\.sendControlJson\(\{ type: 'start-timing-calibration' \}\)/);
+
   assert.match(
     app,
-    /closingSocket\.send\(JSON\.stringify\(\{ type: 'release-mic' \}\)\)/,
-    'terminal Mic release stays direct so congestion cannot silently turn an explicit release into reconnect grace',
-  );
-  assert.match(
-    app,
-    /ws\.send\(JSON\.stringify\(registration\)\);\s*audioTransport\.bind\(ws, \{ sampleRate: audioContext\.sampleRate \}\)/,
+    /ws\.send\(JSON\.stringify\(registration\)\);\s*audioTransport\.bind\(ws, \{ sampleRate: publisherSession\.context\.sampleRate \}\)/,
     'publisher registration stays an admission message before the bounded active transport is bound',
   );
 });
@@ -224,7 +220,7 @@ for (const reply of ['played', 'failed']) {
         CalibrationProbePlayback: class extends CalibrationProbePlayback {
           constructor(ports: object) { super({ ...ports, isHidden: () => false, warn() {} }); }
         },
-        audioContext: context, publisherSessionEpoch: 1, captureGeneration: 2,
+        publisherSession: { context, epoch: 1, generation: 2, socket },
         isCurrentPublisherCapture: () => true, socket, WebSocket: { OPEN: 1 }, audioTransport,
         markPublisherAuthorityStale() { throw new Error('congestion is not loss of authority'); },
       });

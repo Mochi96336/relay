@@ -318,7 +318,7 @@ test('publisher command authority waits for correlated ACKs plus registration an
   );
   assert.match(
     publisherSource,
-    /function adoptSocket\(ws\)[\s\S]*resetPublisherHealthRequestCorrelation\(\)/,
+    /function adoptSocket\(ws, sessionEpoch, expectedGeneration\)[\s\S]*resetPublisherHealthRequestCorrelation\(\)/,
     'adopting a replacement socket must revoke the prior command/health correlation epoch',
   );
   assert.match(
@@ -326,7 +326,7 @@ test('publisher command authority waits for correlated ACKs plus registration an
     /ws\.addEventListener\('close'[\s\S]*resetPublisherHealthRequestCorrelation\(\)/,
     'closing the command socket must revoke the same correlation epoch',
   );
-  assert.match(publisherSource, /function adoptSocket\(ws\)[\s\S]*resetPublisherCommandFreshness\(\)/);
+  assert.match(publisherSource, /function adoptSocket\(ws, sessionEpoch, expectedGeneration\)[\s\S]*resetPublisherCommandFreshness\(\)/);
   assert.match(publisherSource, /ws\.addEventListener\('close'[\s\S]*resetPublisherCommandFreshness\(\)/);
   assert.match(publisherSource, /function sendMixSettings\(\)[\s\S]*if \(!publisherCommandAuthority\(\)\.actionable\)[\s\S]*restoreLastKnownControl\('set-mix'\)/);
   assert.match(publisherSource, /message\.type === 'command-rejected'[\s\S]*restoreLastKnownControl\(message\.command\)[\s\S]*resetPublisherCommandFreshness\(\)/);

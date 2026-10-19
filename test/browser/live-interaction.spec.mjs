@@ -1796,3 +1796,54 @@ test('production DOM: a retired startup encoder cannot send or terminate a newer
   expect(await page.evaluate(() => window.relayActiveRole)).toBe('publisher');
   expect(await page.evaluate(() => window.__trialEncoders.map(({ encoder }) => encoder.closes))).toEqual([1, 0]);
 });
+
+test('production DOM: Release during the active event retires resources before graph or connection startup', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', route => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => window.relayRecordingState?.connected === true);
+  await page.evaluate(() => {
+    window.__microphoneEnded = [];
+    window.addEventListener('relay-microphone-ended', event => window.__microphoneEnded.push(event.detail.reason));
+    window.addEventListener('relay-microphone-local-state', event => {
+      if (event.detail.active) window.dispatchEvent(new Event('relay-release-microphone'));
+    });
+  });
+  await page.locator('#start-publisher').click();
+  await expect.poll(() => page.evaluate(() => window.__microphoneEnded)).toEqual(['released']);
+  expect(await publisherRegistrations(page)).toEqual([]);
+  expect(await page.evaluate(() => window.__captureResourceNodes ?? [])).toEqual([]);
+  expect(await page.evaluate(() => window.__trackStops)).toBe(1);
+  expect(await page.evaluate(() => window.__audioContexts.filter(context => context.capture).map(context => context.closeCalls))).toEqual([1]);
+  expect(await page.evaluate(() => window.relayActiveRole)).toBeNull();
+});
+
+test('production DOM: terminal completion waits for retired context and cannot unmute a newer Mic', async ({ page }) => {
+  await livePhone(page);
+  await page.evaluate(() => {
+    const context = window.__audioContexts.find(candidate => candidate.capture && candidate.state === 'running');
+    const close = context.close.bind(context);
+    context.close = () => {
+      void close();
+      return new Promise(resolve => { window.__finishRetiredContext = resolve; });
+    };
+    window.dispatchEvent(new Event('relay-release-microphone'));
+    window.dispatchEvent(new Event('relay-release-microphone'));
+  });
+  expect(await page.evaluate(() => window.__microphoneEnded)).toEqual([]);
+  expect(await page.evaluate(() => window.relayActiveRole)).toBeNull();
+  await page.evaluate(() => window.dispatchEvent(new Event('relay-retry-microphone')));
+  await expect.poll(async () => (await publisherRegistrations(page)).length).toBe(2);
+  await page.evaluate(async () => {
+    window.__finishRetiredContext();
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  });
+  expect(await page.evaluate(() => window.__microphoneEnded)).toEqual([]);
+  expect(await page.evaluate(() => window.relayActiveRole)).toBe('publisher');
+  await expect(page.locator('#listen-toggle')).toBeDisabled();
+  await expect(page.locator('#listen-toggle')).toHaveAttribute('aria-pressed', 'true');
+  await page.evaluate(() => window.dispatchEvent(new Event('relay-release-microphone')));
+  await expect.poll(() => page.evaluate(() => window.__microphoneEnded)).toEqual(['released']);
+  expect(await page.evaluate(() => window.__audioContexts.filter(context => context.capture).map(context => context.closeCalls))).toEqual([1, 1]);
+  expect(await page.evaluate(() => window.__trackStops)).toBe(2);
+});

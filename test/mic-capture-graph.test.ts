@@ -52,17 +52,18 @@ test('visual PCM is copied before transfer, original capture bytes return separa
   assert.deepEqual([...new Uint8Array(graph.capture.port.posted[1].buffer)], [1, 2, 3, 4]);
 });
 
-for (const boundary of ['graph object', 'graph epoch', 'session', 'stream', 'context']) {
+for (const boundary of ['graph replacement', 'session', 'graph removal', 'context replacement']) {
   test(`old processor and analysis callbacks lose authority after ${boundary} changes`, () => {
     const f = captureFixture();
     const graph = f.install();
     const processor = [...graph.capture.listeners.get('processorerror')][0] as () => void;
     const workerMessage = f.workers[0].onmessage;
-    if (boundary === 'graph object') f.env.activeCaptureGraph = {};
-    if (boundary === 'graph epoch') f.env.captureGraphEpoch++;
-    if (boundary === 'session') f.env.publisherSessionEpoch++;
-    if (boundary === 'stream') f.env.mediaStream = {};
-    if (boundary === 'context') f.env.audioContext = {};
+    if (boundary === 'graph replacement') f.install();
+    if (boundary === 'session') f.publisherSession.retire();
+    const snapshot = { epoch: f.publisherSession.epoch, generation: f.publisherSession.generation,
+      stream: graph.stream, context: graph.context, graph };
+    if (boundary === 'graph removal') f.publisherSession.dropGraph(snapshot);
+    if (boundary === 'context replacement') f.publisherSession.replaceContext(snapshot, {} as AudioContext);
     processor();
     workerMessage({ data: analysis });
     assert.deepEqual(f.effects, []);

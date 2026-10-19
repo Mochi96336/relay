@@ -7,8 +7,15 @@ import {
   sleep,
   startRelay,
   toInt16,
-  type RelayServer,
 } from './helpers/harness.js';
+import {
+  backingBoundaryRequestCount,
+  playingTelemetry,
+  robotRoom,
+  type RobotRoom,
+  waitForRobotMapping,
+  waitForTimingStatus,
+} from './support/robot-content-room.js';
 
 const RATE = 48_000;
 const FRAME_SAMPLES = Math.round(RATE * 0.02);
@@ -36,53 +43,6 @@ const PROBE_FAST = {
   RELAY_HEARTBEAT_MS: '60000',
 };
 
-const playingTelemetry = {
-  type: 'youtube-telemetry',
-  videoId: 'dQw4w9WgXcQ',
-  state: 1,
-  currentTime: 42,
-  duration: 200,
-  playbackRate: 1,
-};
-
-type Session = {
-  backing: RelayClient;
-  publisher: RelayClient;
-  robot: RelayClient;
-  monitor: RelayClient;
-  close: () => void;
-};
-
-async function robotRoom(server: RelayServer): Promise<Session> {
-  const backing = await RelayClient.connect(server);
-  backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
-  await backing.waitForType('registered');
-
-  const publisher = await RelayClient.connect(server);
-  publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
-  await publisher.waitForType('registered');
-
-  const robot = await RelayClient.connect(server);
-  robot.send({ type: 'robot-source-hello' });
-
-  const monitor = await RelayClient.connect(server);
-  monitor.send({ type: 'register', role: 'monitor' });
-  await monitor.waitForType('registered');
-
-  return {
-    backing,
-    publisher,
-    robot,
-    monitor,
-    close() {
-      monitor.close();
-      robot.close();
-      publisher.close();
-      backing.close();
-    },
-  };
-}
-
 function makeBackingFrame(
   master: Float64Array,
   startSample: number,
@@ -97,7 +57,7 @@ function makeBackingFrame(
 }
 
 async function sendRange(
-  room: Session,
+  room: RobotRoom,
   mic: Buffer,
   master: Float64Array,
   startSample: number,
@@ -114,38 +74,6 @@ async function sendRange(
   }
 }
 
-async function waitForTimingStatus(
-  monitor: RelayClient,
-  predicate: (status: Record<string, any>) => boolean,
-  timeoutMs: number,
-  from = monitor.messages.length,
-) {
-  const deadline = Date.now() + timeoutMs;
-  let last: Record<string, any> | undefined;
-  while (Date.now() < deadline) {
-    monitor.send({ type: 'timing-calibration-status-request' });
-    await sleep(50);
-    const statuses = monitor.messages
-      .slice(from)
-      .filter((message) => message.type === 'timing-calibration-status');
-    last = statuses.at(-1) ?? last;
-    const match = statuses.find(predicate);
-    if (match) return match;
-  }
-  throw new Error(`Timed out waiting for timing status. Last=${JSON.stringify(last ?? null)}`);
-}
-
-/**
- * The first offset rides the Robot's own socket, so Relay can read half a
- * second or more of the Backing and Mic sockets' PCM before it. Content
- * evidence only counts once that mapping exists: sent any earlier, 7 s of
- * audio can come up one frame short of a 6 s calibration window, and nothing
- * arrives afterwards to finish it.
- */
-async function waitForRobotMapping(monitor: RelayClient) {
-  await waitForTimingStatus(monitor, (status) => status.robotDeltaFresh === true, 2_000);
-}
-
 async function waitForActiveLag(monitor: RelayClient, expectedMs: number, timeoutMs: number, from?: number) {
   return waitForTimingStatus(
     monitor,
@@ -155,10 +83,6 @@ async function waitForActiveLag(monitor: RelayClient, expectedMs: number, timeou
     timeoutMs,
     from,
   );
-}
-
-function backingBoundaryRequestCount(backing: RelayClient) {
-  return backing.messages.filter((message) => message.type === 'backing-sample-boundary-request').length;
 }
 
 async function acknowledgeNextBackingBoundary(backing: RelayClient, previousCount: number) {

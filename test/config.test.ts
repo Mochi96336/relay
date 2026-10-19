@@ -93,14 +93,11 @@ test('relay config owns remaining server-local deployment inputs', () => {
   );
 });
 
-test('Choir server shadow is disabled by default and strictly opt-in', () => {
-  assert.equal(loadRelayConfig({}).choirShadow, false);
-  assert.equal(loadRelayConfig({ RELAY_CHOIR_SHADOW: '1' }).choirShadow, true);
-  assert.equal(loadRelayConfig({ RELAY_CHOIR_SHADOW: 'false' }).choirShadow, false);
-  assert.throws(
-    () => loadRelayConfig({ RELAY_CHOIR_SHADOW: 'enabled' }),
-    /RELAY_CHOIR_SHADOW must be one of/,
-  );
+test('Choir is off by default and turned on by RELAY_CHOIR alone', () => {
+  assert.equal(loadRelayConfig({}).choir, false);
+  assert.equal(loadRelayConfig({ RELAY_CHOIR: '1' }).choir, true);
+  assert.equal(loadRelayConfig({ RELAY_CHOIR: 'false' }).choir, false);
+  assert.throws(() => loadRelayConfig({ RELAY_CHOIR: 'enabled' }), /RELAY_CHOIR must be one of/);
 });
 
 test('relay config owns the participant and mic transport grace windows', () => {

@@ -240,7 +240,7 @@ function initialize() {
     if (selfIsSecondMic()) {
       if (calibrateButton.disabled) return;
       secondMicRequestPending = true;
-      window.dispatchEvent(new CustomEvent('relay-choir-consent-command', {
+      window.dispatchEvent(new CustomEvent('relay-choir-command', {
         detail: { type: 'choir-probe-request' },
       }));
       render();

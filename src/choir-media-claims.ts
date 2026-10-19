@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import type { ChoirSecondaryPcmIngressExperiment } from './choir-secondary-pcm-ingress-experiment.js';
+import type { ChoirIngress } from './choir-ingress.js';
 
 type ChoirSocket = object & { participantId?: string; role: string };
 type Claim = {
@@ -20,11 +20,11 @@ type Claim = {
  * never names a seat or transport: the server generates the transport id
  * after every check has passed.
  */
-export class ChoirSecondaryMediaTicketExperiment {
+export class ChoirMediaClaims {
   private readonly pending = new Map<string, Claim>();
 
   constructor(
-    private readonly ingress: Pick<ChoirSecondaryPcmIngressExperiment, 'bind'>,
+    private readonly ingress: Pick<ChoirIngress, 'bind'>,
     private readonly socketOpen: (socket: ChoirSocket) => boolean,
     /** Whether this socket is B's join socket and B may be heard now. */
     private readonly claimAllowed: (joinSocket: ChoirSocket, nowMs: number) => boolean,

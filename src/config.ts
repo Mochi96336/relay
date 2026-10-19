@@ -117,9 +117,8 @@ export function loadRelayConfig(env: Env = process.env) {
     })(),
     livePrebufferMs: envNumber(env, 'RELAY_LIVE_PREBUFFER_MS', 400, { min: 1 }),
     micOpusTrial: envBoolean(env, 'RELAY_MIC_OPUS_TRIAL', false),
-    // The second Mic (CHOIR.md), only with both set.
-    choirShadow: envBoolean(env, 'RELAY_CHOIR_SHADOW', false),
-    choirMediaExperiment: envBoolean(env, 'RELAY_CHOIR_MEDIA_EXPERIMENT', false),
+    // The second Mic (CHOIR.md).
+    choir: envBoolean(env, 'RELAY_CHOIR', false),
     micRetentionMs: envNumber(env, 'RELAY_MIC_RETENTION_MS', 3_000, { min: 1 }),
     calibrationTimeoutMs: envNumber(env, 'RELAY_CALIBRATION_TIMEOUT_MS', 20_000, { min: 1 }),
     heartbeatMs: envNumber(env, 'RELAY_HEARTBEAT_MS', 8_000, { min: 100 }),

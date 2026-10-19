@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ChoirSecondaryMediaTicketExperiment } from '../src/choir-secondary-media-ticket-experiment.js';
+import { ChoirMediaClaims } from '../src/choir-media-claims.js';
 
 type Socket = { participantId?: string; role: string; open: boolean };
 const socketFor = (participantId?: string, role = 'unknown'): Socket => ({ participantId, role, open: true });
@@ -10,7 +10,7 @@ function fixture() {
   let allowed = true;
   let bindOk = true;
   const bound: Array<{ participantId: string; transportId: string; rate: number; version: number }> = [];
-  const tickets = new ChoirSecondaryMediaTicketExperiment(
+  const tickets = new ChoirMediaClaims(
     { bind: (_socket, participantId, transportId, rate, _now, version) => {
       if (!bindOk) return false;
       bound.push({ participantId, transportId, rate, version: version ?? 2 });

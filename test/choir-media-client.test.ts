@@ -53,7 +53,7 @@ async function fixture({ direct = false } = {}) {
       for (const fn of listeners.get(event.type) ?? []) fn(event);
     },
   };
-  const source = (await readFile(new URL('../public/choir-secondary-media-client.js', import.meta.url), 'utf8'))
+  const source = (await readFile(new URL('../public/choir-media-client.js', import.meta.url), 'utf8'))
     .replace(/^import[^\n]*\n/gm, '');
   vm.runInNewContext(source, {
     window, WebSocket: FakeSocket, ChoirSecondaryCapture: Capture,
@@ -68,7 +68,7 @@ async function fixture({ direct = false } = {}) {
     clearTimeout: (id: number) => timers.delete(id),
   });
   const emit = (type: string, detail?: unknown) => window.dispatchEvent({ type, detail });
-  const claims = () => events.filter((e) => e.type === 'relay-choir-consent-command'
+  const claims = () => events.filter((e) => e.type === 'relay-choir-command'
     && e.detail?.type === 'choir-secondary-media-claim-request').length;
   const connection = () => events.filter((e) => e.type === 'relay-choir-media-connection').map((e) => e.detail);
   return {
@@ -78,7 +78,7 @@ async function fixture({ direct = false } = {}) {
       for (const [id, timer] of [...timers]) if (timer.at <= now) { timers.delete(id); timer.run(); }
     },
     async join() {
-      emit('relay-choir-media-mode', { enabled: true });
+      emit('relay-choir-availability', { available: true });
       emit('relay-choir-start-secondary-capture');
       await new Promise((resolve) => setImmediate(resolve));
       emit('relay-choir-media-message', { type: 'choir-media-ready' });
@@ -141,7 +141,7 @@ test('a direct socket that opens but goes quiet sends the next claim through the
 
 test('media-ready connects B at once, and a repeat never replaces that socket', async () => {
   const f = await fixture();
-  f.emit('relay-choir-media-mode', { enabled: true });
+  f.emit('relay-choir-availability', { available: true });
   f.emit('relay-choir-start-secondary-capture');
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(f.claims(), 0, 'nothing is claimed until the server asks');

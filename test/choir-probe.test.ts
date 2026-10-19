@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { generateProbeReference } from '../src/calibration-probe.js';
-import { DuetProbe, type ProbeLegTimeline } from '../src/duet-probe.js';
+import { ChoirProbe, type ProbeLegTimeline } from '../src/choir-probe.js';
 
 const RATE = 48_000;
 const LEAD_MS = 300;
@@ -35,7 +35,7 @@ function fixture({
   const sentB: number[] = [];
   const sentRobot: number[] = [];
   const kept = { backingLatencyMs };
-  const probe = new DuetProbe({
+  const probe = new ChoirProbe({
     sampleRate: RATE, leadMs: LEAD_MS, searchMarginMs: 1_200, minCorrelation: 0.35,
     replyTimeoutMs: 4_000, analysisTimeoutMs: 6_000,
     sessionSampleAt: (ms) => (ms * RATE) / 1000,

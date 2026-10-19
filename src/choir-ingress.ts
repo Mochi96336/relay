@@ -7,7 +7,7 @@ import {
 /**
  * The second singer's media socket: B's packets in, checked PCM frames out
  * (onAcceptedFrame). It grants nothing itself: only a redeemed one-use claim
- * binds a socket (ChoirSecondaryMediaTicketExperiment). No client JSON grants
+ * binds a socket (ChoirMediaClaims). No client JSON grants
  * media authority.
  *
  * Bound sockets are consumed even on malformed or stale input, so a second
@@ -48,7 +48,7 @@ export type ChoirIngressResult =
       | 'stale-authority' | 'socket-identity-changed' | 'capture-restarted'
       | 'duplicate-packet' | 'sequence-out-of-window' | 'sample-overlap' };
 
-export class ChoirSecondaryPcmIngressExperiment {
+export class ChoirIngress {
   private readonly sockets = new WeakMap<ChoirSecondarySocket, BoundSecondary>();
   /** One physical socket per server-issued transport identity at a time. */
   private readonly transportBindings = new Map<string, ChoirSecondarySocket>();
@@ -200,7 +200,7 @@ export class ChoirSecondaryPcmIngressExperiment {
       if (latest !== null) {
         const forward = (sequence - latest) >>> 0;
         const backward = (latest - sequence) >>> 0;
-        const horizon = ChoirSecondaryPcmIngressExperiment.MAX_REORDER_SEQUENCES;
+        const horizon = ChoirIngress.MAX_REORDER_SEQUENCES;
         // Modular uint32 ordering: allow bounded retransmission/reorder and
         // ordinary wraparound, but not arbitrarily old/far-future claims.
         if (forward === 0) return rejected('duplicate-packet');
@@ -235,7 +235,7 @@ export class ChoirSecondaryPcmIngressExperiment {
       const current = bound.latestSequence!;
       for (const previous of bound.seenSequences.keys()) {
         if (((current - previous) >>> 0)
-          > ChoirSecondaryPcmIngressExperiment.MAX_REORDER_SEQUENCES)
+          > ChoirIngress.MAX_REORDER_SEQUENCES)
           bound.seenSequences.delete(previous);
       }
     }

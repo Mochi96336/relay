@@ -7,12 +7,11 @@ import { participantIdForCapability } from '../src/participant-capability.js';
 import { laggedMultibandMusicPair } from './helpers/music-calibration.js';
 
 /**
- * With Choir off (here: only one of its two flags), Relay is the single-Mic
- * Relay: no second Mic is advertised, every second Mic message is refused,
- * and nothing it sends seizes a media role.
+ * With Choir off, Relay is the single-Mic Relay: no second Mic is advertised,
+ * every second Mic message is refused, and nothing it sends seizes a media role.
  */
 test('with Choir off, no second Mic is offered and its messages take no role', async () => {
-  const relay = await startRelay({ RELAY_CHOIR_SHADOW: '1' });
+  const relay = await startRelay();
   const clients: RelayClient[] = [];
   try {
     const page = await fetch(relay.httpUrl('/'));
@@ -31,7 +30,7 @@ test('with Choir off, no second Mic is offered and its messages take no role', a
       claimToken: 'a'.repeat(64), packetVersion: 2, sampleRate: 48_000 });
     await client.waitFor((m) => m.type === 'choir-media-rejected' && m.reason === 'disabled-or-unverified');
     client.sendBinary(encodePcmFrame(7, 0, Buffer.from(new Int16Array(960).fill(8_000).buffer)));
-    assert.equal(client.messages.some((m) => m.type === 'choir-consent-available'), false,
+    assert.equal(client.messages.some((m) => m.type === 'choir-available'), false,
       'Choir off must not advertise the second Mic');
     // The same socket still takes an ordinary role: nothing above seized one.
     client.send({ type: 'register', role: 'monitor' });
@@ -49,7 +48,7 @@ test('with Choir off, no second Mic is offered and its messages take no role', a
 
 test('a joined B claims media on its own socket, takes no main Mic role, and is placed by Content', async () => {
   const relay = await startRelay({
-    RELAY_CHOIR_SHADOW: '1', RELAY_CHOIR_MEDIA_EXPERIMENT: '1',
+    RELAY_CHOIR: '1',
     RELAY_TEST_LEGACY_PARTICIPANTS: '0',
     RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000',
   });
@@ -79,8 +78,7 @@ test('a joined B claims media on its own socket, takes no main Mic role, and is 
       authenticate(publisher, idA, capA),
       authenticate(bMedia, idB, capB),
     ]);
-    assert.equal((await a.waitForType('choir-consent-available')).mode,
-      'media-experiment');
+    await a.waitForType('choir-available');
     publisher.send({ type: 'register', role: 'publisher', sampleRate: 48_000,
       captureGeneration: 1, initialSequence: 0, audioPacketVersion: 2 });
     await publisher.waitFor((m) => m.type === 'registered' && m.role === 'publisher');
@@ -243,7 +241,7 @@ test('a joined B claims media on its own socket, takes no main Mic role, and is 
 
 test('B joins by its own press, sets its own gain, and can be taken over like the Mic', async () => {
   const relay = await startRelay({
-    RELAY_CHOIR_SHADOW: '1', RELAY_CHOIR_MEDIA_EXPERIMENT: '1',
+    RELAY_CHOIR: '1',
     RELAY_TEST_LEGACY_PARTICIPANTS: '0',
     RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000',
   });
@@ -376,7 +374,7 @@ test('B joins by its own press, sets its own gain, and can be taken over like th
 
 test('a joined B is heard with no song, and a song starting keeps B on the same connection', async () => {
   const relay = await startRelay({
-    RELAY_CHOIR_SHADOW: '1', RELAY_CHOIR_MEDIA_EXPERIMENT: '1',
+    RELAY_CHOIR: '1',
     RELAY_TEST_LEGACY_PARTICIPANTS: '0',
     RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000',
   });
@@ -494,7 +492,7 @@ test('a joined B is heard with no song, and a song starting keeps B on the same 
 
 test('without Content, B is placed by its YouTube time against the Robot', async () => {
   const relay = await startRelay({
-    RELAY_CHOIR_SHADOW: '1', RELAY_CHOIR_MEDIA_EXPERIMENT: '1',
+    RELAY_CHOIR: '1',
     RELAY_TEST_LEGACY_PARTICIPANTS: '0',
     RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000',
   });

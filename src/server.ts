@@ -3599,7 +3599,9 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
       return;
     }
 
-    stopTakeAtFrame(socket, socket.participantId, takeId, Date.now(), performance.now());
+    const commandWallClockMs = Date.now();
+    const nowMs = performance.now();
+    stopTakeAtFrame(socket, socket.participantId, takeId, commandWallClockMs, nowMs);
   },
   releaseMic: (socket) => {
     if (!socket.participantId) return;

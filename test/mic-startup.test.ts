@@ -188,3 +188,91 @@ for (const failure of ['throw', 'reject']) {
     assert.equal(disposals, 1);
   });
 }
+
+test('failed preparation releases every acquired resource once, despite a cleanup error', async () => {
+  const timers = fakeTimers();
+  const gate = new MicStartupGate({ setTimer: timers.setTimer, clearTimer: timers.clearTimer });
+  const attempt = gate.begin();
+  const released: string[] = [];
+  await gate.wait(attempt, Promise.resolve({}), { dispose: () => { released.push('stream'); } });
+  gate.own(attempt, {}, () => { released.push('encoder'); throw new Error('encoder cleanup failed'); });
+  gate.own(attempt, {}, async () => { released.push('context'); });
+  await assert.rejects(gate.wait(attempt, Promise.reject(new Error('worklet unavailable'))), /worklet unavailable/);
+  await gate.dispose(attempt);
+  await gate.dispose(attempt);
+  assert.deepEqual(released, ['stream', 'encoder', 'context']);
+});
+
+test('complete transfers all prepared resources and later attempt cleanup cannot release them', async () => {
+  const timers = fakeTimers();
+  const gate = new MicStartupGate({ setTimer: timers.setTimer, clearTimer: timers.clearTimer });
+  const attempt = gate.begin();
+  let closed = 0;
+  gate.own(attempt, {}, () => { closed++; });
+  await gate.wait(attempt, Promise.resolve({}), { dispose: () => { closed++; } });
+  assert.equal(gate.complete(attempt), true);
+  await gate.dispose(attempt);
+  const next = gate.begin();
+  await gate.dispose(next);
+  assert.equal(closed, 0);
+});
+
+test('an older asynchronous cleanup cannot cancel or dispose a newer start', async () => {
+  const timers = fakeTimers();
+  const gate = new MicStartupGate({ setTimer: timers.setTimer, clearTimer: timers.clearTimer });
+  let finishClose!: () => void;
+  const closing = new Promise<void>((resolve) => { finishClose = resolve; });
+  const old = gate.begin();
+  gate.own(old, {}, () => closing);
+  const oldCleanup = gate.dispose(old);
+  const next = gate.begin();
+  let nextClosed = false;
+  gate.own(next, {}, () => { nextClosed = true; });
+  finishClose();
+  await oldCleanup;
+  assert.equal(gate.isCurrent(next), true);
+  assert.equal(nextClosed, false);
+  gate.complete(next);
+});
+
+test('rollback does not wait for an unresolved browser operation but still disposes its late resource', async () => {
+  const timers = fakeTimers();
+  const gate = new MicStartupGate({ setTimer: timers.setTimer, clearTimer: timers.clearTimer });
+  let resolveLate!: (value: object) => void;
+  const operation = new Promise<object>((resolve) => { resolveLate = resolve; });
+  const attempt = gate.begin();
+  let closed = 0;
+  gate.own(attempt, {}, () => { closed++; });
+  const waiting = gate.wait(attempt, operation, { dispose: () => { closed++; } });
+  const rejected = assert.rejects(waiting, (error: any) => error.code === 'mic-startup-cancelled');
+  await gate.dispose(attempt);
+  await rejected;
+  assert.equal(closed, 1);
+  resolveLate({});
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(closed, 2);
+});
+
+test('a resource operation reaching an already-cancelled attempt is still retired when it resolves', async () => {
+  const timers = fakeTimers();
+  const gate = new MicStartupGate({ setTimer: timers.setTimer, clearTimer: timers.clearTimer });
+  const attempt = gate.begin();
+  gate.cancel(attempt);
+  let closed = 0;
+  await assert.rejects(gate.wait(attempt, Promise.resolve({}), { dispose: () => { closed++; } }),
+    (error: any) => error.code === 'mic-startup-cancelled');
+  await gate.dispose(attempt);
+  assert.equal(closed, 1);
+});
+
+test('a synchronously created resource cannot be attached to a retired attempt', async () => {
+  const timers = fakeTimers();
+  const gate = new MicStartupGate({ setTimer: timers.setTimer, clearTimer: timers.clearTimer });
+  const attempt = gate.begin();
+  gate.cancel(attempt);
+  let closed = 0;
+  assert.throws(() => gate.own(attempt, {}, () => { closed++; }),
+    (error: any) => error.code === 'mic-startup-cancelled');
+  await gate.dispose(attempt);
+  assert.equal(closed, 1);
+});

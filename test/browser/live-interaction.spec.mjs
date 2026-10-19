@@ -334,12 +334,21 @@ async function installProductionDomHarness(page) {
       constructor() {
         super();
         this.sampleRate = 48_000;
+        this.closeCalls = 0;
+        (window.__audioContexts ??= []).push(this);
         this.state = 'running';
         this.createdAtMs = performance.now();
         this.destination = new FakeAudioNode();
         this.audioWorklet = {
           addModule: async (url) => {
-            if (String(url).includes('capture-worklet')) mark('T2');
+            if (String(url).includes('capture-worklet')) {
+              this.capture = true;
+              mark('T2');
+              if (window.__failCaptureModule) {
+                window.__failCaptureModule = false;
+                throw new Error('test: capture module unavailable');
+              }
+            }
           },
         };
       }
@@ -348,7 +357,7 @@ async function installProductionDomHarness(page) {
       get currentTime() { return (performance.now() - this.createdAtMs) / 1000; }
 
       async resume() { this.state = 'running'; }
-      async close() { this.state = 'closed'; }
+      async close() { this.closeCalls++; this.state = 'closed'; }
       createMediaStreamSource() {
         const node = new FakeAudioNode();
         (window.__captureResourceNodes ??= []).push({ kind: 'source', node });
@@ -386,7 +395,7 @@ async function installProductionDomHarness(page) {
     const track = new EventTarget();
     track.muted = false;
     track.readyState = 'live';
-    track.stop = () => {};
+    track.stop = () => { window.__trackStops = (window.__trackStops ?? 0) + 1; };
     // The input the live track is routed from; tests can move it.
     track.getSettings = () => ({ deviceId: window.__inputDeviceId ?? 'mic-a' });
     const stream = {
@@ -1732,4 +1741,58 @@ test('production DOM: failed visual worker configuration terminates the worker w
   await prepareReadyMic(page);
   expect(await page.evaluate(() => window.__failedVisualWorkers)).toEqual([{ terminations: 1 }]);
   expect(await page.evaluate(() => window.relayActiveRole)).toBe('publisher');
+});
+
+test('production DOM: failed Mic preparation releases its own resources once and retry stays live', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', route => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => window.relayRecordingState?.connected === true);
+  await page.evaluate(() => {
+    window.__failCaptureModule = true;
+    window.__startupFailures = [];
+    window.addEventListener('relay-microphone-start-failed', event => window.__startupFailures.push(event.detail));
+  });
+  await page.locator('#start-publisher').click();
+  await expect.poll(() => page.evaluate(() => window.__startupFailures.length)).toBe(1);
+  const closes = () => page.evaluate(() => (window.__audioContexts ?? []).filter(context => context.capture).map(context => context.closeCalls));
+  await expect.poll(closes).toEqual([1]);
+  expect(await page.evaluate(() => window.__trackStops)).toBe(1);
+  await expect(page.locator('#start-publisher')).toBeEnabled();
+
+  await prepareReadyMic(page);
+  await expect.poll(closes).toEqual([1, 0]);
+  expect(await page.evaluate(() => window.__trackStops)).toBe(1);
+  await page.evaluate(() => window.dispatchEvent(new Event('relay-release-microphone')));
+  await expect.poll(closes).toEqual([1, 1]);
+  expect(await page.evaluate(() => window.__trackStops)).toBe(2);
+});
+
+test('production DOM: a retired startup encoder cannot send or terminate a newer Mic session', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', route => route.abort());
+  await page.route('**/mic-codec-config', route => route.fulfill({ json: { opus: true, bitrate: 32000 } }));
+  await page.route('**/mic-opus-trial.js', route => route.fulfill({
+    contentType: 'text/javascript',
+    body: `export async function createMicOpusTrial(callbacks) {
+      const encoder = { bitrate: 32000, closes: 0, reset() {}, encode() { return true; }, setBitrate() {}, close() { this.closes++; } };
+      (window.__trialEncoders ??= []).push({ encoder, callbacks });
+      return encoder;
+    }`,
+  }));
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => window.relayRecordingState?.connected === true);
+  await page.locator('#start-publisher').click();
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.filter(command => command.type === 'register' && command.role === 'publisher').length === 1);
+  await page.evaluate(() => window.dispatchEvent(new Event('relay-retry-microphone')));
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.filter(command => command.type === 'register' && command.role === 'publisher').length === 2);
+  const evidence = await page.evaluate(() => {
+    const before = window.__relayInteractionHarness.packets.length;
+    window.__trialEncoders[0].callbacks.onPacket(new ArrayBuffer(100));
+    window.__trialEncoders[0].callbacks.onError(new Error('retired encoder failed'));
+    return { before, after: window.__relayInteractionHarness.packets.length };
+  });
+  expect(evidence.after).toBe(evidence.before);
+  expect(await page.evaluate(() => window.relayActiveRole)).toBe('publisher');
+  expect(await page.evaluate(() => window.__trialEncoders.map(({ encoder }) => encoder.closes))).toEqual([1, 0]);
 });

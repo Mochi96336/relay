@@ -25,6 +25,10 @@ export class MicStartupGate {
   isCurrent(attempt: MicStartupAttempt | null | undefined): boolean;
   cancel(attempt?: MicStartupAttempt | null, reason?: Error): boolean;
   complete(attempt: MicStartupAttempt): boolean;
+  /** Keep a resource in this attempt until complete transfers it. */
+  own<T>(attempt: MicStartupAttempt, value: T, dispose: (value: T) => void | Promise<void>): T;
+  /** Release known prepared resources; late browser results dispose separately. */
+  dispose(attempt: MicStartupAttempt): Promise<void>;
   wait<T>(
     attempt: MicStartupAttempt,
     operation: T | PromiseLike<T>,

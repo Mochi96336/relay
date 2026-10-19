@@ -23,7 +23,9 @@ export class MicStartupTimeoutError extends Error {
  * Browser permission promises cannot be aborted portably. Cancelling this gate
  * therefore rejects Relay's wait immediately and disposes a late resource when
  * the browser eventually resolves it, so an old prompt can never resurrect a
- * microphone after a retry or Release.
+ * microphone after a retry or Release. Prepared resources remain owned by the
+ * attempt until complete() transfers them; cancel/dispose releases only that
+ * attempt's resources, never a newer session's global state.
  */
 export class MicStartupGate {
   constructor({
@@ -64,6 +66,8 @@ export class MicStartupGate {
       cancelled,
       rejectCancellation,
       timer: null,
+      disposers: [],
+      disposals: [],
     };
     attempt.timer = this.setTimer(() => {
       this.cancel(attempt, new MicStartupTimeoutError(attempt.stage));
@@ -82,28 +86,59 @@ export class MicStartupGate {
     if (attempt.timer !== null) this.clearTimer(attempt.timer);
     attempt.timer = null;
     attempt.rejectCancellation(reason);
+    for (const dispose of attempt.disposers) void dispose();
+    attempt.disposers = [];
     return true;
   }
 
+  /** Transfer every prepared resource to the active session in one step. */
   complete(attempt) {
     if (!this.isCurrent(attempt)) return false;
     this.current = null;
     if (attempt.timer !== null) this.clearTimer(attempt.timer);
     attempt.timer = null;
+    attempt.disposers = [];
     return true;
   }
 
+  /** Own a synchronously created resource until complete transfers it. */
+  own(attempt, value, dispose) {
+    const release = this.#disposer(attempt, value, dispose);
+    if (!this.isCurrent(attempt)) {
+      void release();
+      throw new MicStartupCancelledError();
+    }
+    attempt.disposers.push(release);
+    return value;
+  }
+
+  /** Roll back this attempt only; never wait on unresolved browser permission. */
+  async dispose(attempt) {
+    this.cancel(attempt);
+    await Promise.all(attempt.disposals);
+  }
+
+  #disposer(attempt, value, dispose) {
+    let pending = null;
+    return () => {
+      if (!pending) {
+        pending = Promise.resolve().then(() => dispose(value)).catch(() => {});
+        attempt.disposals.push(pending);
+      }
+      return pending;
+    };
+  }
+
   async wait(attempt, operation, { stage, dispose } = {}) {
-    if (!this.isCurrent(attempt)) throw new MicStartupCancelledError();
-    if (stage) attempt.stage = stage;
+    if (stage && this.isCurrent(attempt)) attempt.stage = stage;
 
     // Both the late-result observer and the race continuation can see the
     // same cancelled resource. Share cleanup ownership before either runs.
-    let disposal = null;
+    let release = null;
     const disposeOnce = (value) => {
       if (typeof dispose !== 'function') return;
-      if (!disposal) disposal = Promise.resolve().then(() => dispose(value)).catch(() => {});
-      return disposal;
+      release ??= this.#disposer(attempt, value, dispose);
+      return release();
     };
     const pending = Promise.resolve(operation);
     pending.then(
@@ -114,11 +149,13 @@ export class MicStartupGate {
       () => {},
     );
 
+    if (!this.isCurrent(attempt)) throw new MicStartupCancelledError();
     const value = await Promise.race([pending, attempt.cancelled]);
     if (!this.isCurrent(attempt)) {
       await disposeOnce(value);
       throw new MicStartupCancelledError();
     }
+    if (typeof dispose === 'function') attempt.disposers.push(() => disposeOnce(value));
     return value;
   }
 }

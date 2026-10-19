@@ -38,53 +38,11 @@ test('boot-probe result cannot impersonate a confirmed content transition anchor
   }
 });
 
-test('content provenance is read from applied authority, never the in-flight candidate', () => {
-  // Baseline semantics now live in a pure policy. The server must sample the
-  // applied authority and confirmed-result facts, then delegate; candidate
-  // strategy metadata remains outside this provenance boundary.
-  const baseline = functionBlock('syncContentValidationBaseline');
-  assert.match(baseline, /decideContentValidationBaselineSync\(\{/);
-  assert.match(baseline, /appliedKind:\s*appliedCalibrationKind\(\)/);
-  assert.match(baseline, /hasConfirmedResult:\s*confirmed !== null/);
-  assert.match(baseline, /calibrationStale:\s*confirmed !== null && calibrationIsStale\(\)/);
-  assert.doesNotMatch(
-    baseline,
-    /timingRuntime\.calibrationKind/,
-    'baseline provenance must not read the in-flight candidate strategy',
-  );
-
-  // Path admission delegates staged decisions so cheap prerequisites reject
-  // before applied-authority and live-path facts are sampled. The authority
-  // read is now pure; candidate strategy still remains outside this boundary.
-  const path = functionBlock('contentValidationPathReady');
-  const prerequisites = path.indexOf('contentValidationPathPrerequisitesReady({');
-  const authorityRead = path.indexOf('const appliedKind = appliedCalibrationKind()');
-  const authorityGate = path.indexOf('contentValidationAuthorityReady({');
-  const liveGate = path.indexOf('contentValidationLivePathReady({');
-  assert.ok(prerequisites >= 0, 'path readiness must delegate prerequisite admission');
-  assert.ok(authorityRead > prerequisites, 'applied authority must be sampled only after prerequisites');
-  assert.ok(authorityGate > authorityRead, 'authority policy must consume the applied authority query');
-  assert.ok(liveGate > authorityGate, 'transport/media liveness must be checked after authority admission');
-  assert.match(path, /bootProbeSettled:\s*bootProbeSettled\(nowMs\)/);
-  assert.doesNotMatch(
-    path,
-    /timingRuntime\.calibrationKind/,
-    'path readiness must not treat the in-flight candidate as provenance',
-  );
-});
-
-test('content gates ask whether the boot probe settled, not whether it failed', () => {
+test('mixer applicability recognizes successful boot settlement as well as exhaustion', () => {
   // A probe that succeeds never reports an error, so a gate keyed on probe
   // failure stays shut forever on the healthy path - which is what left content
   // permanently un-appliable and drift validation permanently unarmed.
-  for (const name of [
-    'maybeAutoCalibrate',
-    'calibrationApplicability',
-    'contentValidationPathReady',
-  ]) {
-    const block = functionBlock(name);
-    assert.match(block, /bootProbeSettled\(/, `${name} must gate on boot probe settlement`);
-  }
+  assert.match(functionBlock('calibrationApplicability'), /bootProbeSettled\(/);
 
   const settled = functionBlock('bootProbeSettled');
   assert.match(settled, /probeCalibrationExhausted\(nowMs\)/, 'exhaustion is one way to settle');

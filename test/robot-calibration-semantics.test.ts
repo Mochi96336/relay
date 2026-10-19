@@ -106,16 +106,6 @@ test('Robot recalibration adapter preserves old authority until candidate promot
     'reading applied provenance must not synchronize or advance confirmed authority',
   );
 
-  const settlementStart = source.indexOf('onSettled: () => {');
-  const settlementEnd = source.indexOf('\n  },', settlementStart);
-  assert.ok(settlementStart >= 0 && settlementEnd > settlementStart);
-  const settlement = source.slice(settlementStart, settlementEnd);
-  const authoritySync = settlement.indexOf('timingRuntime.syncConfirmedAuthority({');
-  const mixerSync = settlement.indexOf('syncAppliedCalibration()');
-  assert.ok(authoritySync >= 0 && mixerSync > authoritySync, 'confirmed provenance must settle before mixer observers run');
-  assert.match(settlement, /confirmedRevision: calibration\.confirmedRevision/);
-  assert.match(settlement, /hasConfirmedResult: calibration\.confirmedResult !== null/);
-
   const canApply = source.match(/function calibrationApplicability\([\s\S]*?\n\}/)?.[0] ?? '';
 assert.match(canApply, /decideCalibrationApplicability\(\{/);
 assert.match(canApply, /calibrationTransactionActive: calibration\.transactionActive/);

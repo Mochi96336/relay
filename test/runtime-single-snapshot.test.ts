@@ -49,8 +49,6 @@ test('the Robot route is a physical fact that no strategy flag may switch off', 
   for (const name of [
     'robotContentMappingReady',
     'takeQualityFrameState',
-    'maybeAutoCalibrate',
-    'contentValidationPathReady',
     'dropLegacyCalibrationForRobot',
     'maybeReapplyBootCalibration',
   ]) {

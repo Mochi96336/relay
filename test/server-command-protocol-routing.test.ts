@@ -104,8 +104,7 @@ test('the server composition boundary owns transport and room command effects', 
   assert.match(server, /requireMicOwnerCommand\(socket, 'start-timing-calibration'\)/);
   assert.match(server, /productStatusPayload\(nowMs\)\.actions/);
   assert.match(server, /restartManualBootCalibration\(nowMs\)/);
-  assert.match(server, /timingRuntime\.beginContentCalibration\(nowMs, false\)/);
-  assert.match(server, /calibration\.start\(nowMs\)/);
+  assert.match(server, /contentCalibration\.startManual\(nowMs\)/);
   assert.match(server, /parseAudioUplinkHealth\(payload\)/);
   assert.match(server, /const nowMs = performance\.now\(\)/);
   assert.match(server, /const accepted = micRuntime\.noteUplinkHealth\(socket, health, nowMs, \{\s*playable: micPlayable\(nowMs\), headroomMs: session\.health\(\)\.micHeadroomMs,\s*\}\)/);

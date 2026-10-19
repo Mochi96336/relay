@@ -17,6 +17,10 @@ const runtime = parseTypeScriptSource(
   new URL('../src/timing-runtime.ts', import.meta.url),
   readFileSync(new URL('../src/timing-runtime.ts', import.meta.url), 'utf8'),
 );
+const contentCoordinator = parseTypeScriptSource(
+  new URL('../src/content-calibration-coordinator.ts', import.meta.url),
+  readFileSync(new URL('../src/content-calibration-coordinator.ts', import.meta.url), 'utf8'),
+);
 const serverCode = sourceCode(server);
 
 test('TimingRuntime owns orchestration metadata without absorbing timing authorities', () => {
@@ -28,8 +32,9 @@ test('TimingRuntime owns orchestration metadata without absorbing timing authori
     /let\s+(?:lastAutoCalibrationAt|calibrationWasAutomatic|calibrationKind|contentValidationBaselineRevision|contentValidationSlewRevision)\b/,
   );
 
-  assert.ok(variableInitializerCode(server, 'calibration').includes('new CalibrationSession({'));
-  assert.ok(variableInitializerCode(server, 'contentCalibrationValidator').includes('new ContentCalibrationValidator({'));
+  assert.ok(variableInitializerCode(server, 'contentCalibration').includes('new ContentCalibrationCoordinator({'));
+  assert.equal(variableInitializerCode(server, 'calibration'), 'contentCalibration.measurement');
+  assert.equal(variableInitializerCode(server, 'contentCalibrationValidator'), 'contentCalibration.validation');
   assert.ok(variableInitializerCode(server, 'bootProbe').includes('new BootProbeCoordinator({'));
 
   const imports = importSources(runtime);
@@ -46,15 +51,19 @@ test('TimingRuntime owns orchestration metadata without absorbing timing authori
   }
 });
 
-test('server delegates auto retry, run provenance, calibration kind and validation revisions to TimingRuntime', () => {
-  for (const expected of [
-    'timingRuntime.autoCalibrationDue(nowMs)',
-    'timingRuntime.beginContentCalibration(nowMs, true)',
-    'timingRuntime.beginContentCalibration(nowMs, false)',
-    'timingRuntime.prepareContentValidationSlew(calibration.confirmedRevision + 1)',
-    'timingRuntime.markContentValidationBaseline(calibration.confirmedRevision)',
-    'automatic: timingRuntime.automatic',
+test('server projects automatic provenance from TimingRuntime', () => {
+  assert.ok(serverCode.includes('automatic: timingRuntime.automatic'));
+});
+
+test('content coordination owns measurement and validation without physical transports or storage', () => {
+  const imports = importSources(contentCoordinator);
+  assert.ok(imports.includes('./calibration-session.js'));
+  assert.ok(imports.includes('./content-calibration-validator.js'));
+  for (const forbidden of [
+    'ws', 'node:fs', 'node:worker_threads', './audio-session.js',
+    './source-runtime.js', './backing-runtime.js', './mic-runtime.js',
+    './take-controller.js', './server.js',
   ]) {
-    assert.ok(serverCode.includes(expected), `server must retain TimingRuntime delegation: ${expected}`);
+    assert.equal(imports.includes(forbidden), false, `content coordination must not own ${forbidden}`);
   }
 });

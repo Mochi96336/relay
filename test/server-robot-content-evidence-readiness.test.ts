@@ -25,27 +25,10 @@ test('Robot content evidence readiness rejects a pending backing boundary even w
   assert.match(block, /!robotContentTimeline\.needsBackingBoundary\(calibrationContext\(\)\)/);
 });
 
-test('priming, automatic calibration and content validation all require an evidence-usable Robot mapping', () => {
+test('fallback priming requires evidence-usable Robot mapping', () => {
   assert.match(
     functionBlock('robotContentFallbackPrimingActive'),
     /!robotContentEvidenceMappingReady\(nowMs\)/,
-  );
-  const automatic = functionBlock('maybeAutoCalibrate');
-  assert.match(automatic, /autoContentCalibrationPrerequisitesReady\(\{/);
-  assert.match(
-    automatic,
-    /robotEvidenceMappingReady:\s*!robotRoute \|\| robotContentEvidenceMappingReady\(nowMs\)/,
-  );
-
-  // Content-validation admission now delegates its prerequisite decision to a
-  // pure policy. Preserve the evidence boundary rather than the old inline-if
-  // spelling: Robot routes must still sample the evidence-usable mapping fact,
-  // while non-Robot routes bypass that Robot-only requirement.
-  const validation = functionBlock('contentValidationPathReady');
-  assert.match(validation, /contentValidationPathPrerequisitesReady\(\{/);
-  assert.match(
-    validation,
-    /robotEvidenceMappingReady:\s*!robotRoute \|\| robotContentEvidenceMappingReady\(nowMs\)/,
   );
 });
 

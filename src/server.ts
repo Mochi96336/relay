@@ -26,23 +26,10 @@ import {
 } from './calibration-applicability.js';
 import { PROBE_REFERENCE_MS } from './calibration-probe.js';
 import {
-  CalibrationSession,
   MAX_CAPTURE_GAP_MS,
   type CalibrationContext,
 } from './calibration-session.js';
-import { ContentCalibrationValidator } from './content-calibration-validator.js';
-import { decideContentValidationBaselineSync } from './content-validation-baseline-policy.js';
-import {
-  contentValidationAuthorityReady,
-  contentValidationLivePathReady,
-  contentValidationPathPrerequisitesReady,
-} from './content-validation-path-policy.js';
-import {
-  autoContentCalibrationAuthorityAllowsStart,
-  autoContentCalibrationLivePathReady,
-  autoContentCalibrationPrerequisitesReady,
-  autoContentCalibrationStartMode,
-} from './auto-content-calibration-policy.js';
+import { ContentCalibrationCoordinator } from './content-calibration-coordinator.js';
 import { analyzeTimingCalibrationInWorker } from './timing-calibration-worker-client.js';
 import { applyMicOwnerTransitionEffects } from './mic-owner-transition-application.js';
 import { MicAudibilityMonitor, type MicAudibilityResult } from './mic-audibility-monitor.js';
@@ -303,8 +290,6 @@ const productMic = new ProductMicSteadiness();
 let micCaptureFallingBehind = false;
 let reportedMicTimelineFolds = 0;
 let reportedMicTimelineUnfolds = 0;
-/** The confirmed calibration revision last handed to the mixer as a new Mic measurement. */
-let micMeasuredCalibrationRevision = 0;
 let micAudibilityReceiverBaseline: { [key: string]: number } | null = null;
 
 // Read here rather than beside the other calibration constants because the
@@ -1039,54 +1024,58 @@ function requestRobotBackingBoundary(nowMs = performance.now()) {
   return true;
 }
 
-const calibration = new CalibrationSession({
-  sampleRate: MIX_SAMPLE_RATE,
-  durationMs: TIMING_CALIBRATION_MS,
-  timeoutMs: TIMING_CALIBRATION_TIMEOUT_MS,
-  context: calibrationContext,
-  agreementWindows: CALIBRATION_AGREEMENT,
-  agreementToleranceMs: CALIBRATION_TOLERANCE_MS,
-  provisionalConfidence: CALIBRATION_PROVISIONAL_CONFIDENCE,
-  maxLagMs: CALIBRATION_MAX_LAG_MS,
-  analyze: analyzeTimingCalibrationInWorker,
-  onSettled: () => {
-    timingRuntime.syncConfirmedAuthority({
-      confirmedRevision: calibration.confirmedRevision,
-      hasConfirmedResult: calibration.confirmedResult !== null,
-    });
-    noteContentMicMeasurement();
-    syncAppliedCalibration();
-    broadcastJson(timingCalibrationStatusPayload());
-    broadcastJson(sourceStatusPayload());
+const contentCalibration = new ContentCalibrationCoordinator({
+  automatic: AUTO_CALIBRATE,
+  measurement: {
+    sampleRate: MIX_SAMPLE_RATE,
+    durationMs: TIMING_CALIBRATION_MS,
+    timeoutMs: TIMING_CALIBRATION_TIMEOUT_MS,
+    context: calibrationContext,
+    agreementWindows: CALIBRATION_AGREEMENT,
+    agreementToleranceMs: CALIBRATION_TOLERANCE_MS,
+    provisionalConfidence: CALIBRATION_PROVISIONAL_CONFIDENCE,
+    maxLagMs: CALIBRATION_MAX_LAG_MS,
+    analyze: analyzeTimingCalibrationInWorker,
   },
+  validation: {
+    sampleRate: MIX_SAMPLE_RATE,
+    durationMs: TIMING_CALIBRATION_MS,
+    timeoutMs: TIMING_CALIBRATION_TIMEOUT_MS,
+    intervalMs: CONTENT_VALIDATION_INTERVAL_MS,
+    retryMs: CONTENT_VALIDATION_RETRY_MS,
+    deviationThresholdMs: CONTENT_VALIDATION_DEVIATION_MS,
+    agreementToleranceMs: CALIBRATION_TOLERANCE_MS,
+    enabled: CONTENT_VALIDATION_ENABLED,
+    maxLagMs: CALIBRATION_MAX_LAG_MS,
+    analyze: analyzeTimingCalibrationInWorker,
+  },
+}, {
+  timing: timingRuntime,
+  authority: {
+    kind: appliedCalibrationKind,
+    stale: calibrationIsStale,
+    apply: syncAppliedCalibration,
+  },
+  route: {
+    robotActive: robotRouteActive,
+    bootSettled: bootProbeSettled,
+    bootExhausted: probeCalibrationExhausted,
+    evidenceMappingReady: robotContentEvidenceMappingReady,
+  },
+  media: {
+    active: () => session.active,
+    backingConnected: () => backingRuntime.connected(),
+    micControlConnected: () => micRuntime.controlConnected(),
+    streamsFlowing: bothStreamsFlowing,
+    timeline: currentTimelineStatus,
+    noteMicMeasured: () => session.noteMicCalibrationMeasured(),
+  },
+  takeBlocked: takeBlocksCalibration,
+  timingChanged: () => broadcastJson(timingCalibrationStatusPayload()),
+  sourceChanged: () => broadcastJson(sourceStatusPayload()),
 });
-
-const contentCalibrationValidator = new ContentCalibrationValidator({
-  sampleRate: MIX_SAMPLE_RATE,
-  durationMs: TIMING_CALIBRATION_MS,
-  timeoutMs: TIMING_CALIBRATION_TIMEOUT_MS,
-  intervalMs: CONTENT_VALIDATION_INTERVAL_MS,
-  retryMs: CONTENT_VALIDATION_RETRY_MS,
-  deviationThresholdMs: CONTENT_VALIDATION_DEVIATION_MS,
-  agreementToleranceMs: CALIBRATION_TOLERANCE_MS,
-  context: calibrationContext,
-  enabled: CONTENT_VALIDATION_ENABLED,
-  maxLagMs: CALIBRATION_MAX_LAG_MS,
-  analyze: analyzeTimingCalibrationInWorker,
-  onChange: () => {
-    broadcastJson(timingCalibrationStatusPayload());
-  },
-  onDriftConfirmed: (result) => {
-    timingRuntime.markContentAuthority();
-    // applyValidatedResult synchronously calls onSettled -> syncAppliedCalibration.
-    // Mark that revision first so only this runtime promotion takes the slew path.
-    timingRuntime.prepareContentValidationSlew(calibration.confirmedRevision + 1);
-    calibration.applyValidatedResult(result);
-    // applyValidatedResult increments synchronously. Keep the validator's
-    // own drift-confirmed state rather than immediately reseeding it.
-    timingRuntime.markContentValidationBaseline(calibration.confirmedRevision);
-  },
-});
+const calibration = contentCalibration.measurement;
+const contentCalibrationValidator = contentCalibration.validation;
 
 const bootProbe = new BootProbeCoordinator({
   sampleRate: MIX_SAMPLE_RATE,
@@ -1122,64 +1111,12 @@ const bootProbe = new BootProbeCoordinator({
   onBackingMeasured: keepRobotBackingPath,
 });
 
-/**
- * Tells the mixer a content calibration was just measured from the Mic
- * timeline. A Boot Probe promotion also lands here, but only a fresh probe is a
- * new measurement (see BootProbeCoordinator); a reapply reuses an old one.
- */
-function noteContentMicMeasurement() {
-  if (calibration.confirmedRevision === micMeasuredCalibrationRevision) return;
-  micMeasuredCalibrationRevision = calibration.confirmedRevision;
-  if (appliedCalibrationKind() !== 'boot-probe') session.noteMicCalibrationMeasured();
-}
-
 function clearContentValidationBaseline() {
-  timingRuntime.clearContentValidationBaseline();
-  contentCalibrationValidator.clearBaseline();
-}
-
-/**
- * Seeds the drift validator from the content result that is actually in force.
- *
- * Provenance here must come from `appliedCalibrationKind()`, never the
- * candidate kind. `CalibrationSession.start()` deliberately keeps the previous
- * confirmed result serving while a replacement is measured, so
- * `candidate = content` alongside `confirmed = boot-probe` is an ordinary
- * state - and reading the candidate there would install a boot-probe
- * measurement as the baseline that content drift is judged against.
- */
-function syncContentValidationBaseline(nowMs: number) {
-  const confirmed = calibration.confirmedResult;
-  const decision = decideContentValidationBaselineSync({
-    appliedKind: appliedCalibrationKind(),
-    hasConfirmedResult: confirmed !== null,
-    calibrationStale: confirmed !== null && calibrationIsStale(),
-    hasBaseline: contentCalibrationValidator.hasBaseline,
-    baselineRevision: timingRuntime.contentValidationBaselineRevision,
-    confirmedRevision: calibration.confirmedRevision,
-  });
-
-  if (decision === 'none') return;
-  if (decision === 'clear') {
-    clearContentValidationBaseline();
-    return;
-  }
-  if (confirmed === null) return;
-
-  contentCalibrationValidator.setBaseline({
-    micLagMs: confirmed.micLagMs,
-    confidence: confirmed.confidence,
-    segmentLagsMs: confirmed.segmentLagsMs,
-    context: calibrationContext(),
-  }, nowMs);
-  timingRuntime.markContentValidationBaseline(calibration.confirmedRevision);
+  contentCalibration.clearValidationBaseline();
 }
 
 function cancelActiveContentValidation(nowMs = performance.now()) {
-  const state = contentCalibrationValidator.status(nowMs).state;
-  if (!contentCalibrationValidator.collecting && state !== 'suspect') return false;
-  contentCalibrationValidator.cancel(nowMs);
-  return true;
+  return contentCalibration.cancelValidation(nowMs);
 }
 
 function rejectInfrastructure(socket: RelaySocket, message: string) {
@@ -2656,106 +2593,6 @@ function reportMicAudibility(result: MicAudibilityResult, nowMs: number) {
   }));
 }
 
-function maybeAutoCalibrate(nowMs: number) {
-  // Feature enablement and Take ownership are outer scheduler concerns. The
-  // calibration policy below owns why an otherwise eligible automatic content
-  // attempt may proceed.
-  if (!AUTO_CALIBRATE || takeBlocksCalibration()) return;
-  const robotRoute = robotRouteActive();
-  if (!autoContentCalibrationPrerequisitesReady({
-    bootProbeSettled: bootProbeSettled(nowMs),
-    robotRouteActive: robotRoute,
-    robotEvidenceMappingReady: !robotRoute || robotContentEvidenceMappingReady(nowMs),
-    sessionActive: session.active,
-    calibrationCollecting: calibration.collecting,
-  })) return;
-
-  const freshConfirmedResult = calibration.confirmedResult !== null && !calibrationIsStale();
-  // Only fresh Robot authority needs to distinguish a replaceable boot
-  // baseline from terminal content authority.
-  const appliedKind = freshConfirmedResult && robotRoute
-    ? appliedCalibrationKind()
-    : null;
-  if (!autoContentCalibrationAuthorityAllowsStart({
-    freshConfirmedResult,
-    robotRouteActive: robotRoute,
-    appliedKind,
-  })) return;
-
-  // Preserve the old liveness read order even though the final decision is
-  // pure: a retry that is not due must not fan out into transport/timeline work.
-  const retryDue = timingRuntime.autoCalibrationDue(nowMs);
-  const backingConnected = retryDue && backingRuntime.connected();
-  const micControlConnected = backingConnected && micRuntime.controlConnected();
-  const streamsFlowing = micControlConnected && bothStreamsFlowing(nowMs);
-  const timeline = streamsFlowing ? currentTimelineStatus() : null;
-  if (!autoContentCalibrationLivePathReady({
-    retryDue,
-    backingConnected,
-    micControlConnected,
-    streamsFlowing,
-    timelineConnected: Boolean(timeline?.connected),
-    timelinePlaying: Number(timeline?.state) === 1,
-  })) return;
-
-  timingRuntime.beginContentCalibration(nowMs, true);
-  const startMode = autoContentCalibrationStartMode(probeCalibrationExhausted(nowMs));
-  if (startMode === 'primed') calibration.startFromPrimed(nowMs);
-  else calibration.start(nowMs);
-  broadcastJson(timingCalibrationStatusPayload());
-}
-
-function contentValidationPathReady(nowMs: number) {
-  const robotRoute = robotRouteActive();
-  if (!contentValidationPathPrerequisitesReady({
-    enabled: CONTENT_VALIDATION_ENABLED,
-    takeBlocked: takeBlocksCalibration(),
-    bootProbeSettled: bootProbeSettled(nowMs),
-    robotRouteActive: robotRoute,
-    robotEvidenceMappingReady: !robotRoute || robotContentEvidenceMappingReady(nowMs),
-    sessionActive: session.active,
-    calibrationCollecting: calibration.collecting,
-  })) return false;
-
-  // Provenance describes the confirmed measurement still serving the mixer,
-  // independently of any replacement strategy currently collecting.
-  const confirmed = calibration.confirmedResult;
-  const appliedKind = appliedCalibrationKind();
-  if (!contentValidationAuthorityReady({
-    appliedKind,
-    hasConfirmedResult: confirmed !== null,
-    calibrationStale:
-      appliedKind === 'content' && confirmed !== null && calibrationIsStale(),
-  })) return false;
-
-  const timeline = currentTimelineStatus(nowMs);
-  return contentValidationLivePathReady({
-    backingConnected: backingRuntime.connected(),
-    micControlConnected: micRuntime.controlConnected(),
-    streamsFlowing: bothStreamsFlowing(nowMs),
-    timelineConnected: Boolean(timeline.connected),
-    timelinePlaying: Number(timeline.state) === 1,
-  });
-}
-
-function maybeValidateContentCalibration(nowMs: number) {
-  syncContentValidationBaseline(nowMs);
-  if (!contentCalibrationValidator.hasBaseline) return;
-
-  const state = contentCalibrationValidator.status(nowMs).state;
-  if (!contentValidationPathReady(nowMs)) {
-    if (contentCalibrationValidator.collecting || state === 'suspect') {
-      contentCalibrationValidator.cancel(nowMs);
-    }
-    return;
-  }
-
-  // Every state transition publishes through validator.onChange. Return values
-  // remain useful to domain tests but are no longer a second telemetry channel.
-  contentCalibrationValidator.tick(nowMs);
-  contentCalibrationValidator.maybeStart(nowMs);
-}
-
 function bootProbeContext() {
   return {
     sessionGeneration: session.generation,
@@ -2905,8 +2742,7 @@ const youtubeTimelineTimer = setInterval(() => {
   bootProbe.startIfReady(nowMs);
   maybeReapplyBootCalibration(nowMs);
   sweepRobotContentTransition(nowMs);
-  maybeAutoCalibrate(nowMs);
-  maybeValidateContentCalibration(nowMs);
+  contentCalibration.tick(nowMs);
 
   sweepPreparedSongHandoff(nowMs);
 
@@ -3145,14 +2981,7 @@ const takeCommands = createTakeCommandHandlers<RelaySocket>({
       : null,
     calibrationError: calibration.status().error ?? probeStatus(nowMs).error ?? null,
   }),
-  onStarted: (nowMs) => {
-    if (cancelActiveContentValidation(nowMs)) {
-      broadcastJson(timingCalibrationStatusPayload());
-    }
-    if (calibration.abandon()) {
-      broadcastJson(timingCalibrationStatusPayload());
-    }
-  },
+  onStarted: (nowMs) => contentCalibration.standDownForTake(nowMs),
   send: sendJson,
 });
 
@@ -3471,10 +3300,7 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
       return;
     }
 
-    cancelActiveContentValidation(nowMs);
-    timingRuntime.beginContentCalibration(nowMs, false);
-    calibration.start(nowMs);
-    broadcastJson(timingCalibrationStatusPayload());
+    contentCalibration.startManual(nowMs);
     return;
   },
 

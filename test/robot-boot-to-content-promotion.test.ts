@@ -13,6 +13,7 @@ import {
   waitForNewMessage,
   type RelayServer,
 } from './helpers/harness.js';
+import { probeAudio } from './support/probe-audio.js';
 
 /**
  * The boot -> content promotion path, driven through the real server.
@@ -62,19 +63,6 @@ const BOOT_ROOM = {
 
 function tone(seconds: number, gain = 0.6, seed = 5) {
   return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, seed), gain);
-}
-
-function probeAudio(leadMs = 20, tailMs = 1_800) {
-  const reference = generateProbeReference(RATE);
-  const probe = Buffer.alloc(reference.length * 2);
-  for (let i = 0; i < reference.length; i += 1) {
-    probe.writeInt16LE(reference[i], i * 2);
-  }
-  return Buffer.concat([
-    Buffer.alloc(Math.round((RATE * leadMs) / 1000) * 2),
-    probe,
-    Buffer.alloc(Math.round((RATE * tailMs) / 1000) * 2),
-  ]);
 }
 
 /**

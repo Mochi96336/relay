@@ -10,6 +10,7 @@ import {
   toInt16,
 } from './helpers/harness.js';
 import {
+  acknowledgeNextBackingBoundary,
   backingBoundaryRequestCount,
   playingTelemetry,
   robotRoom,
@@ -95,25 +96,6 @@ async function waitForActiveLag(
     timeoutMs,
     from,
   );
-}
-
-async function acknowledgeNextBackingBoundary(backing: RelayClient, previousCount: number) {
-  const deadline = Date.now() + 2_000;
-  let request: Record<string, any> | undefined;
-  while (!request && Date.now() < deadline) {
-    request = backing.messages
-      .filter((message) => message.type === 'backing-sample-boundary-request')[previousCount];
-    if (!request) await sleep(10);
-  }
-  if (!request) throw new Error('Relay never requested a fresh backing sample boundary.');
-
-  backing.send({
-    type: 'backing-sample-boundary',
-    requestId: request.requestId,
-    generation: backing.generationId,
-    firstSampleIndex: backing.cursor,
-  });
-  await sleep(20);
 }
 
 function productionCorrectionCadence() {

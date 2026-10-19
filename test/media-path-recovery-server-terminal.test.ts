@@ -8,6 +8,7 @@ import { AudioSession } from '../src/audio-session.js';
 import type { AudioUplinkHealth } from '../src/audio-uplink-health.js';
 import { MicRuntime } from '../src/mic-runtime.js';
 import type { RelaySocket } from '../src/relay-socket-server.js';
+import { BrowserSocket } from './support/browser-socket.js';
 
 const moduleUrl = new URL('../public/audio-transport.js', import.meta.url);
 const SAMPLE_RATE = 48_000;
@@ -57,38 +58,6 @@ function health(capturedSamples: number): AudioUplinkHealth & { type: 'audio-upl
       webSocketSendFailures: 0,
     },
   };
-}
-
-class BrowserSocket {
-  readyState: number = WebSocket.OPEN;
-  bufferedAmount = 0;
-  readonly closeCalls: Array<{ code?: number; reason?: string }> = [];
-  private readonly listeners = new Map<string, Set<(event: { data: string }) => void>>();
-
-  constructor(private readonly onSend: (payload: unknown) => void) {}
-
-  send(payload: unknown) {
-    this.onSend(payload);
-  }
-
-  close(code?: number, reason?: string) {
-    this.closeCalls.push({ code, reason });
-    this.readyState = WebSocket.CLOSED;
-  }
-
-  addEventListener(type: string, listener: (event: { data: string }) => void) {
-    const listeners = this.listeners.get(type) ?? new Set();
-    listeners.add(listener);
-    this.listeners.set(type, listeners);
-  }
-
-  removeEventListener(type: string, listener: (event: { data: string }) => void) {
-    this.listeners.get(type)?.delete(listener);
-  }
-
-  emitText(data: string) {
-    for (const listener of this.listeners.get('message') ?? []) listener({ data });
-  }
 }
 
 class SocketBridge {

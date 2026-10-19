@@ -140,6 +140,15 @@ admit content work. It also owns manual boot replacement and immediate legacy
 route retirement. The server takes its periodic mix-health snapshot after this
 transaction so telemetry sees the alignment settled by that tick.
 
+The same coordinator owns measurement/probe/validator invalidation when a
+capture, Mic owner, source reference or session changes. Capture replacement
+retires pending analysis immediately even without live backing, while retaining
+confirmed history and retry metadata. Owner/route retirement also resets
+strategy and retry metadata. Content mapping revocation leaves independent boot
+pipeline evidence available. Physical adapters advance Source/capture identity
+and reset mapper coordinates before invoking these transactions; they retain
+transport, recording-quality and audio-session lifecycle authority.
+
 `CalibrationAlignment` owns the last revision applied to the mixer, validity
 sampling, application/hold/revocation and boot-baseline reapplication. Its
 desired-lag query observes mapping drift without moving a Take's frozen read

@@ -346,13 +346,19 @@ describe('continuous content calibration validation server policy', () => {
       ]);
       stopStreaming = keepLivePathFresh(backing, publisher);
 
+      // On a timeout, say what the second window concluded instead: the
+      // message types alone cannot tell a rejected window from a slow one.
       const promoted = await waitForNewMessage(
         monitor,
         confirmFrom,
         (m) => m.type === 'timing-calibration-status'
           && m.validation?.lastOutcome === 'drift-confirmed',
         8_000,
-      );
+      ).catch((error) => {
+        const last = monitor.messages.slice(confirmFrom)
+          .filter((m) => m.type === 'timing-calibration-status').at(-1);
+        throw new Error(`${error.message}\nLast validation: ${JSON.stringify(last?.validation ?? null)}`);
+      });
       const promotedLag = Number(promoted.micLagMs);
       assert.ok(Math.abs(promotedLag - baselineLag) > 30);
 

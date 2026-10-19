@@ -1,5 +1,14 @@
 import { mediaToWallMs } from './boot-calibration.js';
-import { sameCalibrationContext, type CalibrationContext } from './calibration-session.js';
+import type { CalibrationContext } from './calibration-session.js';
+
+function sameContext(left: CalibrationContext, right: CalibrationContext) {
+  return left.sessionGeneration === right.sessionGeneration
+    && left.micGeneration === right.micGeneration
+    && left.backingGeneration === right.backingGeneration
+    && (left.micSourceRate ?? null) === (right.micSourceRate ?? null)
+    && (left.backingSourceRate ?? null) === (right.backingSourceRate ?? null)
+    && left.sourceGeneration === right.sourceGeneration;
+}
 
 /**
  * Keeps Robot content-correlation evidence in one stable media-time frame.
@@ -113,7 +122,7 @@ export class RobotContentTimelineMapper {
       || this.referenceDeltaMsValue === null
       || this.observedDeltaMsValue === null
       || this.committedDeltaMsValue === null
-      || !sameCalibrationContext(this.contextValue, context)
+      || !sameContext(this.contextValue, context)
     ) return false;
 
     const seekJumpMs = (toMediaTime - fromMediaTime) * 1_000;
@@ -130,7 +139,7 @@ export class RobotContentTimelineMapper {
   needsBackingBoundary(context: CalibrationContext) {
     return this.awaitingBackingBoundaryValue
       && this.contextValue !== null
-      && sameCalibrationContext(this.contextValue, context);
+      && sameContext(this.contextValue, context);
   }
 
   /**
@@ -147,7 +156,7 @@ export class RobotContentTimelineMapper {
       || firstSampleIndex < 0
       || !this.awaitingBackingBoundaryValue
       || this.contextValue === null
-      || !sameCalibrationContext(this.contextValue, context)
+      || !sameContext(this.contextValue, context)
       || !this.isReady(context, nowMs)
     ) return false;
 
@@ -162,7 +171,7 @@ export class RobotContentTimelineMapper {
       && this.referenceDeltaMsValue !== null
       && this.observedDeltaMsValue !== null
       && this.committedDeltaMsValue !== null
-      && sameCalibrationContext(this.contextValue, context)
+      && sameContext(this.contextValue, context)
       && Number.isFinite(nowMs)
       && nowMs - this.lastMappedAtMs <= this.freshForMs;
   }
@@ -236,7 +245,7 @@ export class RobotContentTimelineMapper {
   }
 
   private bindContext(context: CalibrationContext) {
-    if (this.contextValue !== null && sameCalibrationContext(this.contextValue, context)) return;
+    if (this.contextValue !== null && sameContext(this.contextValue, context)) return;
     this.reset();
     this.contextValue = { ...context };
   }

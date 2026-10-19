@@ -65,16 +65,6 @@ export type CalibrationContext = {
   sourceGeneration: number;
 };
 
-/** Whether two calibration contexts name the same session, captures, source rates and Robot source. */
-export function sameCalibrationContext(left: CalibrationContext, right: CalibrationContext) {
-  return left.sessionGeneration === right.sessionGeneration
-    && left.micGeneration === right.micGeneration
-    && left.backingGeneration === right.backingGeneration
-    && (left.micSourceRate ?? null) === (right.micSourceRate ?? null)
-    && (left.backingSourceRate ?? null) === (right.backingSourceRate ?? null)
-    && left.sourceGeneration === right.sourceGeneration;
-}
-
 export type CalibrationSessionOptions = {
   sampleRate: number;
   durationMs: number;
@@ -278,7 +268,7 @@ export class CalibrationSession {
     // Primed PCM is measurement evidence, not free-floating audio. Never adopt
     // it into a transaction whose session/capture/source identity has changed.
     const ownsPrimedEvidence = this.primedContext !== null
-      && sameCalibrationContext(this.primedContext, currentContext);
+      && this.contextsEqual(this.primedContext, currentContext);
     if (!ownsPrimedEvidence) this.collector.reset();
     this.primedContext = null;
     const revokedProvisional = this.rollbackProvisional();
@@ -325,9 +315,9 @@ export class CalibrationSession {
     const currentContext = this.context();
     const ownsCollectingEvidence = this.collecting
       && this.collectionContext !== null
-      && sameCalibrationContext(this.collectionContext, currentContext);
+      && this.contextsEqual(this.collectionContext, currentContext);
     const ownsPrimedEvidence = this.primedContext !== null
-      && sameCalibrationContext(this.primedContext, currentContext);
+      && this.contextsEqual(this.primedContext, currentContext);
     if (!ownsCollectingEvidence && !ownsPrimedEvidence) return null;
     return this.collector.peekRecentWindow(maxSamples);
   }
@@ -604,13 +594,22 @@ export class CalibrationSession {
     return context === null ? null : { ...context };
   }
 
+  private contextsEqual(left: CalibrationContext, right: CalibrationContext) {
+    return left.sessionGeneration === right.sessionGeneration
+      && left.micGeneration === right.micGeneration
+      && left.backingGeneration === right.backingGeneration
+      && (left.micSourceRate ?? null) === (right.micSourceRate ?? null)
+      && (left.backingSourceRate ?? null) === (right.backingSourceRate ?? null)
+      && left.sourceGeneration === right.sourceGeneration;
+  }
+
   private acceptCollectionContext() {
     const currentContext = this.context();
     if (this.collectionContext === null) {
       this.collectionContext = this.cloneContext(currentContext);
       return true;
     }
-    if (sameCalibrationContext(this.collectionContext, currentContext)) return true;
+    if (this.contextsEqual(this.collectionContext, currentContext)) return true;
 
     this.fail(
       'The capture arrangement changed while calibration was being collected. '
@@ -623,7 +622,7 @@ export class CalibrationSession {
     const currentContext = this.context();
     if (
       this.primedContext === null
-      || !sameCalibrationContext(this.primedContext, currentContext)
+      || !this.contextsEqual(this.primedContext, currentContext)
     ) {
       this.collector.reset();
       this.primedContext = this.cloneContext(currentContext);
@@ -756,7 +755,7 @@ export class CalibrationSession {
     // guarantee: an answer whose audio predates the change describes a pairing
     // of transports the room has left, and the buffered evidence behind it
     // spans the change too.
-    if (!sameCalibrationContext(measurementContext, this.context())) {
+    if (!this.contextsEqual(measurementContext, this.context())) {
       this.fail(
         'The capture arrangement changed while calibration was being measured. '
         + 'Start calibration again.',

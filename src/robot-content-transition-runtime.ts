@@ -12,7 +12,6 @@ import {
   validPositiveInt,
 } from './robot-content-transition-bounds.js';
 import { mediaToWallMs } from './boot-calibration.js';
-import { sameCalibrationContext, type CalibrationContext } from './calibration-session.js';
 import {
   compareRobotContentHypothesesInWorker,
   estimateRobotContentRawLagInWorker,
@@ -22,8 +21,14 @@ import type {
   RobotContentTransitionComparison,
 } from './robot-content-transition.js';
 
-/** The calibration context a transition belongs to. */
-export type RobotContentTransitionContext = CalibrationContext;
+export type RobotContentTransitionContext = {
+  sessionGeneration: number;
+  micGeneration: number | null;
+  backingGeneration: number | null;
+  micSourceRate?: number | null;
+  backingSourceRate?: number | null;
+  sourceGeneration: number;
+};
 
 export type RobotContentTransitionChunk = {
   start: number;
@@ -142,6 +147,15 @@ function validPositive(value: number, name: string) {
   return value;
 }
 
+function contextMatches(left: RobotContentTransitionContext, right: RobotContentTransitionContext) {
+  return left.sessionGeneration === right.sessionGeneration
+    && left.micGeneration === right.micGeneration
+    && left.backingGeneration === right.backingGeneration
+    && (left.micSourceRate ?? null) === (right.micSourceRate ?? null)
+    && (left.backingSourceRate ?? null) === (right.backingSourceRate ?? null)
+    && left.sourceGeneration === right.sourceGeneration;
+}
+
 export class RobotContentTransitionRuntime {
   private readonly sampleRate: number;
   private readonly historySamples: number;
@@ -220,7 +234,7 @@ export class RobotContentTransitionRuntime {
     // asking. Re-anchor instead of inheriting them.
     const compatiblePrevious = previous !== null
       && previous.bounds.phase === 'verifying'
-      && sameCalibrationContext(previous.context, input.context)
+      && contextMatches(previous.context, input.context)
       && previous.playbackRate === input.playbackRate
       && previous.confirmedReferenceLagMs === input.confirmedReferenceLagMs
       && previous.preShiftSamples === preShiftSamples
@@ -326,7 +340,7 @@ export class RobotContentTransitionRuntime {
       || input.committedDeltaMs === null
       || input.freshDeltaMs === null
       || input.referenceDeltaMs === null
-      || !sameCalibrationContext(state.context, input.context)
+      || !contextMatches(state.context, input.context)
     ) return state?.bounds.phase !== 'degraded';
 
     const matchesPre = Math.abs(state.preDeltaMs - input.freshDeltaMs) <= this.toleranceMs;
@@ -387,7 +401,7 @@ export class RobotContentTransitionRuntime {
     if (
       state === null
       || state.bounds.phase !== 'verifying'
-      || !sameCalibrationContext(state.context, input.context)
+      || !contextMatches(state.context, input.context)
     ) return false;
 
     state.transportFrontierCaptureSample = input.firstSampleIndex;
@@ -437,7 +451,7 @@ export class RobotContentTransitionRuntime {
 
   noteMicProgress(nowMs = this.now()) {
     const state = this.state;
-    if (state !== null && !sameCalibrationContext(state.context, this.host.context())) {
+    if (state !== null && !contextMatches(state.context, this.host.context())) {
       // A Mic capture-generation change makes every pending hypothesis window
       // belong to a retired acoustic timeline. Clearing here runs in the same
       // publisher-frame call stack that established the new generation, so an
@@ -540,7 +554,7 @@ export class RobotContentTransitionRuntime {
       || state.preRawLagMs === null
       || state.postRawLagMs === null
       || state.nextWindowStart === null
-      || !sameCalibrationContext(state.context, this.host.context())
+      || !contextMatches(state.context, this.host.context())
     ) return;
 
     const start = state.nextWindowStart;

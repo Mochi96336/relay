@@ -27,9 +27,9 @@ export function uplinkHealthReport(
     controlReconnects: 0,
     transport: {
       path: 'websocket',
-      maxPacketBytes: null,
-      minWebTransportMaxPacketBytes: null,
-      maxWebTransportMaxPacketBytes: null,
+      maxPacketBytes: null as number | null,
+      minWebTransportMaxPacketBytes: null as number | null,
+      maxWebTransportMaxPacketBytes: null as number | null,
       webTransportAttempts: 0,
       webTransportConnections: 0,
       webTransportDemotions: 0,

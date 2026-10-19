@@ -124,6 +124,7 @@ import {
 } from './song-session.js';
 import { takeFrameBoundaryAtOrAfter } from './take-boundary.js';
 import { TakeController, type TakeSongSnapshot } from './take-controller.js';
+import { createTakeCommandHandlers } from './take-command-handlers.js';
 import { takeSongSnapshotFromRoom } from './take-song-snapshot.js';
 import { SERVER_INCARNATION } from './server-incarnation.js';
 import {
@@ -205,7 +206,6 @@ const BACKING_GRACE_MS = relayConfig.backingGraceMs;
 const MIC_FIRST_FRAME_TIMEOUT_MS = relayConfig.micFirstFrameTimeoutMs;
 const AUDIO_TRANSPORT_CONFIG = loadAudioTransportConfig();
 const PLAYBACK_MIC_INTENT_MS = 10_000;
-const TAKE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
 const directMediaConfig = webTransportMediaConfig();
 const directSocket = directSocketConfig(directMediaConfig);
@@ -1294,14 +1294,6 @@ function takeFrameBoundary(nowMs = performance.now()) {
     frameSamples: session.frameSamples,
     sampleRate: session.sampleRate,
     nowMs,
-  });
-}
-
-function rejectTakeCommand(socket: RelaySocket, command: 'start' | 'stop', reason: string) {
-  sendJson(socket, {
-    type: 'take-command-rejected',
-    command,
-    reason,
   });
 }
 
@@ -3343,72 +3335,6 @@ const queryProtocol = createRelayQueryProtocol<RelaySocket>({
 });
 
 /**
- * Starts a Take the command handler has already admitted, at the mix's
- * authoritative frame boundary.
- */
-function startTakeAtFrame(socket: RelaySocket, participantId: string, commandWallClockMs: number, nowMs: number) {
-  const boundary = takeFrameBoundary(nowMs);
-  const song = takeSongSnapshot(boundary.atMs);
-
-  const result = takeController.start(
-    participantId,
-    song,
-    boundary.position,
-    commandWallClockMs + (boundary.atMs - nowMs),
-  );
-  if (!result.ok) {
-    rejectTakeCommand(socket, 'start', result.reason);
-    return;
-  }
-  takeController.noteTimingAtStart({
-    appliedCalibrationKind: session.alignment.calibratedMicLagMs === null ? 'none' : appliedCalibrationKind(),
-    estimateSource: session.alignment.calibratedMicLagMs === null
-      ? (sampleSongSelected ? 'sample-song' : 'transport')
-      : null,
-    calibrationError: calibration.status().error ?? probeStatus(nowMs).error ?? null,
-  });
-
-  // Background timing work may only be stood down after Take admission.
-  // A rejected command must not discard either a validator confirmation
-  // window or content-calibration evidence the room had already gathered.
-  // `takeController.start` is synchronous, so no analysis callback can
-  // interleave between admission and these stand-down effects.
-  if (cancelActiveContentValidation(nowMs)) {
-    broadcastJson(timingCalibrationStatusPayload());
-  }
-  // Stands a background content measurement down; true when one was running.
-  if (calibration.abandon()) {
-    broadcastJson(timingCalibrationStatusPayload());
-  }
-
-  sendJson(socket, { type: 'take-command-accepted', command: 'start', takeId: result.takeId });
-}
-
-/** Stops a Take at the mix's authoritative frame boundary. */
-function stopTakeAtFrame(
-  socket: RelaySocket,
-  participantId: string,
-  takeId: string,
-  commandWallClockMs: number,
-  nowMs: number,
-) {
-  const boundary = takeFrameBoundary(nowMs);
-  const result = takeController.stop(
-    takeId,
-    participantId,
-    boundary.position,
-    'user',
-    commandWallClockMs + (boundary.atMs - nowMs),
-  );
-  if (!result.ok) {
-    rejectTakeCommand(socket, 'stop', result.reason);
-    return;
-  }
-
-  sendJson(socket, { type: 'take-command-accepted', command: 'stop', takeId, duplicate: result.duplicate });
-}
-
-/**
  * RoomSongCommandRuntime has accepted a room command. The sender hears so
  * first; the target tab is asked to apply it only if it is still the one
  * pending for that tab.
@@ -3578,37 +3504,31 @@ function noteRecordingMicGapHealth(health: AudioUplinkHealth) {
   return false;
 }
 
-const commandProtocol = createRelayCommandProtocol<RelaySocket>({
-  startTake: (socket) => {
-    if (!socket.participantId) {
-      rejectTakeCommand(socket, 'start', 'participant-required');
-      return;
+const takeCommands = createTakeCommandHandlers<RelaySocket>({
+  controller: takeController,
+  admission: (nowMs) => productStatusPayload(nowMs).actions,
+  frameBoundary: takeFrameBoundary,
+  songAt: takeSongSnapshot,
+  timingAtStart: (nowMs) => ({
+    appliedCalibrationKind: session.alignment.calibratedMicLagMs === null ? 'none' : appliedCalibrationKind(),
+    estimateSource: session.alignment.calibratedMicLagMs === null
+      ? (sampleSongSelected ? 'sample-song' : 'transport')
+      : null,
+    calibrationError: calibration.status().error ?? probeStatus(nowMs).error ?? null,
+  }),
+  onStarted: (nowMs) => {
+    if (cancelActiveContentValidation(nowMs)) {
+      broadcastJson(timingCalibrationStatusPayload());
     }
-    const commandWallClockMs = Date.now();
-    const nowMs = performance.now();
-    const productStatus = productStatusPayload(nowMs);
-    if (!productStatus.actions.canStartTake) {
-      rejectTakeCommand(socket, 'start',
-        productStatus.actions.startTakeBlockedReason ?? 'product-state-invalid');
-      return;
+    if (calibration.abandon()) {
+      broadcastJson(timingCalibrationStatusPayload());
     }
-    startTakeAtFrame(socket, socket.participantId, commandWallClockMs, nowMs);
   },
-  stopTake: (socket, payload) => {
-    if (!socket.participantId) {
-      rejectTakeCommand(socket, 'stop', 'participant-required');
-      return;
-    }
-    const takeId = typeof payload.takeId === 'string' ? payload.takeId.trim() : '';
-    if (!TAKE_ID_PATTERN.test(takeId)) {
-      rejectTakeCommand(socket, 'stop', 'invalid-take-id');
-      return;
-    }
+  send: sendJson,
+});
 
-    const commandWallClockMs = Date.now();
-    const nowMs = performance.now();
-    stopTakeAtFrame(socket, socket.participantId, takeId, commandWallClockMs, nowMs);
-  },
+const commandProtocol = createRelayCommandProtocol<RelaySocket>({
+  ...takeCommands,
   releaseMic: (socket) => {
     if (!socket.participantId) return;
     const result = participants.releaseMic(socket.participantId);

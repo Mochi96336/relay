@@ -48,11 +48,7 @@ test('server delegates the extracted low-risk control-plane messages through the
   assert.doesNotMatch(server, /payload\.type === 'mic-presence-telemetry'/);
 });
 
-test('the server composition boundary still owns the extracted message effects', () => {
-  assert.match(server, /takeController\.start\(/);
-  assert.match(server, /takeController\.stop\(/);
-  assert.match(server, /takeFrameBoundary\(nowMs\)/);
-  assert.match(server, /productStatusPayload\(nowMs\)/);
+test('the server composition boundary owns transport and room command effects', () => {
   assert.match(server, /participants\.releaseMic\(socket\.participantId\)/);
   assert.match(server, /applyMicOwnerEffects\(effects, performance\.now\(\), \{/);
   assert.match(server, /revokePublisherTransport\('You released the microphone\.'\)/);

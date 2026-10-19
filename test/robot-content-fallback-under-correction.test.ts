@@ -10,14 +10,16 @@ import {
 } from './helpers/harness.js';
 import {
   backingBoundaryRequestCount,
+  laggedBacking,
   playingTelemetry,
-  robotRoom,
   type RobotRoom,
+  robotRoom,
 } from './support/robot-content-room.js';
 
 const RATE = 48_000;
 const FRAME_SAMPLES = Math.round(RATE * 0.02);
 const PATH_LAG_MS = 250;
+const { makeBackingFrame, sendRange } = laggedBacking(PATH_LAG_MS);
 const INITIAL_DELTA_MS = 450; // Largest usable residual; larger reports are convergence.
 const REFERENCE_LAG_MS = PATH_LAG_MS + INITIAL_DELTA_MS;
 const POST_PROOF_SAMPLES = Math.round(RATE * 8.5);
@@ -113,37 +115,6 @@ async function waitForAcousticCalibration(monitor: RelayClient, timeoutMs: numbe
     }
   }
   throw new Error(`Timing never became acoustic within ${timeoutMs} ms. Last: ${lastSeen}`);
-}
-
-function makeBackingFrame(
-  master: Float64Array,
-  startSample: number,
-  endSample: number,
-  deltaMs: number,
-) {
-  const mediaAdvanceSamples = Math.round((RATE * (PATH_LAG_MS + deltaMs)) / 1_000);
-  return toInt16(
-    master.subarray(startSample + mediaAdvanceSamples, endSample + mediaAdvanceSamples),
-    0.9,
-  );
-}
-
-async function sendRange(
-  room: RobotRoom,
-  mic: Buffer,
-  master: Float64Array,
-  startSample: number,
-  endSample: number,
-  deltaMs: number,
-) {
-  let frames = 0;
-  for (let start = startSample; start < endSample; start += FRAME_SAMPLES) {
-    const end = Math.min(endSample, start + FRAME_SAMPLES);
-    room.backing.sendPcm(makeBackingFrame(master, start, end, deltaMs));
-    room.publisher.sendPcm(mic.subarray(start * 2, end * 2));
-    frames += 1;
-    if (frames % 25 === 0) await sleep(0);
-  }
 }
 
 /**

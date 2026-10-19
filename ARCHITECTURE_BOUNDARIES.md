@@ -156,6 +156,9 @@ head. A new revision held by Take or mapping readiness remains pending; it
 must still reach the mixer when the hold ends. TimingRuntime retains confirmed
 provenance and slew metadata, and AudioSession retains the actual read head
 and slew target. Diagnostic authority snapshots cannot mutate the owner.
+An unchanged boot target acknowledges its confirmed revision only when the
+current lag and pending slew target both match it. A real hold leaves that
+revision pending; a different old slew target must be replaced first.
 
 ### A measurement is a stage only if it occupies the room
 

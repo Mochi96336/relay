@@ -1132,6 +1132,7 @@ const calibrationCoordinator = new CalibrationCoordinator(COLLECTION_SILENCE_GRA
   alignment: {
     apply: syncAppliedCalibration,
     reapplyBoot: maybeReapplyBootCalibration,
+    sessionStopped: () => calibrationAlignment.sessionStopped(),
   },
   silentSides,
   timingChanged: () => broadcastJson(timingCalibrationStatusPayload()),

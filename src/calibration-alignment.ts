@@ -60,6 +60,11 @@ export class CalibrationAlignment {
     return this.appliedAuthority === null ? null : { ...this.appliedAuthority };
   }
 
+  /** AudioSession has cleared its read head, including during Take finalization. */
+  sessionStopped() {
+    this.appliedAuthority = null;
+  }
+
   get stale() {
     return this.host.measurement.isStaleFor(this.host.context());
   }
@@ -135,6 +140,7 @@ export class CalibrationAlignment {
       const nowMs = this.now();
       const decision = decideBootProbeMixerApplication({
         activeMicLagMs: active,
+        calibratedMicLagTarget: audio.calibratedMicLagTarget,
         roomHasSong: mapping.roomHasSong(nowMs),
         resultMicLagMs: measurement.result?.micLagMs ?? null,
         pathDifferenceMs: probe.pathDifferenceMs,
@@ -145,6 +151,10 @@ export class CalibrationAlignment {
         currentDeltaMs: mapping.deltaMs(nowMs),
       });
       if (decision.kind === 'hold') return false;
+      if (decision.kind === 'retain') {
+        this.appliedAuthority = authority;
+        return false;
+      }
       audio.setAlignment({ calibratedMicLagMs: decision.micLagMs });
       this.appliedAuthority = decision.micLagMs === null ? null : authority;
       return true;

@@ -15,15 +15,8 @@ import { parseAudioUplinkHealth, type AudioUplinkHealth } from './audio-uplink-h
 import { parseMicPresenceTelemetry } from './mic-presence-telemetry.js';
 import { micPresenceDisplayValues } from '../shared/mic-presence-precision.js';
 import { monitorBacklogBudgetBytes } from './monitor-backpressure.js';
-import { mediaToWallMs } from './boot-calibration.js';
 import { BootProbeCoordinator } from './boot-probe-coordinator.js';
-import { decideBootProbeMixerApplication } from './boot-probe-mixer-application.js';
-import { decideBootProbeReapplication } from './boot-probe-reapplication.js';
-import { decideCalibrationMixerApplication } from './calibration-mixer-application.js';
-import {
-  decideCalibrationApplicability,
-  type CalibrationApplicability,
-} from './calibration-applicability.js';
+import { CalibrationAlignment } from './calibration-alignment.js';
 import { PROBE_REFERENCE_MS } from './calibration-probe.js';
 import {
   MAX_CAPTURE_GAP_MS,
@@ -915,7 +908,7 @@ function revokeRobotContentMapping({ reason }: { reason: string }) {
  *
  * Boot-probe authority deliberately survives: a measured pipeline latency is
  * wall time and says nothing about how fast the song is playing.
- * `maybeReapplyBootCalibration()` folds the delta back in at the new rate.
+ * `CalibrationAlignment.reapplyBoot()` folds the delta back in at the new rate.
  */
 function revokeContentMappingOnRateChange(playbackRate: unknown) {
   const rate = Number(playbackRate);
@@ -1110,6 +1103,38 @@ const bootProbe = new BootProbeCoordinator({
   },
   changed: () => broadcastJson(timingCalibrationStatusPayload()),
   onBackingMeasured: keepRobotBackingPath,
+});
+
+const calibrationAlignment = new CalibrationAlignment(BOOT_DELTA_REAPPLY_MS, {
+  measurement: calibration,
+  audio: session,
+  timing: timingRuntime,
+  probe: bootProbe,
+  context: calibrationContext,
+  probeContext: bootProbeContext,
+  route: {
+    robotActive: robotRouteActive,
+    probeTimingActive: robotProbeTimingActive,
+    bootSettled: bootProbeSettled,
+    sourceConnected: () => sourceRuntime.connected(),
+  },
+  mapping: {
+    roomHasSong,
+    deltaFresh: robotDeltaIsFresh,
+    deltaEverEstablished: robotDeltaEverEstablished,
+    contentReady: robotContentMappingReady,
+    deltaMs: currentDeltaMs,
+    playbackRate: currentPlaybackRate,
+    contentLiveLag: (referenceLagMs, nowMs) => robotContentTimeline.liveLagMs(
+      referenceLagMs, calibrationContext(), nowMs,
+    ),
+  },
+  takeBlocked: takeBlocksCalibration,
+  bootReapplied: (reason, previousMs, nextMs) => {
+    if (!PROBE_DEBUG) return;
+    const why = reason === 'reclaim' ? 'reclaimed by boot baseline' : 'delta moved';
+    console.log(`[probe] ${why}; advanceMs ${previousMs?.toFixed(0) ?? 'none'} -> ${nextMs.toFixed(0)}`);
+  },
 });
 
 const calibrationCoordinator = new CalibrationCoordinator(COLLECTION_SILENCE_GRACE_MS, {
@@ -1428,202 +1453,23 @@ function publisherStatusPayload() {
 }
 
 function calibrationIsStale() {
-  return calibration.isStaleFor(calibrationContext());
+  return calibrationAlignment.stale;
 }
 
-/**
- * Strategy that owns the value currently exposed by `CalibrationSession.result`.
- *
- * Candidate/orchestration kind may switch as soon as a retry starts. Confirmed
- * authority kind may switch only with a new confirmed revision. A provisional
- * result is the one exception: by definition it belongs to the in-flight
- * candidate that produced it.
- */
 function appliedCalibrationKind() {
-  const status = calibration.status();
-  return timingRuntime.appliedCalibrationKind({
-    hasConfirmedResult: calibration.confirmedResult !== null,
-    provisional: status.provisional,
-  });
+  return calibrationAlignment.kind;
 }
 
-/**
- * Whether a measurement may drive the mixer, and what to do when it may not.
- *
- * `revoke` means the measurement itself is void. `hold` means it is still a
- * valid measurement of an unchanged acoustic path, but a *live* input needed
- * to complete it has momentarily gone quiet - which is not the same thing and
- * must not be treated as one. Falling back to the network estimate there
- * replaces a measured alignment with a guess, and the room hears the whole
- * difference as a step in the middle of a song. The Robot reports its player
- * offset a few times a second and goes quiet for ordinary reasons: buffering,
- * the settle window after a seek, a track change. Its position does not
- * teleport while it is quiet, so the last applied total stays the best answer
- * available until either a fresh offset arrives or something actually
- * invalidates the mapping - a disconnect, a capture epoch, a gross jump - each
- * of which revokes through its own path.
- */
-function calibrationApplicability(kind = appliedCalibrationKind()): CalibrationApplicability {
-  const nowMs = performance.now();
-  const result = calibration.result;
-  const status = calibration.status();
-  return decideCalibrationApplicability({
-    kind,
-    hasResult: result !== null,
-    stale: result !== null && calibrationIsStale(),
-    calibrationTransactionActive: calibration.transactionActive,
-    calibrationProvisional: status.provisional,
-    hasConfirmedResult: calibration.confirmedResult !== null,
-    robotProbeTimingActive: robotProbeTimingActive(),
-    bootProbeSettled: bootProbeSettled(nowMs),
-    robotRouteActive: robotRouteActive(),
-    robotSourceConnected: sourceRuntime.connected(),
-    roomHasSong: roomHasSong(nowMs),
-    robotDeltaFresh: robotDeltaIsFresh(nowMs),
-    robotDeltaEverEstablished: robotDeltaEverEstablished(),
-    robotContentMappingReady: robotContentMappingReady(nowMs),
-  });
+function calibrationApplicability(kind = appliedCalibrationKind()) {
+  return calibrationAlignment.applicability(kind);
 }
 
-/**
- * The boot baseline's live total: measured pipeline path, plus where the
- * player currently is.
- *
- * One expression with two readers - the applier in
- * `maybeReapplyBootCalibration()` and the observer in
- * `desiredCalibratedMicLagMs()`. They must never be able to disagree about
- * what the boot strategy currently wants.
- */
-function bootProbeAdvanceMs(nowMs: number) {
-  const pathDifferenceMs = bootProbe.pathDifferenceMs;
-  if (pathDifferenceMs === null) return null;
-  // The measured path difference is wall time and rate-independent; the player
-  // delta is media time and is not.
-  return pathDifferenceMs + mediaToWallMs(currentDeltaMs(nowMs), currentPlaybackRate(nowMs));
+function desiredCalibratedMicLagMs(nowMs: number) {
+  return calibrationAlignment.desiredLagMs(nowMs);
 }
 
-/**
- * A content result carried from the mapper's stable reference frame into live
- * coordinates. Same two-reader rule as `bootProbeAdvanceMs()`.
- */
-function contentLiveLagMs(referenceLagMs: number, nowMs: number) {
-  return robotContentTimeline.liveLagMs(referenceLagMs, calibrationContext(), nowMs);
-}
-
-/**
- * What the mixer's Mic advance would be if it were free to follow the mapping.
- *
- * `syncAppliedCalibration()` deliberately freezes the applied alignment for the
- * whole of a Take, because moving the read head mid-recording splices the voice
- * audibly. What is *not* frozen is the mapping underneath it: the Robot player
- * delta keeps drifting, and a preserving follower correction commits a new
- * content mapping without ever invalidating the measurement - so neither
- * `calibrationStale` nor any transport event fires. The recording is then
- * aligned to a mapping that is no longer the room's, and every existing quality
- * signal still reads clean.
- *
- * This computes the value the appliers would install, without installing it, so
- * a Take can record how far it drifted from the alignment it was handed.
- * `null` means there is no current answer to diverge from - which the
- * timing-fallback, calibration-stale and robot-delta-missing signals already
- * describe.
- */
-function desiredCalibratedMicLagMs(nowMs: number): number | null {
-  const kind = appliedCalibrationKind();
-
-  if (robotRouteActive() && kind === 'boot-probe') {
-    if (calibration.result === null || calibrationIsStale()) return null;
-    if (!bootProbe.completedContextMatches(bootProbeContext())) return null;
-    // With no Song there is no player-relative term, exactly as the applier
-    // reads it: the measured path difference is the whole correction.
-    if (!roomHasSong(nowMs)) return bootProbe.pathDifferenceMs;
-    if (calibrationApplicability(kind) !== 'apply') return null;
-    return bootProbeAdvanceMs(nowMs);
-  }
-
-  if (calibrationApplicability(kind) !== 'apply') return null;
-  const result = calibration.result;
-  if (result === null) return null;
-  if (!robotRouteActive() || kind !== 'content') return result.micLagMs;
-  return contentLiveLagMs(result.micLagMs, nowMs);
-}
-
-// Record authority only when its target reaches the mixer; Take/mapping holds
-// must leave a new confirmation pending for the next eligible synchronization.
-let appliedCalibrationAuthority: { revision: number; kind: ReturnType<typeof appliedCalibrationKind> } | null = null;
-
-/**
- * Synchronizes measurement validity into the mixer's active alignment.
- *
- * A boot result needs special treatment: once freshness/connection withdraws
- * its authority, a later delta must not resurrect the historical total before
- * `maybeReapplyBootCalibration()` has folded in the *current* delta. While a
- * boot alignment is already active, small (< threshold) delta movements are
- * intentionally left alone. While it is inactive, it may only be restored
- * directly when the stored boot result already describes exactly the current
- * reported delta; otherwise reapply owns the reactivation.
- *
- * Candidate strategy is intentionally not consulted here. A replacement retry
- * cannot reinterpret the old confirmed result under its own strategy before
- * promotion.
- *
- * Returns whether the mixer alignment changed so the periodic freshness check
- * can publish the transition immediately.
- */
 function syncAppliedCalibration() {
-  if (takeBlocksCalibration()) return false;
-  const active = session.alignment.calibratedMicLagMs;
-  const calibrationKind = appliedCalibrationKind();
-  const authority = { revision: calibration.confirmedRevision, kind: calibrationKind };
-  const newCalibrationAuthority = appliedCalibrationAuthority?.revision !== authority.revision
-    || appliedCalibrationAuthority?.kind !== authority.kind;
-
-  if (robotRouteActive() && calibrationKind === 'boot-probe') {
-    const nowMs = performance.now();
-    const result = calibration.result;
-    const decision = decideBootProbeMixerApplication({
-      activeMicLagMs: active,
-      roomHasSong: roomHasSong(nowMs),
-      resultMicLagMs: result?.micLagMs ?? null,
-      pathDifferenceMs: bootProbe.pathDifferenceMs,
-      calibrationStale: calibrationIsStale(),
-      completedContextMatches: bootProbe.completedContextMatches(bootProbeContext()),
-      applicability: calibrationApplicability(calibrationKind),
-      storedDeltaMs: bootProbe.calibrationResult?.deltaMs ?? null,
-      currentDeltaMs: currentDeltaMs(nowMs),
-    });
-    if (decision.kind === 'hold') return false;
-    session.setAlignment({ calibratedMicLagMs: decision.micLagMs });
-    appliedCalibrationAuthority = decision.micLagMs === null ? null : authority;
-    return true;
-  }
-  const applicability = calibrationApplicability(calibrationKind);
-  let nextMicLagMs = applicability === 'apply' ? calibration.result!.micLagMs : null;
-  const robotContentAuthority = robotRouteActive() && calibrationKind === 'content';
-  if (nextMicLagMs !== null && robotContentAuthority) {
-    nextMicLagMs = contentLiveLagMs(nextMicLagMs, performance.now());
-  }
-
-  const decision = decideCalibrationMixerApplication({
-    applicability,
-    calibrationKind,
-    activeMicLagMs: active,
-    nextMicLagMs,
-    robotContentAuthority,
-    hasContentValidationSlew: timingRuntime.contentValidationSlewRevision !== null,
-    contentValidationSlewMatchesRevision:
-      timingRuntime.contentValidationSlewMatches(calibration.confirmedRevision),
-    calibratedMicLagTarget: session.calibratedMicLagTarget,
-    jitterThresholdMs: BOOT_DELTA_REAPPLY_MS,
-    newCalibrationAuthority,
-  });
-  if (decision.clearContentValidationSlew) timingRuntime.clearContentValidationSlew();
-  if (applicability === 'apply' && nextMicLagMs !== null) appliedCalibrationAuthority = authority;
-  else if (applicability === 'revoke') appliedCalibrationAuthority = null;
-  if (decision.kind === 'none') return false;
-  if (decision.kind === 'slew') return session.slewCalibratedMicLagTo(decision.micLagMs);
-  session.setAlignment({ calibratedMicLagMs: decision.micLagMs });
-  return true;
+  return calibrationAlignment.sync();
 }
 
 function sourceStatusPayload() {
@@ -1836,7 +1682,7 @@ function timingCalibrationStatusPayload() {
     calibrationKind: timingRuntime.calibrationKind,
     activeCalibrationKind: appliedCalibrationKind(),
     confirmedCalibrationRevision: calibration.confirmedRevision,
-    mixerCalibrationAuthority: appliedCalibrationAuthority,
+    mixerCalibrationAuthority: calibrationAlignment.authority,
     robotRoute: robotRouteActive(),
     robotSourceConnected: sourceRuntime.connected(),
     robotDeltaFresh: robotDeltaIsFresh(nowMs),
@@ -2626,54 +2472,8 @@ function currentDeltaMs(nowMs: number) {
   return robotDeltaIsFresh(nowMs) ? robotPlayerOffset.offsetMs(nowMs)! : 0;
 }
 
-/**
- * Keeps the boot baseline on the mixer, and lets it reclaim the mixer when the
- * authority that replaced it can no longer drive one.
- *
- * The boot probe measures *pipeline* latency with a known tone, so its result
- * does not depend on where the Robot's player happens to be - `bootProbeContext()`
- * deliberately leaves the source generation out for exactly that reason. A seek
- * invalidates content's reference frame, because content is measured between two
- * content streams and one of them was just spliced at an unknown sample. It says
- * nothing about the pipeline.
- *
- * Without a reclaim path that distinction is lost: content dies and the mixer
- * drops straight to the network estimate while a still-valid measurement sits in
- * the probe runtime. That is a step down two levels instead of one, and the room
- * hears the whole difference.
- *
- * Reclaiming deliberately waits for `calibration.collecting` to be false, since
- * `applyExternalResult()` would otherwise discard an in-flight content retry -
- * and for a fresh delta, since the total is only meaningful with one.
- */
 function maybeReapplyBootCalibration(nowMs: number) {
-  if (takeBlocksCalibration()) return;
-  if (!robotRouteActive()) return;
-  const appliedKind = appliedCalibrationKind();
-  const applied = session.alignment.calibratedMicLagMs;
-  const decision = decideBootProbeReapplication({
-    appliedKind,
-    replacementApplicability: appliedKind === 'boot-probe'
-      ? null
-      : calibrationApplicability(appliedKind),
-    roomHasSong: roomHasSong(nowMs),
-    pathDifferenceReady: bootProbe.pathDifferenceMs !== null,
-    calibrationCollecting: calibration.collecting,
-    calibrationTransactionActive: calibration.transactionActive,
-    robotDeltaFresh: robotDeltaIsFresh(nowMs),
-    completedContextMatches: bootProbe.completedContextMatches(bootProbeContext()),
-    advanceMs: bootProbeAdvanceMs(nowMs),
-    appliedMicLagMs: applied,
-    reapplyThresholdMs: BOOT_DELTA_REAPPLY_MS,
-  });
-  if (decision.kind === 'none') return;
-
-  const advanceMs = decision.advanceMs;
-  if (PROBE_DEBUG) {
-    const why = decision.reason === 'reclaim' ? 'reclaimed by boot baseline' : 'delta moved';
-    console.log(`[probe] ${why}; advanceMs ${applied?.toFixed(0) ?? 'none'} -> ${advanceMs.toFixed(0)}`);
-  }
-  bootProbe.reapply(advanceMs, currentDeltaMs(nowMs));
+  calibrationAlignment.reapplyBoot(nowMs);
 }
 
 const youtubeTimelineTimer = setInterval(() => {

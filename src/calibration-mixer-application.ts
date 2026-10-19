@@ -22,8 +22,8 @@ export type CalibrationMixerApplicationDecision =
 /**
  * Decides how non-Boot calibration authority should affect the live mixer.
  *
- * The server remains responsible for deriving the live lag from runtime state,
- * and TimingRuntime/AudioSession remain the owners of the effects. This pure
+ * CalibrationAlignment derives the live lag from runtime state, while
+ * TimingRuntime/AudioSession remain the owners of the effects. This pure
  * policy only preserves the precedence that prevents Robot offset noise from
  * splicing the read head and lets drift-confirmed validation corrections slew
  * instead of jump.

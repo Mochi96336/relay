@@ -38,11 +38,10 @@ test('boot-probe result cannot impersonate a confirmed content transition anchor
   }
 });
 
-test('mixer applicability recognizes successful boot settlement as well as exhaustion', () => {
+test('boot settlement recognizes successful evidence as well as exhaustion', () => {
   // A probe that succeeds never reports an error, so a gate keyed on probe
   // failure stays shut forever on the healthy path - which is what left content
   // permanently un-appliable and drift validation permanently unarmed.
-  assert.match(functionBlock('calibrationApplicability'), /bootProbeSettled\(/);
 
   const settled = functionBlock('bootProbeSettled');
   assert.match(settled, /probeCalibrationExhausted\(nowMs\)/, 'exhaustion is one way to settle');

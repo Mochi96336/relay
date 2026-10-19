@@ -26,8 +26,8 @@ export type BootProbeReapplicationDecision =
  *
  * Runtime sampling and every mutation stay outside this policy. In
  * particular, playback-rate conversion, BootProbeRuntime mutation,
- * calibration promotion, and AudioSession effects remain owned by the
- * server and their existing coordinators.
+ * calibration promotion, and AudioSession effects remain owned by
+ * CalibrationAlignment and the measurement/audio coordinators.
  */
 export function decideBootProbeReapplication(
   input: BootProbeReapplicationInput,

@@ -140,6 +140,14 @@ admit content work. It also owns manual boot replacement and immediate legacy
 route retirement. The server takes its periodic mix-health snapshot after this
 transaction so telemetry sees the alignment settled by that tick.
 
+`CalibrationAlignment` owns the last revision applied to the mixer, validity
+sampling, application/hold/revocation and boot-baseline reapplication. Its
+desired-lag query observes mapping drift without moving a Take's frozen read
+head. A new revision held by Take or mapping readiness remains pending; it
+must still reach the mixer when the hold ends. TimingRuntime retains confirmed
+provenance and slew metadata, and AudioSession retains the actual read head
+and slew target. Diagnostic authority snapshots cannot mutate the owner.
+
 ### A measurement is a stage only if it occupies the room
 
 Timing is measured by strategies that cost the room very different things, and

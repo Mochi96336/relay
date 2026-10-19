@@ -57,11 +57,6 @@ test('fresh receiver can resume a continuing non-zero sequence after Relay resta
   assert.match(serverSource, /initialSequence: initialSequence \?\? undefined/);
 });
 
-test('Take freezes applied timing calibration until recording and finalizing finish', () => {
-  assert.match(serverSource, /function syncAppliedCalibration\(\) \{\n  if \(takeBlocksCalibration\(\)\) return false;/);
-  assert.match(serverSource, /function maybeReapplyBootCalibration[\s\S]*if \(takeBlocksCalibration\(\)\) return;/);
-});
-
 test('Listen consumes mix rate, stays at unity or below, and recovers suspended contexts', () => {
   assert.match(listenSource, /message\.mixSampleRate \?\? message\.sampleRate/);
   assert.match(listenSource, /return \(percent \/ 100\) \*\* 1\.5;/);

@@ -124,6 +124,15 @@ Applied-authority reads are queries, not settlement hooks: confirmed revision
 provenance is synchronized when the measurement settles, before mixer/status
 observers run. Reading provenance must never be required to mutate provenance.
 
+`ContentCalibrationCoordinator` owns content admission, validation baseline
+synchronization and the settlement transaction. It synchronizes confirmed
+provenance before applying alignment or publishing status. Drift promotion
+prepares its slew revision before synchronous settlement, then records the
+validator baseline revision without reseeding its diagnostics. Measurement and
+validation retain their own PCM windows, analysis cancellation and evidence
+checks. `BootProbeCoordinator` owns the separate probe transaction; physical
+transport and mapper readiness remain ports supplied by the server.
+
 ### A measurement is a stage only if it occupies the room
 
 Timing is measured by strategies that cost the room very different things, and

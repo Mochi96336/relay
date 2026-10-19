@@ -94,9 +94,9 @@ function isPromiseLikeAnalysis(
  * measurement is promoted. Weak/ambiguous analysis, transport holes, timeout,
  * or an interrupted confirmation never mutate the baseline.
  *
- * It owns no WebSocket, YouTube, recording, or robot policy. The server decides
- * when the content path is eligible to call `maybeStart`, and may call `cancel`
- * whenever runtime readiness is withdrawn.
+ * It owns no WebSocket, YouTube, recording, or robot policy. Content calibration
+ * coordination decides when the path is eligible to call `maybeStart`, and
+ * calls `cancel` whenever runtime readiness is withdrawn.
  */
 export class ContentCalibrationValidator {
   readonly durationMs: number;

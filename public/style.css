@@ -49,7 +49,6 @@ button:disabled { cursor: default; opacity: .32; }
 }
 
 .room-header {
-  min-height: 44px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -58,9 +57,7 @@ button:disabled { cursor: default; opacity: .32; }
   z-index: 20;
 }
 .room-mark {
-  font-size: 17px;
   font-weight: 720;
-  letter-spacing: -.025em;
 }
 .people-menu { position: relative; }
 .people-menu > summary,
@@ -85,13 +82,11 @@ button:disabled { cursor: default; opacity: .32; }
   top: calc(100% + 12px);
   right: 0;
   width: min(330px, calc(100vw - 32px));
-  padding: 14px;
   border: 1px solid var(--line);
   border-radius: 16px;
   background: rgba(20, 21, 24, .98);
   box-shadow: 0 18px 60px rgba(0, 0, 0, .42);
   display: grid;
-  gap: 13px;
 }
 .identity-editor {
   min-width: 0;
@@ -133,10 +128,7 @@ button:disabled { cursor: default; opacity: .32; }
   outline: none;
 }
 .participant-list {
-  min-height: 24px;
-  display: flex;
   flex-wrap: wrap;
-  gap: 7px;
 }
 .locale-control {
   display: flex;
@@ -160,10 +152,6 @@ button:disabled { cursor: default; opacity: .32; }
   font-size: 11px;
 }
 .locale-option[data-active="true"] { color: var(--text); }
-
-.song-stage {
-  padding-top: clamp(34px, 7vh, 68px);
-}
 .section-label { display: block; margin-bottom: 12px; }
 .youtube-form {
   display: grid;
@@ -231,20 +219,9 @@ button:disabled { cursor: default; opacity: .32; }
   font-size: 11px;
   line-height: 1.5;
 }
-
-.performance-stage {
-  padding-top: clamp(42px, 8vh, 76px);
-}
 .voice-copy {
-  min-height: 48px;
   display: grid;
   gap: 4px;
-}
-.voice-copy strong {
-  font-size: clamp(24px, 6vw, 34px);
-  line-height: 1.04;
-  letter-spacing: -.035em;
-  font-weight: 690;
 }
 .voice-copy span {
   max-width: 38ch;
@@ -252,7 +229,7 @@ button:disabled { cursor: default; opacity: .32; }
   font-size: 12px;
   line-height: 1.5;
 }
-.mic-actions { margin-top: 24px; min-height: 42px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.mic-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .choir-invite-open {
   appearance: none; border: 1px solid var(--line-strong); border-radius: 999px;
   background: #202226; color: #e3e4e8; padding: 8px 12px;
@@ -264,14 +241,7 @@ body[data-choir-guest="joined"] #start-publisher { display: none !important; }
 
 #start-publisher {
   appearance: none;
-  min-width: 118px;
-  border: 0;
-  border-radius: 999px;
-  padding: 12px 18px;
-  background: var(--accent);
-  color: #111214;
   cursor: pointer;
-  font-size: 13px;
   font-weight: 720;
 }
 #start-publisher:disabled { display: none; }
@@ -293,13 +263,7 @@ body[data-choir-guest="joined"] #start-publisher { display: none !important; }
 .takeover-row[hidden] { display: none; }
 .inline-actions { display: flex; align-items: center; gap: 8px; }
 .inline-actions .text-action { border: 0; background: transparent; }
-
-.take-strip {
-  margin-top: auto;
-  padding-top: clamp(42px, 8vh, 76px);
-  text-align: center;
-}
-.take-actions { min-height: 42px; display: flex; justify-content: center; align-items: center; }
+.take-actions { display: flex; align-items: center; }
 .record-action {
   appearance: none;
   border: 0;
@@ -314,8 +278,6 @@ body[data-choir-guest="joined"] #start-publisher { display: none !important; }
 .record-action:hover:not(:disabled) { background: rgba(255, 255, 255, .055); }
 #stop-recording:disabled { display: none; }
 .take-actions:has(#stop-recording:not(:disabled)) #start-recording { display: none; }
-#stop-recording:not(:disabled) { color: #ffaaa3; }
-.take-strip .microcopy { min-height: 17px; text-align: center; }
 #recording-player { width: 100%; margin-top: 12px; }
 .take-link {
   display: inline-block;
@@ -328,10 +290,7 @@ body[data-choir-guest="joined"] #start-publisher { display: none !important; }
 .take-link[hidden] { display: none; }
 
 .live-actions {
-  margin-top: 22px;
-  padding-top: 12px;
   border-top: 1px solid #202227;
-  display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;

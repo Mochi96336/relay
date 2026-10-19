@@ -8,11 +8,10 @@ import { CalibrationProbePlayback } from './calibration-probe-playback.js';
  * The second singer's publisher. B's own click on + Second Mic prepares a
  * separate AudioContext + existing capture Worklet, with actual native sample
  * rate and monotonically positioned PCM, and keeps it running while B is in.
- * It transmits binary ONLY on a media socket the server granted. It asks for
- * one whenever the server says so: media-ready while no song plays (B is
- * heard at once, beside A), room-ready when a duet room needs B. A socket B
- * already has carries on into the next room, so a song starting or stopping
- * never cuts B; the server measures B afresh for each song.
+ * It transmits binary ONLY on a media socket the server granted, and asks for
+ * one whenever the server says so (media-ready, every 3 s until B has one).
+ * The same socket carries B through songs, pauses and seeks; the server
+ * measures B afresh for each song.
  *
  * Claim tokens exist only in an event-local closure and are never put in
  * URL parameters, browser storage, logs or page text.
@@ -22,9 +21,8 @@ let mediaSocket = null;
 let awaitingClaim = false;
 let attempt = 0;
 let claimTimer = null;
-/** The server asked for media (room or none), waiting for capture to be ready. */
-let roomReady = false;
-let announcedRoomEpoch = null;
+/** The server asked for media, waiting for capture to be ready. */
+let mediaWanted = false;
 let preparing = false;
 let prepareAttempt = 0;
 const capture = new ChoirSecondaryCapture((reason) => {
@@ -64,13 +62,12 @@ function notify(state, reason = null) {
 function disconnect() {
   ++prepareAttempt;
   preparing = false;
-  roomReady = false;
-  announcedRoomEpoch = null;
+  mediaWanted = false;
   closeMedia();
   capture.stop();
 }
 
-/** Drops the media socket only; capture keeps running for the next room. */
+/** Drops the media socket only; capture keeps running for the next one. */
 function closeMedia() {
   ++attempt;
   probePlayback.retire();
@@ -82,13 +79,13 @@ function closeMedia() {
   if (old && old.readyState !== WebSocket.CLOSED) old.close();
 }
 
-/** Asks for a Media Epoch for the announced room, once capture is ready. */
+/** Asks for a media claim, once capture is ready. */
 function requestClaim() {
-  if (!enabled || !roomReady || capture.rate === null || awaitingClaim) return;
+  if (!enabled || !mediaWanted || capture.rate === null || awaitingClaim) return;
   closeMedia();
   const current = attempt;
   awaitingClaim = true;
-  roomReady = false;
+  mediaWanted = false;
   window.dispatchEvent(new CustomEvent('relay-choir-consent-command', {
     detail: { type: 'choir-secondary-media-claim-request' },
   }));
@@ -106,7 +103,7 @@ window.addEventListener('relay-choir-media-mode', (event) => {
   const wasEnabled = enabled;
   enabled = event.detail?.enabled === true;
   if (!enabled && wasEnabled) disconnect();
-  // A room announced while this module still waited for the mode.
+  // Media asked for while this module still waited for the mode.
   if (enabled && !wasEnabled) requestClaim();
 });
 window.addEventListener('relay-choir-consent-message', (event) => {
@@ -125,7 +122,7 @@ window.addEventListener('relay-choir-consent-message', (event) => {
 window.addEventListener('relay-choir-start-secondary-capture', async () => {
   // The singer's own tap starts capture even if this module has not heard
   // Choir's mode yet (it can load after presence announced it). Media is
-  // claimed only once the mode and a room are both known.
+  // claimed only once the mode is known and the server asked for it.
   if (preparing || capture.rate !== null) return;
   preparing = true;
   const currentPrepare = ++prepareAttempt;
@@ -150,45 +147,27 @@ window.addEventListener('relay-choir-media-message', (event) => {
     void probePlayback.play(event.detail.requestId, Number(event.detail.leadMs) || 300);
     return;
   }
-  if (event.detail?.type === 'choir-room-ready') {
-    const epoch = event.detail.roomEpoch;
-    if (!Number.isSafeInteger(epoch) || epoch < 1
-      || (announcedRoomEpoch !== null && epoch < announcedRoomEpoch)) return;
-    // A repeated announcement while connecting must not close B's media and
-    // retire the very room it is trying to join. A real disconnect can retry.
-    if (epoch === announcedRoomEpoch && (awaitingClaim || mediaSocket)) return;
-    // A newer room supersedes a claim still in flight. Otherwise an old
-    // reply is ignored while its 20 s timer blocks admission to the new room.
-    if (epoch !== announcedRoomEpoch) closeMedia();
-    announcedRoomEpoch = epoch;
-    roomReady = true;
-    requestClaim();
-    return;
-  }
   if (event.detail?.type === 'choir-media-ready') {
-    // No room: media for B's voice alone. A socket B has, or one on the way, serves.
+    // A socket B has, or one on the way, serves.
     if (awaitingClaim || mediaSocket) return;
-    roomReady = true;
+    mediaWanted = true;
     requestClaim();
     return;
   }
   if (event.detail?.type === 'choir-media-rejected' && awaitingClaim) {
-    // The room or join changed under the claim: wait for the server to ask again.
+    // The join changed under the claim: wait for the server to ask again.
     closeMedia();
     notify('claim-rejected');
     return;
   }
   if (event.detail?.type !== 'choir-secondary-media-claim'
     || !awaitingClaim || capture.rate === null) return;
-  const { claimToken, roomEpoch } = event.detail;
-  // A join claim (no room) has no epoch; a room claim names the room announced.
-  if (typeof claimToken !== 'string' || !/^[0-9a-f]{64}$/.test(claimToken)
-    || (roomEpoch !== null && (!Number.isSafeInteger(roomEpoch) || roomEpoch < 1
-      || roomEpoch !== announcedRoomEpoch))) return;
+  const { claimToken } = event.detail;
+  if (typeof claimToken !== 'string' || !/^[0-9a-f]{64}$/.test(claimToken)) return;
   awaitingClaim = false;
   if (claimTimer !== null) clearTimeout(claimTimer);
   claimTimer = null;
-  connectMedia(claimToken, roomEpoch, capture.rate, !directSocketFailed);
+  connectMedia(claimToken, capture.rate, !directSocketFailed);
 });
 
 /**
@@ -200,14 +179,14 @@ window.addEventListener('relay-choir-media-message', (event) => {
  *
  * An open socket must also be registered within MEDIA_REGISTER_TIMEOUT_MS.
  * Otherwise the server's replies stopped (authentication or registration),
- * and the socket is dropped: the server's next room-ready or media-ready
- * (every 3 s) then brings a fresh claim. While it was kept, room-ready was ignored and B
+ * and the socket is dropped: the server's next media-ready (every 3 s) then
+ * brings a fresh claim. While it was kept, media-ready was ignored and B
  * stayed in with no voice.
  */
 const DIRECT_SOCKET_OPEN_TIMEOUT_MS = 2_500;
 const MEDIA_REGISTER_TIMEOUT_MS = 5_000;
 let directSocketFailed = false;
-function connectMedia(claimToken, roomEpoch, sourceRate, direct) {
+function connectMedia(claimToken, sourceRate, direct) {
   const tunnelUrl = wsUrl({ compress: false });
   const directUrl = wsUrl({ compress: false, direct: true });
   const viaDirect = direct && directUrl !== tunnelUrl;
@@ -220,7 +199,7 @@ function connectMedia(claimToken, roomEpoch, sourceRate, direct) {
     if (socket !== mediaSocket || opened || !viaDirect) return false;
     directSocketFailed = true;
     try { socket.close(); } catch {}
-    connectMedia(claimToken, roomEpoch, sourceRate, false);
+    connectMedia(claimToken, sourceRate, false);
     return true;
   };
   const openTimer = viaDirect ? setTimeout(fallBack, DIRECT_SOCKET_OPEN_TIMEOUT_MS) : null;
@@ -258,8 +237,7 @@ function connectMedia(claimToken, roomEpoch, sourceRate, direct) {
         ...(micGainDb === null ? {} : { micGainDb }),
       }));
     } else if (message.type === 'choir-secondary-media-registered') {
-      if (!used || registered || message.roomEpoch !== roomEpoch
-        || message.awaitingContent !== true) {
+      if (!used || registered) {
         socket.close();
         return;
       }
@@ -281,7 +259,7 @@ function connectMedia(claimToken, roomEpoch, sourceRate, direct) {
     if (fallBack()) return;
     if (socket !== mediaSocket) return;
     // The link dropped or B's join ended; keep the microphone and reconnect
-    // when the server next asks (room-ready or media-ready, every 3 s).
+    // when the server next asks (media-ready, every 3 s).
     closeMedia();
     notify('disconnected');
   });

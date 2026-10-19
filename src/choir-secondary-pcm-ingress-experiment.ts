@@ -3,26 +3,18 @@ import { FRAME_MAGIC } from './pcm-frame.js';
 import {
   AUDIO_PACKET_HEADER_BYTES, AUDIO_PACKET_VERSION, decodeAudioPacket,
 } from './audio-packet.js';
-import type { ChoirFreshCaptureTicket } from './choir-fresh-room-handshake-experiment.js';
-import type { ChoirRoomRestartCoordinatorExperiment } from './choir-room-restart-coordinator-experiment.js';
 
 /**
- * PRIVATE, experimental, *secondary-only* WebSocket PCM adapter.
+ * The second singer's media socket: B's packets in, checked PCM frames out
+ * (onAcceptedFrame). It grants nothing itself: only a redeemed one-use claim
+ * binds a socket (ChoirSecondaryMediaTicketExperiment). No client JSON grants
+ * media authority.
  *
- * It cannot grant a ticket: an already trusted SERVER authorization flow
- * must call bindVerifiedSecondary() with a ticket issued by the restart
- * coordinator. The live server admits B only through an authenticated
- * one-use AudioPacket v2 claim. No client JSON grants media authority.
+ * Bound sockets are consumed even on malformed or stale input, so a second
+ * Mic packet can never fall through to the main Mic or Robot path.
  *
- * Attached sockets are consumed even on malformed/stale input so a choir
- * packet can NEVER fall through to the existing N=1 Mic/Robot path.
- *
- * A bound socket carries B's live voice for as long as B's join allows it
- * (liveVoiceAllowed), song or no song. While a duet room is up, it also holds
- * that room's ticket and feeds the room's evidence; a retired room drops the
- * ticket, not the socket, and the next room is attached to the same socket
- * (attachRoomTicket). Without liveVoiceAllowed a socket lives and dies with
- * its room, as before.
+ * A bound socket carries B's voice for as long as B's join allows it
+ * (liveVoiceAllowed), song or no song.
  *
  * A socket speaks exactly the one wire format it registered with: AudioPacket
  * v2 PCM at its native rate, or Opus v3 (20 ms at 48 kHz, as the main Mic
@@ -36,10 +28,8 @@ type ChoirSecondarySocket = object & {
 
 type BoundSecondary = {
   participantId: string;
-  /** Server-generated identity of this socket; a room ticket names the same one. */
+  /** Server-generated identity of this socket. */
   transportId: string;
-  /** The current duet room's ticket, or null between rooms. */
-  ticket: ChoirFreshCaptureTicket | null;
   sampleRate: number;
   generation: number | null;
   packetWindowStartMs: number;
@@ -66,10 +56,6 @@ export class ChoirSecondaryPcmIngressExperiment {
   /** v2 replay/reorder horizon: no unbounded sequence maps. */
   private static readonly MAX_REORDER_SEQUENCES = 128;
 
-  /**
-   * Every frame the duet room accepted, after the same checks, so the room
-   * output can mix this singer too. Rejected frames never reach it.
-   */
   /** What happened to B's frames, for /statusz: a silent B is otherwise a mystery. */
   readonly counts = { accepted: 0, rejected: {} as Record<string, number>, lastRejected: null as string | null };
 
@@ -82,20 +68,17 @@ export class ChoirSecondaryPcmIngressExperiment {
     return null;
   }
 
-  /**
-   * Whether B's join lets B be heard without a duet room: B is the joined
-   * singer and the singer B joined still holds the Mic. Null keeps every
-   * socket room-only.
-   */
-  liveVoiceAllowed: ((participantId: string, nowMs: number) => boolean) | null = null;
-
+  /** Every frame that passed the checks, for the room output to mix. */
   onAcceptedFrame: ((frame: { generation: number; firstSampleIndex: number; pcm: Buffer },
     sampleRate: number, participantId: string, nowMs: number) => void) | null = null;
 
   constructor(
-    private readonly coordinator: Pick<ChoirRoomRestartCoordinatorExperiment,
-      'mayAcceptVerifiedTicket' | 'receiveVerifiedMic' | 'disconnectVerifiedSinger'>,
     private readonly isSocketOpen: (socket: ChoirSecondarySocket) => boolean,
+    /**
+     * Whether B's join lets this participant be heard: B is the joined singer
+     * and the singer B joined still holds the Mic.
+     */
+    private readonly liveVoiceAllowed: (participantId: string, nowMs: number) => boolean,
     maxPacketMs = 200,
   ) {
     if (!Number.isSafeInteger(maxPacketMs) || maxPacketMs <= 0 || maxPacketMs > 1_000)
@@ -108,30 +91,11 @@ export class ChoirSecondaryPcmIngressExperiment {
   private readonly maxPacketMs: number;
 
   /**
-   * Ticket must already have been issued by the server's trusted A/B admission.
-   * The authenticated socket identity is checked again on every binary frame.
-   * A production publisher, backing source or monitor socket cannot double as
-   * a Choir secondary transport.
+   * Binds B's media socket under a server-generated transport id, once its
+   * claim is redeemed. The authenticated socket identity is checked again on
+   * every frame. A main Mic, backing or monitor socket cannot double as it.
    */
-  bindVerifiedSecondary(
-    socket: ChoirSecondarySocket,
-    ticket: ChoirFreshCaptureTicket,
-    sourceRate: number,
-    nowMs: number,
-    packetVersion: 2 | 3 = 2,
-  ): boolean {
-    if (!this.validTicket(ticket)
-      || !this.mayBind(socket, ticket.participantId, ticket.transportId, sourceRate, nowMs, packetVersion)
-      || !this.coordinator.mayAcceptVerifiedTicket(ticket, nowMs)) return false;
-    this.bind(socket, ticket.participantId, ticket.transportId, ticket, sourceRate, nowMs, packetVersion);
-    return true;
-  }
-
-  /**
-   * B's media socket admitted by B's join alone, while no duet room is up.
-   * `transportId` is server-generated; a later room admits B under it.
-   */
-  bindJoinedSecondary(
+  bind(
     socket: ChoirSecondarySocket,
     participantId: string,
     transportId: string,
@@ -139,73 +103,32 @@ export class ChoirSecondaryPcmIngressExperiment {
     nowMs: number,
     packetVersion: 2 | 3 = 2,
   ): boolean {
-    if (!this.mayBind(socket, participantId, transportId, sourceRate, nowMs, packetVersion)
-      || this.liveVoiceAllowed?.(participantId, nowMs) !== true) return false;
-    this.bind(socket, participantId, transportId, null, sourceRate, nowMs, packetVersion);
+    if (this.sockets.has(socket) || this.transportBindings.has(transportId)
+      || !(packetVersion === 2 || (packetVersion === 3 && sourceRate === 48_000))
+      || !this.isSocketOpen(socket)
+      || socket.role !== 'unknown'
+      || !participantId || socket.participantId !== participantId
+      || !transportId || transportId !== transportId.trim()
+      || !Number.isInteger(sourceRate) || sourceRate < 8_000 || sourceRate > 192_000
+      || !Number.isFinite(nowMs) || nowMs < 0
+      || !this.liveVoiceAllowed(participantId, nowMs)) return false;
+    this.sockets.set(socket, {
+      participantId, transportId, sampleRate: sourceRate, generation: null,
+      packetWindowStartMs: nowMs, packetCount: 0,
+      latestSequence: null, seenSequences: new Map(),
+      opus: packetVersion === 3 ? { decoder: null } : null,
+    });
+    this.transportBindings.set(transportId, socket);
     return true;
   }
 
-  /**
-   * Puts B's already-bound socket into a new duet room. The ticket must name
-   * that socket's transport and singer, and the socket must be between rooms.
-   */
-  attachRoomTicket(ticket: ChoirFreshCaptureTicket, nowMs: number): boolean {
-    const socket = this.transportBindings.get(ticket.transportId);
-    const bound = socket ? this.sockets.get(socket) : undefined;
-    if (!socket || !bound || bound.ticket !== null || !this.isSocketOpen(socket)
-      || bound.participantId !== ticket.participantId || !this.validTicket(ticket)
-      || !this.coordinator.mayAcceptVerifiedTicket(ticket, nowMs)) return false;
-    bound.ticket = ticket;
-    return true;
-  }
-
-  /** The transport of B's open socket, room or not; null when B has none. */
+  /** The transport of B's open socket; null when B has none. */
   liveTransportFor(participantId: string): string | null {
     for (const [transportId, socket] of this.transportBindings) {
       if (this.sockets.get(socket)?.participantId === participantId && this.isSocketOpen(socket))
         return transportId;
     }
     return null;
-  }
-
-  private validTicket(ticket: ChoirFreshCaptureTicket) {
-    return ticket.seat === 'secondary'
-      && Number.isSafeInteger(ticket.roomEpoch) && ticket.roomEpoch >= 1
-      && Number.isSafeInteger(ticket.songEpoch) && ticket.songEpoch >= 1
-      && Number.isSafeInteger(ticket.mediaEpoch) && ticket.mediaEpoch >= 1;
-  }
-
-  private mayBind(socket: ChoirSecondarySocket, participantId: string, transportId: string,
-    sourceRate: number, nowMs: number, packetVersion: 2 | 3) {
-    return !this.sockets.has(socket) && !this.transportBindings.has(transportId)
-      && (packetVersion === 2 || (packetVersion === 3 && sourceRate === 48_000))
-      && this.isSocketOpen(socket)
-      && socket.role === 'unknown'
-      && Boolean(participantId) && socket.participantId === participantId
-      && Boolean(transportId) && transportId === transportId.trim()
-      && Number.isInteger(sourceRate) && sourceRate >= 8_000 && sourceRate <= 192_000
-      && Number.isFinite(nowMs) && nowMs >= 0;
-  }
-
-  private bind(socket: ChoirSecondarySocket, participantId: string, transportId: string,
-    ticket: ChoirFreshCaptureTicket | null, sourceRate: number, nowMs: number, packetVersion: 2 | 3) {
-    this.sockets.set(socket, {
-      participantId, transportId, ticket, sampleRate: sourceRate, generation: null,
-      packetWindowStartMs: nowMs, packetCount: 0,
-      latestSequence: null, seenSequences: new Map(),
-      opus: packetVersion === 3 ? { decoder: null } : null,
-    });
-    this.transportBindings.set(transportId, socket);
-  }
-
-  /**
-   * Whether this socket may still carry B: its room still takes it, or B's
-   * join lets B be heard without one. A room that no longer takes it is let
-   * go here, so the next room can attach.
-   */
-  private stillAuthorized(bound: BoundSecondary, nowMs: number) {
-    if (bound.ticket && !this.coordinator.mayAcceptVerifiedTicket(bound.ticket, nowMs)) bound.ticket = null;
-    return bound.ticket !== null || this.liveVoiceAllowed?.(bound.participantId, nowMs) === true;
   }
 
   /** Called ahead of ALL regular production media routes. */
@@ -294,15 +217,7 @@ export class ChoirSecondaryPcmIngressExperiment {
           return rejected('sample-overlap');
       }
     }
-    // The room takes the frame as evidence when one is up; B's join decides
-    // whether it is heard between rooms.
-    const inRoom = bound.ticket !== null
-      && this.coordinator.receiveVerifiedMic(bound.ticket, frame, bound.sampleRate, nowMs);
-    // Only a room that is gone lets go of the socket; a frame it merely
-    // refused leaves B in it.
-    if (!inRoom && bound.ticket && !this.coordinator.mayAcceptVerifiedTicket(bound.ticket, nowMs))
-      bound.ticket = null;
-    if (!inRoom && this.liveVoiceAllowed?.(bound.participantId, nowMs) !== true) {
+    if (!this.liveVoiceAllowed(bound.participantId, nowMs)) {
       this.releaseTransportBinding(socket, bound.transportId);
       return rejected('stale-authority');
     }
@@ -334,12 +249,12 @@ export class ChoirSecondaryPcmIngressExperiment {
       this.transportBindings.delete(transportId);
   }
 
-  /** Bounded periodic cleanup when the trusted room changes but old B is silent. */
+  /** Lets go of sockets whose join ended while B was silent. */
   sweepStale(nowMs: number): number {
     let released = 0;
     for (const [transportId, socket] of this.transportBindings) {
       const bound = this.sockets.get(socket);
-      if (!bound || !this.isSocketOpen(socket) || !this.stillAuthorized(bound, nowMs)) {
+      if (!bound || !this.isSocketOpen(socket) || !this.liveVoiceAllowed(bound.participantId, nowMs)) {
         this.releaseTransportBinding(socket, transportId);
         released++;
       }
@@ -347,14 +262,13 @@ export class ChoirSecondaryPcmIngressExperiment {
     return released;
   }
 
-  /** A physical close revokes its exact admitted transport, never another Mic. */
-  disconnect(socket: ChoirSecondarySocket, nowMs: number): boolean {
+  /** A physical close releases its own transport, never another Mic. Returns whether it was bound. */
+  disconnect(socket: ChoirSecondarySocket): boolean {
     const bound = this.sockets.get(socket);
     if (!bound) return false;
     this.sockets.delete(socket);
     this.releaseTransportBinding(socket, bound.transportId);
-    // Whether a room singer was revoked; between rooms there is none.
-    return bound.ticket ? this.coordinator.disconnectVerifiedSinger(bound.ticket, nowMs) : false;
+    return true;
   }
 
   isAttached(socket: ChoirSecondarySocket): boolean {

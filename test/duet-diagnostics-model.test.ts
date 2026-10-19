@@ -9,7 +9,7 @@ type Facts = Record<string, any>;
 
 const zh = diagnosticsTranslator('zh-Hant');
 
-/** A duet room with B mixed in on Content, shaped like product-status and /statusz. */
+/** A duet with B mixed in on Content, shaped like product-status and /statusz. */
 function duetFacts(overrides: (facts: Facts) => void = () => {}): Facts {
   const facts: Facts = {
     product: {
@@ -27,7 +27,6 @@ function duetFacts(overrides: (facts: Facts) => void = () => {}): Facts {
           bufferedSamples: 9_600, headroomMs: 200, sampleRate: 48_000,
         },
         duetIngress: { accepted: 500, rejected: {}, lastRejected: null, codec: 'opus' },
-        duetRoom: { state: 'duet-ready', primaryId: 'a', secondaryId: 'b', primary: 'ready', secondary: 'ready' },
         duetContent: { submitted: 4, applied: 2, rejected: 1, timedOut: 1, lastFailureReason: null,
           primaryLagMs: 41, secondaryLagMs: 160 },
         duetYoutube: { lagSource: 'content', mic: { ageMs: 400 }, backing: { ageMs: 900 }, calculation: null },
@@ -106,7 +105,6 @@ describe('second Mic diagnostics', () => {
     assert.equal(advanced.duetPackets.value, '500 accepted');
     assert.match(advanced.duetPackets.note, /duplicate-packet ×3/);
     assert.equal(advanced.duetBuffered.value, '200 ms');
-    assert.equal(advanced.duetRoom, undefined, 'the duet room is no longer what places B');
   });
 
   it('puts A and B compensation side by side and names what B rests on', () => {

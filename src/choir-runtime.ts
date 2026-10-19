@@ -56,6 +56,11 @@ export type ChoirRuntimeDeps = {
   requestedGainDb: (value: unknown) => number | null;
 };
 
+type SecondaryPlacement = {
+  lagMs: number;
+  source: 'content' | 'probe' | 'youtube-time' | 'no-song';
+};
+
 const MEDIA_MESSAGES = new Set(['choir-secondary-media-claim-request', 'choir-secondary-media-register']);
 const JOIN_MESSAGES = new Set(['choir-secondary-join', 'choir-secondary-withdraw']);
 const REPORT_MESSAGES = new Set([
@@ -124,7 +129,7 @@ export class ChoirRuntime {
   private lastProbeState: string | null = null;
   private lastAudible = false;
   private lastRecentlyHeard = false;
-  private lastLagSource: string | null = null;
+  private lastLagSource: SecondaryPlacement['source'] | null = null;
   private lastPageReport = '';
 
   constructor(private readonly deps: ChoirRuntimeDeps) {
@@ -552,86 +557,94 @@ export class ChoirRuntime {
     if (key !== null) this.content.tick(nowMs);
   }
 
-  /**
-   * Puts B into the room output, which Listen and Take already carry. B reads
-   * at a lag of its own: by Content (A's advance plus B's lag relative to A,
-   * both against the same backing), else by B's test tone, else by B's YouTube
-   * time, else, with no song, at A's advance. B is silent while its test tone
-   * sounds; while a Take records, an audible B keeps its lag, as A's alignment
-   * does.
-   */
-  private placeSecondary(nowMs: number) {
-    const { deps } = this;
-    const { session } = deps;
+  /** Publish changes in audibility and delivery independently of alignment. */
+  private publishSecondaryState() {
+    const { session } = this.deps;
     const audible = session.secondaryMic?.audible === true;
     if (audible !== this.lastAudible) {
       this.lastAudible = audible;
-      logChoir(audible ? 'b-heard' : 'b-silent', { lagMs: session.secondaryMic?.lagMs ?? null, source: this.lastLagSource });
-      deps.productStatusChanged();
+      logChoir(audible ? 'b-heard' : 'b-silent', {
+        lagMs: session.secondaryMic?.lagMs ?? null, source: this.lastLagSource,
+      });
+      this.deps.productStatusChanged();
     }
-    // B's PCM stopping (or resuming) changes whether the room shows B singing.
+    // B can stay aligned while its PCM stops reaching the mix.
     const recentlyHeard = session.secondaryMic?.recentlyHeard === true;
     if (recentlyHeard !== this.lastRecentlyHeard) {
       this.lastRecentlyHeard = recentlyHeard;
       if (audible) logChoir(recentlyHeard ? 'b-pcm-resumed' : 'b-pcm-stalled', {});
-      deps.productStatusChanged();
+      this.deps.productStatusChanged();
     }
-    if (!session.secondaryMic) return;
-    const pair = this.seat.active();
-    // B is heard while joined and connected, song or no song.
-    if (!pair || !this.ingress.liveTransportFor(pair.secondaryId)) {
-      session.detachSecondaryMic();
-      return;
-    }
-    const { primaryId, secondaryId } = pair;
-    const primaryOwnsMic = deps.mic.ownerId() === primaryId && deps.mic.mediaOwnerId() === primaryId;
-    // B's test tone, once per B capture, as B arrives (never mid-song; B asks
-    // for any later one).
-    const captureGeneration = session.secondaryMicGeneration;
-    if (captureGeneration !== null && !session.secondaryMic.audible && !deps.takeBlocksCalibration()) {
-      this.probe.begin(`${secondaryId}:${captureGeneration}`, nowMs);
+  }
+
+  /** Start B's automatic test tone once per capture; later probes require Realign. */
+  private tickSecondaryProbe(secondaryId: string, nowMs: number) {
+    const { session } = this.deps;
+    const generation = session.secondaryMicGeneration;
+    if (generation !== null && !session.secondaryMic?.audible && !this.deps.takeBlocksCalibration()) {
+      this.probe.begin(`${secondaryId}:${generation}`, nowMs);
     }
     this.probe.tick(nowMs);
     if (this.probe.state !== this.lastProbeState) {
       this.lastProbeState = this.probe.state;
       logChoir('b-probe', this.probe.status());
-      // B's Realign shows whether its test tone is running.
-      deps.productStatusChanged();
+      this.deps.productStatusChanged();
     }
-    // B stays out of the room output while its notes sound.
+  }
+
+  /**
+   * Choose the first usable measurement together with its diagnostic source.
+   * Content is relative to A; B's probe remains valid with or without a song.
+   * YouTube anchors are queried only when neither measurement is available.
+   */
+  private selectSecondaryPlacement(primaryId: string, nowMs: number): SecondaryPlacement | null {
+    const { deps } = this;
+    const { session } = deps;
+    const primaryOwnsMic = deps.mic.ownerId() === primaryId && deps.mic.mediaOwnerId() === primaryId;
+    if (primaryOwnsMic) {
+      const offset = this.content.secondaryOffsetMs;
+      if (offset !== null) return { lagMs: session.requestedMicAdvanceMs + offset, source: 'content' };
+
+      const probe = this.probe.advanceMs(deps.robot.playerOffsetMs(nowMs), deps.song.playbackRate(nowMs));
+      if (probe !== null) return { lagMs: probe, source: 'probe' };
+
+      const youtube = this.sampleSongLagMs(nowMs);
+      if (youtube !== null) return { lagMs: youtube, source: 'youtube-time' };
+    }
+    // A lapse in song-time anchors must not move an already placed singer.
+    // Without a song, or before B's first placement, use A's advance. B's own
+    // frontier correction still holds back audio that arrives later.
+    const alreadyPlaced = session.secondaryMic?.targetLagMs != null;
+    if (deps.song.playing(nowMs) && alreadyPlaced) return null;
+    return { lagMs: session.requestedMicAdvanceMs, source: 'no-song' };
+  }
+
+  /** Place B on the shared Listen/Take output, holding alignment during a Take. */
+  private placeSecondary(nowMs: number) {
+    const { deps } = this;
+    const { session } = deps;
+    this.publishSecondaryState();
+    if (!session.secondaryMic) return;
+
+    const pair = this.seat.active();
+    if (!pair || !this.ingress.liveTransportFor(pair.secondaryId)) {
+      session.detachSecondaryMic();
+      return;
+    }
+    this.tickSecondaryProbe(pair.secondaryId, nowMs);
     if (this.probe.silencing) {
       session.setSecondaryMicLag(null);
       return;
     }
-    // Content for both singers is the measurement. Each song is measured afresh.
-    const offset = primaryOwnsMic ? this.content.secondaryOffsetMs : null;
-    const content = offset === null ? null : session.requestedMicAdvanceMs + offset;
-    // Then B's test tone, the main Mic's boot measurement for B; then YouTube
-    // time. Like the main Mic's boot calibration it holds with or without a
-    // song: read only while one played, B jumped between it and the main Mic's
-    // own value at every pause and play.
-    const probe = primaryOwnsMic && content === null
-      ? this.probe.advanceMs(deps.robot.playerOffsetMs(nowMs), deps.song.playbackRate(nowMs))
-      : null;
-    const youtube = primaryOwnsMic && content === null && probe === null ? this.sampleSongLagMs(nowMs) : null;
-    const measured = content ?? probe ?? youtube;
-    // With no song there is nothing to place B against: B is read where A is,
-    // and B's own frontier correction holds it back when its audio arrives
-    // later. While a song plays, a lapse in measurement keeps B where it was
-    // last placed, as the main Mic keeps its calibration: YouTube-time anchors
-    // arrive over the slower control path and miss their 1 s / three-agreement
-    // window now and then.
-    const songless = measured === null
-      && (!deps.song.playing(nowMs) || session.secondaryMic.targetLagMs === null);
-    const lag = measured ?? (songless ? session.requestedMicAdvanceMs : null);
-    if (lag === null) return;
-    const source = content !== null ? 'content' : probe !== null ? 'probe'
-      : youtube !== null ? 'youtube-time' : 'no-song';
+
+    const placement = this.selectSecondaryPlacement(pair.primaryId, nowMs);
+    if (placement === null) return;
+    const { lagMs, source } = placement;
     if (source !== this.lastLagSource) {
-      logChoir('b-lag-source', { source, lagMs: Math.round(lag) });
+      logChoir('b-lag-source', { source, lagMs: Math.round(lagMs) });
       this.lastLagSource = source;
     }
     if (deps.takeBlocksCalibration() && session.secondaryMic.audible) return;
-    session.setSecondaryMicLag(lag);
+    session.setSecondaryMicLag(lagMs);
   }
 }

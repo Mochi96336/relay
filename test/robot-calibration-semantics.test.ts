@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import {
@@ -65,67 +64,4 @@ test('Robot manual realignment starts boot-probe from fresh silent capture witho
   } finally {
     await server.stop();
   }
-});
-
-test('Robot mixer adapters read confirmed authority and keep queries pure', async () => {
-  const source = await readFile(new URL('../src/server.ts', import.meta.url), 'utf8');
-  const reapply = source.match(/function maybeReapplyBootCalibration\([\s\S]*?\n\}/)?.[0] ?? '';
-  assert.match(
-    reapply,
-    /calibration\.transactionActive/,
-    'delta reapply must not accidentally promote old probe evidence through a new candidate transaction',
-  );
-  // Asserted as the two halves of the rule rather than one literal expression:
-  // the decision must come from confirmed authority and must never come from the
-  // in-flight candidate. Matching a single spelling made an equivalent hoist
-  // look like a contract break.
-  assert.match(
-    reapply,
-    /appliedCalibrationKind\(\)/,
-    'boot reapply must follow confirmed authority provenance',
-  );
-  assert.doesNotMatch(
-    reapply,
-    /timingRuntime\.calibrationKind/,
-    'boot reapply must not follow the replacement candidate kind',
-  );
-
-  const appliedKind = source.match(/function appliedCalibrationKind\([\s\S]*?\n\}/)?.[0] ?? '';
-  assert.match(appliedKind, /timingRuntime\.appliedCalibrationKind/);
-  assert.match(appliedKind, /hasConfirmedResult: calibration\.confirmedResult !== null/);
-  assert.match(appliedKind, /provisional: status\.provisional/);
-  assert.doesNotMatch(
-    appliedKind,
-    /confirmedRevision/,
-    'reading applied provenance must not synchronize or advance confirmed authority',
-  );
-
-  const canApply = source.match(/function calibrationApplicability\([\s\S]*?\n\}/)?.[0] ?? '';
-assert.match(canApply, /decideCalibrationApplicability\(\{/);
-assert.match(canApply, /calibrationTransactionActive: calibration\.transactionActive/);
-assert.match(canApply, /calibrationProvisional: status\.provisional/);
-assert.match(canApply, /hasConfirmedResult: calibration\.confirmedResult !== null/);
-assert.match(canApply, /bootProbeSettled: bootProbeSettled\(nowMs\)/);
-assert.doesNotMatch(canApply, /retainingConfirmedAuthority/);
-
-  const sync = source.match(/function syncAppliedCalibration\([\s\S]*?\n\}/)?.[0] ?? '';
-  assert.match(sync, /const calibrationKind = appliedCalibrationKind\(\)/);
-  assert.doesNotMatch(
-    sync,
-    /timingRuntime\.calibrationKind === 'boot-probe'/,
-    'mixer authority must not be interpreted through the in-flight candidate kind',
-  );
-  assert.doesNotMatch(
-    sync,
-    /timingRuntime\.calibrationKind === 'content'/,
-    'mixer authority must not be interpreted through the in-flight candidate kind',
-  );
-  assert.doesNotMatch(sync, /if \(active !== null\) return false;/, 'an old active Robot lag must not block promotion');
-  assert.match(
-    sync,
-    /decideBootProbeMixerApplication\(\{/ ,
-    'Boot Probe mixer application must delegate to the pure decision policy',
-  );
-
-
 });

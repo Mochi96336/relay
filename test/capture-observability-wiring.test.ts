@@ -74,11 +74,9 @@ test('server uses recent clipping only as product quality truth, never timing au
     'input clipping must not silently become mixed-frame Take quality or timing authority',
   );
 
-  const calibrationApplyStart = serverSource.indexOf('function syncAppliedCalibration(');
-  const calibrationApplyEnd = serverSource.indexOf('function sourceStatusPayload(', calibrationApplyStart);
-  assert.ok(calibrationApplyStart >= 0 && calibrationApplyEnd > calibrationApplyStart);
+  const calibrationAlignment = await readFile(new URL('../src/calibration-alignment.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(
-    serverSource.slice(calibrationApplyStart, calibrationApplyEnd),
+    calibrationAlignment,
     /capture(?:Level|Clipping)/,
     'capture diagnostics must not steer calibration application',
   );

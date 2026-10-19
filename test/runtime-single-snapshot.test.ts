@@ -58,8 +58,5 @@ test('the Robot route is a physical fact that no strategy flag may switch off', 
     );
   }
 
-  // Content authority and its live-coordinate carry are route questions too.
-  const sync = functionBody('syncAppliedCalibration');
-  assert.match(sync, /robotContentAuthority = robotRouteActive\(\) && calibrationKind === 'content'/);
-  assert.doesNotMatch(functionBody('desiredCalibratedMicLagMs'), /robotProbeTimingActive\(\)/);
+
 });

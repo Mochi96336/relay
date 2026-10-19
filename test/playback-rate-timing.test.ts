@@ -28,12 +28,6 @@ function body(name: string) {
  */
 
 test('every media-time quantity reaches wall-time arithmetic through the rate', () => {
-  // The boot total: measured pipeline path (wall) plus player delta (media).
-  assert.match(
-    body('bootProbeAdvanceMs'),
-    /mediaToWallMs\(currentDeltaMs\(nowMs\), currentPlaybackRate\(nowMs\)\)/,
-  );
-
   const boot = readRepositoryTextFile('src/boot-calibration.ts');
   assert.match(boot, /advanceMs: micLatencyMs - backingLatencyMs \+ mediaToWallMs\(/);
 

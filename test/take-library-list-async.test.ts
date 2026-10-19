@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import { TakeLibrary } from '../src/take-library.js';
 import type { TakeRecord } from '../src/take-session.js';
+import { wav } from './support/take-wav.js';
 
 const COMMITTED = '11111111-1111-4111-8111-111111111111';
 const LEGACY = '22222222-2222-4222-8222-222222222222';
@@ -14,25 +15,6 @@ const STAGED = '44444444-4444-4444-8444-444444444444';
 const MISMATCHED = '55555555-5555-4555-8555-555555555555';
 const CORRUPT_WAV = '66666666-6666-4666-8666-666666666666';
 const ORPHAN_SIDECAR = '77777777-7777-4777-8777-777777777777';
-
-function wav(sampleCount = 4_800) {
-  const dataBytes = sampleCount * 2;
-  const bytes = Buffer.alloc(44 + dataBytes);
-  bytes.write('RIFF', 0, 'ascii');
-  bytes.writeUInt32LE(36 + dataBytes, 4);
-  bytes.write('WAVE', 8, 'ascii');
-  bytes.write('fmt ', 12, 'ascii');
-  bytes.writeUInt32LE(16, 16);
-  bytes.writeUInt16LE(1, 20);
-  bytes.writeUInt16LE(1, 22);
-  bytes.writeUInt32LE(48_000, 24);
-  bytes.writeUInt32LE(96_000, 28);
-  bytes.writeUInt16LE(2, 32);
-  bytes.writeUInt16LE(16, 34);
-  bytes.write('data', 36, 'ascii');
-  bytes.writeUInt32LE(dataBytes, 40);
-  return bytes;
-}
 
 function readyTake(takeId: string, endedAtMs: number): TakeRecord {
   return {
@@ -91,7 +73,7 @@ test('listAsync reads the history list() returns, and repairs nothing', async ()
     // Its sidecar describes a different recording than the WAV now holds.
     await writeFile(file(`${MISMATCHED}.wav`), wav());
     await library.record(readyTake(MISMATCHED, 7_000_000));
-    await writeFile(file(`${MISMATCHED}.wav`), wav(2_400));
+    await writeFile(file(`${MISMATCHED}.wav`), wav(48_000, 2_400));
     await utimes(file(`${MISMATCHED}.wav`), new Date(2_000_000), new Date(2_000_000));
 
     await writeFile(file(`${CORRUPT_WAV}.wav`), Buffer.from('not a wav at all'));

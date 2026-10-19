@@ -6,32 +6,14 @@ import test from 'node:test';
 
 import { TakeLibrary } from '../src/take-library.js';
 import type { TakeRecord } from '../src/take-session.js';
+import { wav } from './support/take-wav.js';
 
 const TAKE_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const SAMPLE_RATE = 48_000;
 const SAMPLE_COUNT = 4_800;
 
-function wav() {
-  const dataBytes = SAMPLE_COUNT * 2;
-  const bytes = Buffer.alloc(44 + dataBytes);
-  bytes.write('RIFF', 0, 'ascii');
-  bytes.writeUInt32LE(36 + dataBytes, 4);
-  bytes.write('WAVE', 8, 'ascii');
-  bytes.write('fmt ', 12, 'ascii');
-  bytes.writeUInt32LE(16, 16);
-  bytes.writeUInt16LE(1, 20);
-  bytes.writeUInt16LE(1, 22);
-  bytes.writeUInt32LE(SAMPLE_RATE, 24);
-  bytes.writeUInt32LE(SAMPLE_RATE * 2, 28);
-  bytes.writeUInt16LE(2, 32);
-  bytes.writeUInt16LE(16, 34);
-  bytes.write('data', 36, 'ascii');
-  bytes.writeUInt32LE(dataBytes, 40);
-  return bytes;
-}
-
 function readyTake(): TakeRecord {
-  const bytes = wav();
+  const bytes = wav(SAMPLE_RATE, SAMPLE_COUNT);
   return {
     takeId: TAKE_ID,
     lifecycle: 'ready',
@@ -95,7 +77,7 @@ test('same-process history reads preserve rich metadata staged before WAV public
       'live staged metadata must survive readers before the WAV is published',
     );
 
-    await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav());
+    await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav(SAMPLE_RATE, SAMPLE_COUNT));
     const committed = await library.commitStaged(readyTake());
 
     assert.equal(committed.recovered, false);
@@ -122,7 +104,7 @@ test('a history repair that promotes the stage while its commit is in flight doe
     assert.deepEqual(library.list(), []);
     await staging;
 
-    await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav());
+    await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav(SAMPLE_RATE, SAMPLE_COUNT));
     const commit = library.commitStaged(readyTake());
     // The commit is now waiting on the disk; a synchronous repair promotes the
     // same stage in the meantime.

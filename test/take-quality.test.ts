@@ -6,9 +6,9 @@ import {
   TAKE_QUALITY_POLICY_VERSION,
   TakeQualityTracker,
   assessTakeQuality,
-  type TakeQualityEvidence,
   type TakeQualityFrameState,
 } from '../src/take-quality.js';
+import { cleanTakeQualityEvidence } from './support/take-quality-evidence.js';
 
 const RATE = 48_000;
 
@@ -37,64 +37,6 @@ function frameState(patch: Partial<TakeQualityFrameState> = {}): TakeQualityFram
     robotRoute: false,
     robotDeltaFresh: true,
     timingDivergenceMs: null,
-    ...patch,
-  };
-}
-
-function evidence(patch: Partial<TakeQualityEvidence> = {}): TakeQualityEvidence {
-  return {
-    sampleRate: RATE,
-    recordedSamples: RATE,
-    recordedDurationMs: 1_000,
-    micGapSamples: 0,
-    micGapMs: 0,
-    backingGapSamples: 0,
-    backingGapMs: 0,
-    micStarvedFrames: 0,
-    backingStarvedFrames: 0,
-    micStarvedSamples: 0,
-    backingStarvedSamples: 0,
-    micStarvedMs: 0,
-    backingStarvedMs: 0,
-    clippedSamples: 0,
-    clippedMs: 0,
-    micInputClippedSamples: 0,
-    micInputClippedMs: 0,
-    limitedSamples: 0,
-    limitedMs: 0,
-    unheaderedSamples: 0,
-    unheadered: false,
-    micUnavailableSamples: 0,
-    micUnavailableMs: 0,
-    backingUnavailableSamples: 0,
-    backingUnavailableMs: 0,
-    networkEstimateSamples: 0,
-    networkEstimateMs: 0,
-    calibrationStaleSamples: 0,
-    calibrationStaleMs: 0,
-    alignmentClampedSamples: 0,
-    alignmentClampedMs: 0,
-    robotDeltaMissingSamples: 0,
-    robotDeltaMissingMs: 0,
-    timingDivergedSamples: 0,
-    timingDivergedMs: 0,
-    peakTimingDivergenceMs: 0,
-    timingDivergenceToleranceMs: 40,
-    events: {
-      'mic-transport-disconnected': 0,
-      'mic-transport-connected': 0,
-      'mic-capture-restarted': 0,
-      'mic-input-gap': 0,
-      'backing-transport-disconnected': 0,
-      'backing-transport-connected': 0,
-      'backing-transport-replaced': 0,
-      'backing-capture-restarted': 0,
-      'robot-source-disconnected': 0,
-      'robot-source-connected': 0,
-      'robot-source-replaced': 0,
-      'mic-owner-changed': 0,
-      'server-shutdown': 0,
-    },
     ...patch,
   };
 }
@@ -276,7 +218,7 @@ test('transport changes are review evidence, not proof that audible recording wa
 });
 
 test('sustained missing audio and impossible timing correction make a Take degraded', () => {
-  const result = assessTakeQuality(evidence({
+  const result = assessTakeQuality(cleanTakeQualityEvidence({
     micUnavailableSamples: 12_480,
     micUnavailableMs: 260,
     alignmentClampedSamples: 14_400,
@@ -291,11 +233,11 @@ test('sustained missing audio and impossible timing correction make a Take degra
 });
 
 test('small clipping asks for review while sustained clipping is degraded', () => {
-  const small = assessTakeQuality(evidence({ clippedSamples: 240, clippedMs: 5 }));
+  const small = assessTakeQuality(cleanTakeQualityEvidence({ clippedSamples: 240, clippedMs: 5 }));
   assert.equal(small.verdict, 'review');
   assert.equal(small.issues.find((issue) => issue.code === 'output-clipping')?.severity, 'warning');
 
-  const sustained = assessTakeQuality(evidence({ clippedSamples: 960, clippedMs: 20 }));
+  const sustained = assessTakeQuality(cleanTakeQualityEvidence({ clippedSamples: 960, clippedMs: 20 }));
   assert.equal(sustained.verdict, 'degraded');
   assert.equal(sustained.issues.find((issue) => issue.code === 'output-clipping')?.severity, 'critical');
 });
@@ -358,7 +300,7 @@ test('an unknown desired alignment is not evidence of divergence', () => {
 });
 
 test('sustained divergence degrades the Take rather than only asking for review', () => {
-  const result = assessTakeQuality(evidence({
+  const result = assessTakeQuality(cleanTakeQualityEvidence({
     timingDivergedSamples: 14_400,
     timingDivergedMs: 300,
     peakTimingDivergenceMs: 512,
@@ -455,7 +397,7 @@ test('a Take records which timing placed each part of it and how hard the voice 
 });
 
 test('a stored Take without timing provenance keeps its old fallback message', () => {
-  const assessed = assessTakeQuality(evidence({ networkEstimateSamples: RATE, networkEstimateMs: 1_000 }));
+  const assessed = assessTakeQuality(cleanTakeQualityEvidence({ networkEstimateSamples: RATE, networkEstimateMs: 1_000 }));
   assert.equal(
     assessed.issues.find((issue) => issue.code === 'timing-fallback')?.message,
     'Part of the Take used network-estimate timing instead of an applicable acoustic calibration.',

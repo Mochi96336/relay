@@ -9,6 +9,7 @@ import {
 function decide(overrides: Partial<BootProbeMixerApplicationInput> = {}) {
   return decideBootProbeMixerApplication({
     activeMicLagMs: 140,
+    calibratedMicLagTarget: overrides.activeMicLagMs === undefined ? 140 : overrides.activeMicLagMs,
     roomHasSong: true,
     resultMicLagMs: 140,
     pathDifferenceMs: 60,
@@ -32,7 +33,7 @@ test('no-Song room applies the measured path difference without a player-relativ
     roomHasSong: false,
     activeMicLagMs: 60,
     pathDifferenceMs: 60,
-  }), { kind: 'hold' });
+  }), { kind: 'retain' });
 });
 
 test('no-Song shortcut requires a fresh confirmed result in the current capture context', () => {
@@ -101,7 +102,7 @@ test('stored/current delta equality may restore or replace the confirmed result'
   assert.deepEqual(decide({
     activeMicLagMs: 140,
     resultMicLagMs: 140,
-  }), { kind: 'hold' });
+  }), { kind: 'retain' });
 });
 
 test('delta comparison preserves the original 0.001 ms fence', () => {
@@ -116,4 +117,17 @@ test('delta comparison preserves the original 0.001 ms fence', () => {
     resultMicLagMs: 140,
     currentDeltaMs: 80.001,
   }), { kind: 'hold' });
+});
+
+test('an active lag without a result cannot acknowledge confirmed authority', () => {
+  assert.deepEqual(decide({ resultMicLagMs: null }), { kind: 'hold' });
+});
+
+test('matching read head still replaces a different pending slew target', () => {
+  assert.deepEqual(decide({ calibratedMicLagTarget: 340 }), { kind: 'set', micLagMs: 140 });
+  assert.deepEqual(decide({
+    roomHasSong: false,
+    activeMicLagMs: 60,
+    calibratedMicLagTarget: 340,
+  }), { kind: 'set', micLagMs: 60 });
 });

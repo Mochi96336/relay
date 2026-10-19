@@ -492,9 +492,13 @@ async function installProductionDomHarness(page) {
         for (const socket of heldSockets.splice(0)) socket.open();
       },
       disconnectDiagnostics() {
-        // Technical details is the one page socket that asks for both the
-        // YouTube timeline and the calibration status in its snapshot burst.
+        // Technical details asks for the Take status in its snapshot burst.
+        // The Realign panel's own socket also asks for the YouTube timeline
+        // and the calibration status, but never the Take: matching on those
+        // two alone closed whichever socket opened first, and the test
+        // flaked when that was the Realign panel's.
         const diagnostics = sockets.find((candidate) => candidate.readyState === FakeWebSocket.OPEN
+          && candidate.requestTypes.has('take-status-request')
           && candidate.requestTypes.has('youtube-timeline-request')
           && candidate.requestTypes.has('timing-calibration-status-request'));
         if (!diagnostics) throw new Error('Technical details socket is not connected');

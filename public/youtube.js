@@ -1,7 +1,7 @@
 import './playback-prewarm-trigger.js';
 import { playbackContinuationDecision, reloadDesiredFromRoom } from './playback-continuation.js';
 import { shouldSetPlaybackRate } from './room-song-seek-policy.js';
-import { handoffPreparationPosition } from './playback-handoff-timing.js';
+import { PlaybackHandoff } from './playback-handoff.js';
 import { shouldRestoreRoomAfterCommandTerminal } from './room-song-command-terminal.js';
 import {
   ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS,
@@ -37,14 +37,6 @@ const ERROR_NAMES = new Map([
   [153, 'missing Referer / client identity'],
 ]);
 
-// The server owns the 5 s proof deadline and sweeps every 250 ms. The browser
-// timer is only a late local safety net, so keep it comfortably behind the
-// authoritative deadline rather than racing the server at the same instant.
-const HANDOFF_COMMIT_TIMEOUT_MS = 6_500;
-// A committed target that wakes after buffering must still be near the live
-// authoritative room clock. Seek only for a meaningful phase error so normal
-// transport jitter does not cause a correction loop.
-const HANDOFF_REALIGN_THRESHOLD_SECONDS = 0.75;
 // Confirmation-time media work is speculative. It must eventually retire even
 // if Mic ownership succeeds but a formal playback handoff never arrives.
 const SPECULATIVE_PREWARM_TIMEOUT_MS = 15_000;
@@ -59,10 +51,6 @@ let loadedVideoId = null;
 let telemetryTimer = null;
 let previousSnapshot = null;
 let apiPromise = null;
-let pendingHandoff = null;
-let handoffReadySent = false;
-let handoffReadyTimers = [];
-let handoffCommitTimer = null;
 let speculativePrewarmTimer = null;
 let outgoingReleaseTimer = null;
 let autoplayRecoveryTimer = null;
@@ -75,6 +63,26 @@ let latestPlaybackRoom = null;
 let speculativePrewarm = null;
 let outgoingHandoffId = null;
 let autoplayRecoveryRequired = false;
+
+// Player construction and presentation are adapters; the handoff owns its
+// identity, mutation sequence, mute provenance and delayed work.
+const playbackHandoff = new PlaybackHandoff({
+  getPlayer: () => playerReady ? player : null,
+  ensurePlayer,
+  onMutation: (mutation) => { serverMutation = mutation; },
+  onTimelineBoundary: (videoId) => {
+    if (videoId !== null) loadedVideoId = videoId;
+    previousSnapshot = null;
+  },
+  onNote: (key) => { noteNode.textContent = t(key); },
+  onReady: (handoffId) => window.dispatchEvent(new CustomEvent('relay:song-handoff-ready', {
+    detail: { handoffId },
+  })),
+  onFailure: (handoffId, reason) => window.dispatchEvent(new CustomEvent('relay:song-handoff-failed', {
+    detail: { handoffId, reason },
+  })),
+  sampleNow,
+});
 
 function parseVideoId(rawValue) {
   const value = rawValue.trim();
@@ -374,7 +382,7 @@ function roomCommandOwnsLocalAction(mutation, action) {
 
 function localMutationsForSnapshot(snapshot) {
   if (!snapshot || !snapshot.previousVideoId) return [];
-  if (pendingHandoff) return [];
+  if (playbackHandoff.pending) return [];
 
   const mutationContext = activeServerMutation();
   if (mutationContext && mutationContext.source !== 'room-command') return [];
@@ -446,7 +454,7 @@ function renderSnapshot(snapshot) {
       noteNode.textContent = t('song.timelineJump', { delta: `${sign}${snapshot.timelineDeltaSeconds.toFixed(2)}` });
     } else if (snapshot.state === 3) {
       noteNode.textContent = t('song.bufferingIndependent');
-    } else if (!pendingHandoff && !localCommandPending && !activeServerMutation()) {
+    } else if (!playbackHandoff.pending && !localCommandPending && !activeServerMutation()) {
       noteNode.textContent = t('song.timelineAuthorized');
     }
   }
@@ -456,7 +464,7 @@ function renderSnapshot(snapshot) {
   // Speculative warming is strictly local. In particular, an empty/recoverable
   // surface must not turn the hidden muted playback performed while the Mic
   // confirmation is open into a new room command or a competing media clock.
-  if (speculativePrewarm && !pendingHandoff) return;
+  if (speculativePrewarm && !playbackHandoff.pending) return;
 
   // A normal observer never publishes a competing media clock. A server-applied
   // room command is different: the server has already authorized this exact
@@ -467,15 +475,15 @@ function renderSnapshot(snapshot) {
   // During preparation the target player is deliberately loading while muted
   // before it owns the room clock. Do not turn that local preparation into
   // product input.
-  if (pendingHandoff?.phase === 'preparing') return;
+  if (playbackHandoff.pending?.phase === 'preparing') return;
 
   // Even after commit, the expected video id is not proof that the iframe has
   // switched. YouTube may temporarily return no video data while changing
   // media; loadedVideoId is only our intent. Never let that fallback complete a
   // handoff or overwrite the room clock with the outgoing video's position.
   if (
-    pendingHandoff?.phase === 'committing'
-    && reportedVideoId() !== pendingHandoff.videoId
+    playbackHandoff.pending?.phase === 'committing'
+    && reportedVideoId() !== playbackHandoff.pending.videoId
   ) return;
 
   // Detect a newer native control gesture even while an earlier command is
@@ -528,16 +536,6 @@ function startTelemetry() {
   telemetryTimer = setInterval(sampleNow, 250);
 }
 
-function clearHandoffReadyTimers() {
-  for (const timer of handoffReadyTimers) clearTimeout(timer);
-  handoffReadyTimers = [];
-}
-
-function clearHandoffCommitTimer() {
-  if (handoffCommitTimer !== null) clearTimeout(handoffCommitTimer);
-  handoffCommitTimer = null;
-}
-
 function clearSpeculativePrewarmTimer() {
   if (speculativePrewarmTimer !== null) clearTimeout(speculativePrewarmTimer);
   speculativePrewarmTimer = null;
@@ -563,7 +561,7 @@ function retireOutgoingReleaseBarrier() {
 function armSpeculativePrewarmTimeout(prewarm) {
   clearSpeculativePrewarmTimer();
   speculativePrewarmTimer = setTimeout(() => {
-    if (speculativePrewarm === prewarm && !pendingHandoff) cancelPlaybackPrewarm();
+    if (speculativePrewarm === prewarm && !playbackHandoff.pending) cancelPlaybackPrewarm();
   }, SPECULATIVE_PREWARM_TIMEOUT_MS);
 }
 
@@ -586,77 +584,7 @@ function armOutgoingReleaseFallback(handoffId) {
 }
 
 function realignCommittingHandoff(timeline) {
-  if (!pendingHandoff || pendingHandoff.phase !== 'committing') return false;
-  if (!timeline || timeline.handoffState !== 'committing' || timeline.handoffId !== pendingHandoff.handoffId) return false;
-  if (!playerReady || !player || reportedVideoId() !== pendingHandoff.videoId) return false;
-
-  const authoritativeTime = Number(timeline.serverTime);
-  let currentTime;
-  let state;
-  try {
-    currentTime = Number(player.getCurrentTime());
-    state = Number(player.getPlayerState());
-  } catch {
-    return false;
-  }
-  if (!Number.isFinite(authoritativeTime) || !Number.isFinite(currentTime)) return false;
-
-  const expectedState = pendingHandoff.desiredState === 1 ? 1 : 2;
-  if (state !== expectedState) return false;
-  if (Math.abs(currentTime - authoritativeTime) <= HANDOFF_REALIGN_THRESHOLD_SECONDS) return false;
-
-  pendingHandoff.targetTime = Math.max(0, authoritativeTime);
-  previousSnapshot = null;
-  try {
-    // A long BUFFERING stall freezes the target's media clock while A keeps the
-    // authoritative room clock moving. Realign before offering final proof so
-    // promotion cannot rewind the room. Keep the target muted until completion.
-    player.mute();
-    player.seekTo(pendingHandoff.targetTime, true);
-    player.setPlaybackRate(pendingHandoff.playbackRate);
-    if (pendingHandoff.desiredState === 1) player.playVideo();
-    else player.pauseVideo();
-    setTimeout(sampleNow, 80);
-    setTimeout(sampleNow, 220);
-    return true;
-  } catch (error) {
-    console.warn('Could not realign committed handoff to authoritative room time', error);
-    return false;
-  }
-}
-
-function announceHandoffReady() {
-  if (!pendingHandoff || pendingHandoff.phase !== 'preparing' || handoffReadySent) return false;
-  if (!playerReady || !player || reportedVideoId() !== pendingHandoff.videoId) return false;
-
-  const state = Number(player.getPlayerState());
-  const bufferedFraction = Number(player.getVideoLoadedFraction());
-  const desiredPlaying = pendingHandoff.desiredState === 1 || pendingHandoff.desiredState === 3;
-  // BUFFERING is progress, not readiness. `getVideoLoadedFraction()` is an
-  // overall-video fraction and cannot prove that the target timestamp is
-  // renderable. For a playing room, require the iframe to have actually reached
-  // PLAYING; for a paused/terminal room, require the prepared player to be
-  // PAUSED. The server applies its own proof gate again after commit.
-  if (desiredPlaying ? state !== 1 : state !== 2) return false;
-  if (!Number.isFinite(bufferedFraction) || bufferedFraction <= 0) return false;
-
-  handoffReadySent = true;
-  clearHandoffReadyTimers();
-  noteNode.textContent = t('song.handoffPrepared');
-  window.dispatchEvent(new CustomEvent('relay:song-handoff-ready', {
-    detail: { handoffId: pendingHandoff.handoffId },
-  }));
-  return true;
-}
-
-function scheduleHandoffReadyChecks() {
-  clearHandoffReadyTimers();
-  // Loaded fraction and state can advance without a useful state callback on
-  // every platform. Keep polling beneath the server's prepare deadline so a
-  // slow phone can become ready without a reload or another user gesture.
-  for (const delayMs of [80, 220, 500, 900, 1_500, 2_400, 4_000, 7_000, 11_000, 16_000]) {
-    handoffReadyTimers.push(setTimeout(announceHandoffReady, delayMs));
-  }
+  return playbackHandoff.realign(timeline);
 }
 
 function projectedPrewarmPosition(prewarm, now = performance.now()) {
@@ -675,7 +603,7 @@ function restorePrewarmMute(prewarm) {
 }
 
 function primeSpeculativePrewarm() {
-  if (!speculativePrewarm || pendingHandoff || !playerReady || !player) return false;
+  if (!speculativePrewarm || playbackHandoff.pending || !playerReady || !player) return false;
 
   const prewarm = speculativePrewarm;
   const targetTime = projectedPrewarmPosition(prewarm);
@@ -716,7 +644,7 @@ function primeSpeculativePrewarm() {
 }
 
 async function startPlaybackPrewarm() {
-  if (pendingHandoff || localCommandPending) return false;
+  if (playbackHandoff.pending || localCommandPending) return false;
   if (playbackRole === 'holder' || playbackRole === 'preparing') return false;
   if (serverMutation?.source === 'room-command' || serverMutation?.source === 'restore') return false;
 
@@ -750,8 +678,8 @@ async function startPlaybackPrewarm() {
   armSpeculativePrewarmTimeout(prewarm);
 
   try {
-    await ensurePlayer(prewarm.videoId);
-    if (speculativePrewarm !== prewarm || pendingHandoff) return false;
+    await ensurePlayer(prewarm.videoId, () => speculativePrewarm === prewarm && !playbackHandoff.pending);
+    if (speculativePrewarm !== prewarm || playbackHandoff.pending) return false;
     if (playerReady) primeSpeculativePrewarm();
     return true;
   } catch (error) {
@@ -769,7 +697,7 @@ function cancelPlaybackPrewarm() {
   const prewarm = speculativePrewarm;
   clearSpeculativePrewarmTimer();
   speculativePrewarm = null;
-  if (!prewarm || pendingHandoff || !playerReady || !player) return;
+  if (!prewarm || playbackHandoff.pending || !playerReady || !player) return;
   if (reportedVideoId() === prewarm.videoId) {
     try { player.pauseVideo(); } catch {}
   }
@@ -777,61 +705,7 @@ function cancelPlaybackPrewarm() {
 }
 
 function cuePendingHandoff() {
-  if (!pendingHandoff || !playerReady || !player) return;
-  try {
-    serverMutation = {
-      source: 'handoff-prepare',
-      action: 'load',
-      suppressTelemetry: true,
-      expiresAt: performance.now() + 3_000,
-    };
-    loadedVideoId = pendingHandoff.videoId;
-    previousSnapshot = null;
-
-    if (pendingHandoff.prewarmWasMuted === null) {
-      // Do not change audibility unless we can later restore the exact original
-      // state on cancellation/failure.
-      pendingHandoff.prewarmWasMuted = Boolean(player.isMuted());
-    }
-    player.mute();
-
-    const preparationTime = handoffPreparationPosition(
-      pendingHandoff.targetTime,
-      pendingHandoff.desiredState,
-    );
-
-    const canReuse = pendingHandoff.reusePreparedPlayer === true
-      && reportedVideoId() === pendingHandoff.videoId;
-    if (canReuse) {
-      const currentTime = Number(player.getCurrentTime());
-      const currentState = Number(player.getPlayerState());
-      if (
-        !Number.isFinite(currentTime)
-        || Math.abs(currentTime - preparationTime) > 0.75
-        || (currentState === 0 && preparationTime < pendingHandoff.targetTime)
-      ) {
-        player.seekTo(preparationTime, true);
-      }
-    } else {
-      // A cold formal handoff needs the same real-media preparation as the
-      // speculative path. `loadVideoById` starts the request/decode pipeline;
-      // muting above keeps it inaudible until the server commits authority.
-      player.loadVideoById({
-        videoId: pendingHandoff.videoId,
-        startSeconds: preparationTime,
-      });
-    }
-    try { player.setPlaybackRate(pendingHandoff.playbackRate); } catch {}
-    scheduleHandoffReadyChecks();
-  } catch (error) {
-    console.warn('Could not prepare room song handoff', error);
-    window.dispatchEvent(new CustomEvent('relay:song-handoff-failed', {
-      detail: {
-        handoffId: pendingHandoff.handoffId,
-        reason: 'prepare-failed',
-      },
-    }));
-  }
+  return playbackHandoff.cue();
 }
 
 function applyAuthoritativeRestore() {
@@ -881,7 +755,7 @@ function handleReady(event) {
   iframe.referrerPolicy = 'strict-origin-when-cross-origin';
   setPlayerState(event.target.getPlayerState(), 'ready');
 
-  if (pendingHandoff?.phase === 'preparing') {
+  if (playbackHandoff.pending?.phase === 'preparing') {
     startTelemetry();
     cuePendingHandoff();
     return;
@@ -928,7 +802,7 @@ function handleStateChange(event) {
   if (event.data === 1 && autoplayRecoveryRequired) clearAutoplayRecovery();
   setPlayerState(event.data);
   sampleNow();
-  if (speculativePrewarm && !pendingHandoff) {
+  if (speculativePrewarm && !playbackHandoff.pending) {
     try { player.setPlaybackRate(speculativePrewarm.playbackRate); } catch {}
     // A paused/cued authoritative room still benefits from forcing one real
     // media request. Stop as soon as the muted player proves it can play so the
@@ -937,13 +811,7 @@ function handleStateChange(event) {
       try { player.pauseVideo(); } catch {}
     }
   }
-  if (pendingHandoff?.phase === 'preparing') {
-    try { player.setPlaybackRate(pendingHandoff.playbackRate); } catch {}
-    if (pendingHandoff.desiredState !== 1 && event.data === 1) {
-      try { player.pauseVideo(); } catch {}
-    }
-    announceHandoffReady();
-  }
+  playbackHandoff.observeState(Number(event.data));
 }
 
 function handlePlaybackRateChange(event) {
@@ -956,18 +824,18 @@ function handleError(event) {
   const label = ERROR_NAMES.get(event.data) ?? `YouTube error ${event.data}`;
   setPlayerState(-1, label);
   noteNode.textContent = `Player error ${event.data}: ${label}.`;
-  if (speculativePrewarm && !pendingHandoff) {
+  if (speculativePrewarm && !playbackHandoff.pending) {
     const prewarm = speculativePrewarm;
     clearSpeculativePrewarmTimer();
     speculativePrewarm = null;
     restorePrewarmMute(prewarm);
   }
-  if (pendingHandoff?.phase === 'committing') {
+  if (playbackHandoff.pending?.phase === 'committing') {
     rollbackCommittedHandoff(`youtube-error-${event.data}`);
-  } else if (pendingHandoff) {
+  } else if (playbackHandoff.pending) {
     window.dispatchEvent(new CustomEvent('relay:song-handoff-failed', {
       detail: {
-        handoffId: pendingHandoff.handoffId,
+        handoffId: playbackHandoff.pending.handoffId,
         reason: `youtube-error-${event.data}`,
       },
     }));
@@ -983,38 +851,17 @@ function handleError(event) {
 }
 
 function rollbackCommittedHandoff(reason) {
-  if (!pendingHandoff || pendingHandoff.phase !== 'committing') return false;
-
-  const handoffId = pendingHandoff.handoffId;
-  clearHandoffCommitTimer();
-  pendingHandoff.phase = 'preparing';
-  handoffReadySent = false;
-  serverMutation = {
-    source: 'handoff-prepare',
-    action: 'load',
-    suppressTelemetry: true,
-    expiresAt: performance.now() + 3_000,
-  };
-
-  if (playerReady && player) {
-    try { player.pauseVideo(); } catch {}
-    try { player.mute(); } catch {}
-  }
-
-  window.dispatchEvent(new CustomEvent('relay:song-handoff-failed', {
-    detail: { handoffId, reason },
-  }));
-  return true;
+  return playbackHandoff.rollback(reason);
 }
 
 function handleAutoplayBlocked() {
-  if (speculativePrewarm && !pendingHandoff) return;
+  if (speculativePrewarm && !playbackHandoff.pending) return;
 
-  noteNode.textContent = pendingHandoff?.phase === 'committing'
+  noteNode.textContent = playbackHandoff.pending?.phase === 'committing'
     ? 'Browser blocked the playback handoff. Tap Play once in the visible YouTube player; Relay will retry without dropping the old playback first.'
     : 'Browser blocked scripted playback. Tap Play directly inside the visible YouTube player.';
 
-  if (pendingHandoff?.phase === 'committing') {
+  if (playbackHandoff.pending?.phase === 'committing') {
     rollbackCommittedHandoff('autoplay-blocked');
     return;
   }
@@ -1028,8 +875,9 @@ function handleAutoplayBlocked() {
   }
 }
 
-async function ensurePlayer(videoId) {
+async function ensurePlayer(videoId, isCurrent = () => true) {
   const YT = await loadYouTubeApi();
+  if (!isCurrent()) return null;
   loadedVideoId = videoId;
 
   if (player) return player;
@@ -1256,14 +1104,8 @@ async function prepareRoomSong(message) {
     restorePrewarmMute(preparedPrewarm);
   }
 
-  // A newer handoff can replace an older preparation on the same page, for
-  // example when Mic ownership changes while a reload is still converging.
-  // Retire every delayed readiness/commit callback before installing the new
-  // identity; otherwise old work can mutate the replacement handoff.
-  clearHandoffReadyTimers();
-  clearHandoffCommitTimer();
   localCommandPending = null;
-  pendingHandoff = {
+  await playbackHandoff.prepare({
     handoffId,
     videoId,
     targetTime: Math.max(0, targetTime),
@@ -1271,88 +1113,14 @@ async function prepareRoomSong(message) {
     playbackRate: Number.isFinite(Number(message.playbackRate)) && Number(message.playbackRate) > 0
       ? Number(message.playbackRate)
       : 1,
+  }, {
     reusePreparedPlayer,
-    prewarmWasMuted: reusePreparedPlayer ? preparedPrewarm?.wasMuted ?? null : null,
-    phase: 'preparing',
-  };
-  handoffReadySent = false;
-  previousSnapshot = null;
-  noteNode.textContent = t('song.preparingHandoff');
-
-  try {
-    await ensurePlayer(videoId);
-    if (playerReady) cuePendingHandoff();
-  } catch (error) {
-    console.error(error);
-    window.dispatchEvent(new CustomEvent('relay:song-handoff-failed', {
-      detail: { handoffId, reason: 'player-unavailable' },
-    }));
-  }
+    wasMuted: reusePreparedPlayer ? preparedPrewarm?.wasMuted ?? null : null,
+  });
 }
 
 function commitRoomSong(message) {
-  if (!pendingHandoff || message.handoffId !== pendingHandoff.handoffId) return;
-  if (!playerReady || !player) {
-    window.dispatchEvent(new CustomEvent('relay:song-handoff-failed', {
-      detail: { handoffId: pendingHandoff.handoffId, reason: 'player-not-ready' },
-    }));
-    return;
-  }
-
-  const targetTime = Number(message.serverTime);
-  const desiredState = Number(message.state);
-  if (!Number.isFinite(targetTime)) return;
-
-  clearHandoffCommitTimer();
-  pendingHandoff.phase = 'committing';
-  pendingHandoff.targetTime = Math.max(0, targetTime);
-  pendingHandoff.desiredState = desiredState;
-  previousSnapshot = null;
-  serverMutation = {
-    source: 'handoff-commit',
-    action: desiredState === 1 ? 'play' : 'pause',
-    suppressTelemetry: false,
-    expiresAt: performance.now() + 2_500,
-  };
-
-  try {
-    if (reportedVideoId() !== pendingHandoff.videoId) {
-      player.loadVideoById({
-        videoId: pendingHandoff.videoId,
-        startSeconds: pendingHandoff.targetTime,
-      });
-    }
-    const currentTime = Number(player.getCurrentTime());
-    if (!Number.isFinite(currentTime) || Math.abs(currentTime - pendingHandoff.targetTime) > 0.75) {
-      player.seekTo(pendingHandoff.targetTime, true);
-    }
-    // Commit starts the target media clock, but it is still not the audible
-    // room source. Keep it muted until server proof promotes this exact
-    // transport and sends the explicit completion packet.
-    try { player.mute(); } catch {}
-    if (desiredState === 1) player.playVideo();
-    else player.pauseVideo();
-
-    const committingHandoffId = pendingHandoff.handoffId;
-    handoffCommitTimer = setTimeout(() => {
-      if (
-        pendingHandoff?.handoffId === committingHandoffId
-        && pendingHandoff.phase === 'committing'
-      ) {
-        // The server should already have completed or cancelled by now. This is
-        // only local damage containment: park/mute and report failure. Do not
-        // reuse a 6.5 s-old targetTime to start another seek loop locally.
-        rollbackCommittedHandoff('commit-timeout');
-      }
-    }, HANDOFF_COMMIT_TIMEOUT_MS);
-
-    setTimeout(sampleNow, 80);
-    setTimeout(sampleNow, 220);
-    noteNode.textContent = t('song.switchingHere');
-  } catch (error) {
-    console.warn('Could not commit room song handoff', error);
-    rollbackCommittedHandoff('commit-failed');
-  }
+  playbackHandoff.commit(message);
 }
 
 function releaseRoomSong(message) {
@@ -1384,53 +1152,28 @@ function releaseRoomSong(message) {
  * already forgotten.
  */
 function cancelRoomSongHandoff() {
-  if (!pendingHandoff) return;
-  const prewarmWasMuted = pendingHandoff.prewarmWasMuted;
-  clearHandoffReadyTimers();
-  clearHandoffCommitTimer();
-  pendingHandoff = null;
-  handoffReadySent = false;
+  if (!playbackHandoff.pending) return;
   clearAutoplayRecovery();
-  if (playerReady && player) {
-    try { player.pauseVideo(); } catch {}
-    if (prewarmWasMuted === false) {
-      try { player.unMute(); } catch {}
-    }
-  }
-  noteNode.textContent = t('song.handoffCancelled');
+  playbackHandoff.cancel();
 }
 
 function completeRoomSong(message) {
-  if (!pendingHandoff || message.handoffId !== pendingHandoff.handoffId) return;
-  const prewarmWasMuted = pendingHandoff.prewarmWasMuted;
-  const desiredState = pendingHandoff.desiredState;
-  clearHandoffReadyTimers();
-  clearHandoffCommitTimer();
-  pendingHandoff = null;
-  handoffReadySent = false;
+  if (!playbackHandoff.pending || message.handoffId !== playbackHandoff.pending.handoffId) return;
   clearAutoplayRecovery();
-  // Only the explicit server completion packet restores audibility. A timeline
-  // status broadcast is intentionally insufficient because the server sends the
-  // promoted timeline before it sends the outgoing leader's release packet.
-  if (playerReady && player && prewarmWasMuted === false) {
-    try { player.unMute(); } catch {}
-    // WebKit may pause media when a muted autoplay is unmuted without a fresh
-    // user gesture. We cannot manufacture that gesture after an async server
-    // round-trip, so detect the failure and persist the real recovery state
-    // instead of letting ordinary telemetry overwrite it two seconds later.
-    if (desiredState === 1) {
-      const recoveryGeneration = autoplayRecoveryGeneration;
-      autoplayRecoveryTimer = setTimeout(() => {
-        autoplayRecoveryTimer = null;
-        if (recoveryGeneration !== autoplayRecoveryGeneration) return;
-        if (Number(player?.getPlayerState?.()) !== 1) {
-          autoplayRecoveryRequired = true;
-          noteNode.textContent = t('song.handoffAutoplayRecovery');
-        }
-      }, 300);
-    }
+  const completed = playbackHandoff.complete(message.handoffId);
+  // WebKit can pause media on asynchronous unmute. Only observed PLAYING clears
+  // the recovery state; an ordinary telemetry repaint cannot hide it.
+  if (completed?.unmuteRequested && completed.desiredState === 1) {
+    const recoveryGeneration = autoplayRecoveryGeneration;
+    autoplayRecoveryTimer = setTimeout(() => {
+      autoplayRecoveryTimer = null;
+      if (recoveryGeneration !== autoplayRecoveryGeneration) return;
+      if (Number(player?.getPlayerState?.()) !== 1) {
+        autoplayRecoveryRequired = true;
+        noteNode.textContent = t('song.handoffAutoplayRecovery');
+      }
+    }, 300);
   }
-  noteNode.textContent = t('song.handoffComplete');
 }
 
 function loadVideo() {

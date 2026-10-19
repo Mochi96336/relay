@@ -124,7 +124,7 @@ describe('the second Mic\'s packet ingress', () => {
     }
     assert.deepEqual(f.ingress.interceptBinary(socket, bytes(8, 960), 25), {
       intercepted: true, accepted: false, reason: 'capture-restarted',
-    }, 'a new device capture needs new singer Media Epoch, not a silent generation alias');
+    }, 'a new device capture is refused, not taken as a silent generation alias');
     assert.equal(f.accepted.length, 1);
     assert.equal(boundResult(f.ingress.interceptBinary(socket, bytes(7, 960), 26)).accepted, true,
       'a refused capture restart cannot poison previously valid source generation');

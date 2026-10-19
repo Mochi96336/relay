@@ -127,7 +127,7 @@ window.addEventListener('relay-choir-start-secondary-capture', async () => {
   preparing = true;
   const currentPrepare = ++prepareAttempt;
   // The user's physical click initiates getUserMedia (not a server reply).
-  // This path is NEVER started by an automatic invitation or login.
+  // This path is never started by a server message or a page load.
   try {
     const sourceRate = await capture.prepare();
     if (currentPrepare !== prepareAttempt || !sourceRate) return;

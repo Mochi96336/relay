@@ -1,5 +1,6 @@
 import './live-i18n.js';
 import { groupHistory, historyFromStatus } from './take-history-model.js';
+import { formatDuration } from './time-format.js';
 
 const root = document.querySelector('#last-take');
 const recentButton = document.querySelector('#last-take-toggle');
@@ -10,13 +11,6 @@ const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 
 function intlLocale() {
   return window.relayI18n?.getLocale?.() === 'zh-Hant' ? 'zh-TW' : 'en';
-}
-
-function formatDuration(durationMs) {
-  const totalSeconds = Math.max(0, Math.round(Number(durationMs) / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
 function formatRecordedAt(endedAtMs) {

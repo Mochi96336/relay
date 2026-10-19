@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import vm from 'node:vm';
 import { projectFollowerRoom, decideFollowerAction } from '../public/choir-follower-clock.js';
-import { formatTime } from '../public/song-time.js';
+import { formatTime } from '../public/time-format.js';
 
 async function fixture() {
   let now = 1000;

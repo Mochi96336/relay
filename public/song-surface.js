@@ -5,7 +5,7 @@ import {
   canRecoverPlayback,
   playbackLeaderHealth,
 } from './playback-recovery.js';
-import { formatTime } from './song-time.js';
+import { formatTime } from './time-format.js';
 
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const stage = document.querySelector('.song-stage');

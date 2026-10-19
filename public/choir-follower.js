@@ -1,5 +1,5 @@
 import { projectFollowerRoom, decideFollowerAction } from './choir-follower-clock.js';
-import { formatTime } from './song-time.js';
+import { formatTime } from './time-format.js';
 
 // B uses the EXISTING Song surface. This player never becomes the room leader,
 // sends playback telemetry, or supplies a Mic acoustic calibration anchor.

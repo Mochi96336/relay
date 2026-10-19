@@ -1,6 +1,6 @@
 import { probeTimingDiagnostics } from './probe-timing-diagnostics.js';
 import { wsUrl } from './ws-url.js';
-import { formatTime } from './song-time.js';
+import { formatTime } from './time-format.js';
 
 const armButton = document.querySelector('#arm-source');
 const stateNode = document.querySelector('#source-state');

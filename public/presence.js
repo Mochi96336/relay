@@ -1,4 +1,5 @@
 import { authorityState } from './authority-freshness.js';
+import { choirCommandMessage } from './choir-commands.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 import { wsUrl } from './ws-url.js';
 window.relayIdentityReady = (async () => {
@@ -225,56 +226,10 @@ window.relayIdentityReady = (async () => {
   }
 
   // Second Mic commands travel on the established authenticated Presence
-  // socket; never ship a browser capability as a Choir message. The server
-  // still checks the Mic owner and B's actual identity.
+  // socket, carrying only what choir-commands.js lets each carry.
   window.addEventListener('relay-choir-command', (event) => {
-    const payload = event.detail;
-    if (!choirAvailable || !sessionAuthorityFresh
-      || !payload || ![
-        'choir-secondary-join', 'choir-secondary-withdraw',
-        'choir-secondary-song-anchor', 'choir-secondary-page', 'choir-secondary-gain',
-        'choir-secondary-media-claim-request',
-        'choir-probe-played', 'choir-probe-failed', 'choir-probe-request',
-      ].includes(payload.type)) return;
-    if (payload.type === 'choir-probe-request') {
-      send({ type: payload.type });
-      return;
-    }
-    if (payload.type === 'choir-probe-played' || payload.type === 'choir-probe-failed') {
-      send({
-        type: payload.type, requestId: payload.requestId, generation: payload.generation,
-        ...(payload.type === 'choir-probe-played'
-          ? { timingDiagnostics: payload.timingDiagnostics }
-          : { reason: typeof payload.reason === 'string' ? payload.reason.slice(0, 200) : 'unspecified' }),
-      });
-      return;
-    }
-    if (payload.type === 'choir-secondary-join') {
-      send({ type: payload.type, ...(payload.resume === true
-        ? { resume: true, expectedPrimaryId: payload.expectedPrimaryId } : {}) });
-      return;
-    }
-    if (payload.type === 'choir-secondary-gain') {
-      send({ type: payload.type, micGainDb: payload.micGainDb });
-      return;
-    }
-    if (payload.type === 'choir-secondary-song-anchor') {
-      send({
-        type: payload.type, videoId: payload.videoId, state: payload.state,
-        currentTime: payload.currentTime, playbackRate: payload.playbackRate,
-        captureAnchor: payload.captureAnchor,
-      });
-      return;
-    }
-    if (payload.type === 'choir-secondary-page') {
-      send({ type: payload.type, page: payload.page });
-      return;
-    }
-    if (payload.type === 'choir-secondary-withdraw') {
-      send({ type: payload.type, reason: typeof payload.reason === 'string' ? payload.reason.slice(0, 80) : 'unspecified' });
-    } else {
-      send({ type: payload.type });
-    }
+    const message = choirCommandMessage(event.detail);
+    if (choirAvailable && sessionAuthorityFresh && message) send(message);
   });
 
   function sendPendingRename() {

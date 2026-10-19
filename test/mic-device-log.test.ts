@@ -2,36 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { RelayClient, sleep, startRelay } from './helpers/harness.js';
+import { uplinkHealthReport } from './support/uplink-health.js';
 
 function uplinkHealth(generation: number, transport: Record<string, unknown>) {
-  return {
-    type: 'audio-uplink-health',
-    version: 1,
-    captureGeneration: generation,
-    capturedSamples: 0,
-    inputGapSamples: 0,
-    inputMuted: false,
-    droppedSamples: { total: 0, disconnected: 0, congested: 0, packetTooLarge: 0 },
-    controlReconnects: 0,
-    transport: {
-      path: 'websocket',
-      maxPacketBytes: null,
-      minWebTransportMaxPacketBytes: null,
-      maxWebTransportMaxPacketBytes: null,
-      webTransportAttempts: 0,
-      webTransportConnections: 0,
-      webTransportDemotions: 0,
-      webTransportPacketsSubmitted: 0,
-      webTransportCongestedRejects: 0,
-      webTransportPacketTooLargeRejects: 0,
-      webTransportSendFailures: 0,
-      webSocketPacketsSent: 0,
-      webSocketCongestedRejects: 0,
-      webSocketDisconnectedRejects: 0,
-      webSocketSendFailures: 0,
-      ...transport,
-    },
-  };
+  return { type: 'audio-uplink-health', ...uplinkHealthReport(generation, 0, { transport }) };
 }
 
 async function micDeviceLine(server: Awaited<ReturnType<typeof startRelay>>) {

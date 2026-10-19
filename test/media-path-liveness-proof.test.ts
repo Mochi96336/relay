@@ -10,6 +10,7 @@ import { AudioSession } from '../src/audio-session.js';
 import type { AudioUplinkHealth } from '../src/audio-uplink-health.js';
 import { MicRuntime } from '../src/mic-runtime.js';
 import type { RelaySocket } from '../src/relay-socket-server.js';
+import { uplinkHealthReport } from './support/uplink-health.js';
 
 const SAMPLE_RATE = 48_000;
 
@@ -42,38 +43,26 @@ function health(
     healthRequestId?: number;
   } = {},
 ): AudioUplinkHealth {
-  return {
-    version: 1,
-    captureGeneration,
+  const webTransport = path === 'webtransport';
+  return uplinkHealthReport(captureGeneration, capturedSamples, {
     ...(healthRequestId === undefined ? {} : { healthRequestId }),
-    capturedSamples,
-    inputGapSamples: 0,
     inputGapActive: false,
-    inputMuted: false,
     capture: null,
     captureLevel: null,
-    droppedSamples: { total: 0, disconnected: 0, congested: 0, packetTooLarge: 0 },
-    controlReconnects: 0,
     transport: {
       path,
-      maxPacketBytes: path === 'webtransport' ? 1000 : null,
-      minWebTransportMaxPacketBytes: path === 'webtransport' ? 1200 : null,
-      maxWebTransportMaxPacketBytes: path === 'webtransport' ? 1200 : null,
-      datagramPacketBytesCeiling: path === 'webtransport' ? 1000 : null,
-      datagramQueuePackets: path === 'webtransport' ? 4 : null,
-      webTransportAttempts: path === 'webtransport' ? 1 : 0,
-      webTransportConnections: path === 'webtransport' ? 1 : 0,
-      webTransportDemotions: path === 'websocket' ? 1 : 0,
+      maxPacketBytes: webTransport ? 1000 : null,
+      minWebTransportMaxPacketBytes: webTransport ? 1200 : null,
+      maxWebTransportMaxPacketBytes: webTransport ? 1200 : null,
+      datagramPacketBytesCeiling: webTransport ? 1000 : null,
+      datagramQueuePackets: webTransport ? 4 : null,
+      webTransportAttempts: webTransport ? 1 : 0,
+      webTransportConnections: webTransport ? 1 : 0,
+      webTransportDemotions: webTransport ? 0 : 1,
       webTransportPacketsSubmitted: submitted,
-      webTransportCongestedRejects: 0,
-      webTransportPacketTooLargeRejects: 0,
-      webTransportSendFailures: 0,
-      webSocketPacketsSent: path === 'websocket' ? submitted : 0,
-      webSocketCongestedRejects: 0,
-      webSocketDisconnectedRejects: 0,
-      webSocketSendFailures: 0,
+      webSocketPacketsSent: webTransport ? 0 : submitted,
     },
-  };
+  }) as AudioUplinkHealth;
 }
 
 function packet(

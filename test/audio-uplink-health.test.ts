@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { parseAudioUplinkHealth } from '../src/audio-uplink-health.js';
+import { uplinkHealthReport } from './support/uplink-health.js';
 
 it('preserves the actual Mic codec and bitrate in observation health', () => {
   const health = validHealth();
@@ -15,52 +16,37 @@ it('preserves the actual Mic codec and bitrate in observation health', () => {
 function validHealth() {
   return {
     type: 'audio-uplink-health',
-    version: 1,
-    captureGeneration: 7,
-    capturedSamples: 48_000,
-    inputGapSamples: 128,
-    inputGapActive: false,
-    inputMuted: false,
-    capture: {
-      echoCancellation: false,
-      noiseSuppression: false,
-      autoGainControl: false,
-      audioSessionType: 'play-and-record',
-      inputLabel: 'iPhone Microphone',
-      device: 'iPhone iOS 18.6 · Safari 26.0',
-    },
-    captureLevel: {
-      peakDbfs: -18,
-      rmsDbfs: -31,
-    },
-    captureClipping: {
-      railSamples: 12,
-      maxConsecutiveRailSamples: 6,
-    },
-    droppedSamples: {
-      total: 960,
-      disconnected: 480,
-      congested: 480,
-      packetTooLarge: 0,
-    },
-    controlReconnects: 2,
-    transport: {
-      path: 'webtransport',
-      maxPacketBytes: 1200,
-      minWebTransportMaxPacketBytes: 1180,
-      maxWebTransportMaxPacketBytes: 1200,
-      webTransportAttempts: 2,
-      webTransportConnections: 2,
-      webTransportDemotions: 1,
-      webTransportPacketsSubmitted: 100,
-      webTransportCongestedRejects: 3,
-      webTransportPacketTooLargeRejects: 1,
-      webTransportSendFailures: 1,
-      webSocketPacketsSent: 20,
-      webSocketCongestedRejects: 0,
-      webSocketDisconnectedRejects: 4,
-      webSocketSendFailures: 0,
-    },
+    ...uplinkHealthReport(7, 48_000, {
+      inputGapSamples: 128,
+      inputGapActive: false,
+      capture: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        audioSessionType: 'play-and-record',
+        inputLabel: 'iPhone Microphone',
+        device: 'iPhone iOS 18.6 · Safari 26.0',
+      },
+      captureLevel: { peakDbfs: -18, rmsDbfs: -31 },
+      captureClipping: { railSamples: 12, maxConsecutiveRailSamples: 6 },
+      droppedSamples: { total: 960, disconnected: 480, congested: 480 },
+      controlReconnects: 2,
+      transport: {
+        path: 'webtransport',
+        maxPacketBytes: 1200,
+        minWebTransportMaxPacketBytes: 1180,
+        maxWebTransportMaxPacketBytes: 1200,
+        webTransportAttempts: 2,
+        webTransportConnections: 2,
+        webTransportDemotions: 1,
+        webTransportPacketsSubmitted: 100,
+        webTransportCongestedRejects: 3,
+        webTransportPacketTooLargeRejects: 1,
+        webTransportSendFailures: 1,
+        webSocketPacketsSent: 20,
+        webSocketDisconnectedRejects: 4,
+      },
+    }),
   };
 }
 

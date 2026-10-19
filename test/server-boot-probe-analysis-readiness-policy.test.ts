@@ -51,7 +51,8 @@ test('timeout consumes analysis before failing the attempt and ready is the only
   const fail = block.indexOf("failProbeAttempt(waiting.target, 'captured audio did not reach the analyzer before timeout', nowMs)", timeoutBranch);
   const waitBranch = block.indexOf("if (readiness.kind === 'wait') return");
   const readyTake = block.indexOf('const analysis = bootProbeRuntime.takeAnalysis()', waitBranch);
-  const evidenceRead = block.indexOf("const rangeEvidence = analysis.target === 'mic'", readyTake);
+  const timeline = block.indexOf('const timeline = probeTimeline(analysis.target)', readyTake);
+  const evidenceRead = block.indexOf('const rangeEvidence = timeline.evidence(analysis.windowStart, analysis.windowSamples)', timeline);
   const evidenceDecision = block.indexOf('decideBootProbeAnalysisEvidence({', evidenceRead);
   const evidenceReject = block.indexOf("if (evidenceDecision.kind === 'reject')", evidenceDecision);
   const gapFailure = block.indexOf('failProbeAttempt(analysis.target, reason, nowMs)', evidenceReject);
@@ -61,12 +62,14 @@ test('timeout consumes analysis before failing the attempt and ready is the only
   assert.ok(fail > timeoutTake, 'timeout must consume lifecycle analysis before failAttempt');
   assert.ok(waitBranch > fail, 'wait remains after timeout precedence');
   assert.ok(readyTake > waitBranch, 'only ready state consumes analysis for evidence/DSP');
-  assert.ok(evidenceRead > readyTake, 'range evidence must be sampled only after ready consumes analysis');
+  assert.ok(timeline > readyTake, 'the timeline is chosen only after ready consumes analysis');
+  assert.ok(evidenceRead > timeline, 'range evidence must be sampled only after ready consumes analysis');
   assert.ok(evidenceDecision > evidenceRead, 'the shared evidence policy must consume AudioSession facts');
   assert.ok(evidenceReject > evidenceDecision, 'sparse evidence must be rejected before DSP');
   assert.ok(gapFailure > evidenceReject, 'a sparse window must fail the bounded probe attempt');
   assert.ok(dsp > gapFailure, 'locateProbe must never see a rejected zero-filled window');
-  assert.match(block, /session\.readMicEvidence\(analysis\.windowStart, analysis\.windowSamples\)/);
-  assert.match(block, /session\.readBackingEvidence\(analysis\.windowStart, analysis\.windowSamples\)/);
+  const timelineBlock = functionBlock('probeTimeline');
+  assert.match(timelineBlock, /evidence: \(start: number, count: number\) => session\.readMicEvidence\(start, count\)/);
+  assert.match(timelineBlock, /evidence: \(start: number, count: number\) => session\.readBackingEvidence\(start, count\)/);
   assert.match(block, /maxGapMs:\s*MAX_CAPTURE_GAP_MS/);
 });

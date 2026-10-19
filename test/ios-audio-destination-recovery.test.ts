@@ -3,6 +3,7 @@ import test from 'node:test';
 
 // @ts-expect-error Production browser helpers intentionally ship as plain JS.
 import { IosAudioDestinationRecovery, isIosAudioPlatform } from '../public/ios-audio-destination-recovery.js';
+import { deferred } from './support/deferred.js';
 
 function manualTimers() {
   let nextId = 1;
@@ -29,16 +30,6 @@ function manualTimers() {
       return tasks.size;
     },
   };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
 }
 
 const iphoneNavigator = {

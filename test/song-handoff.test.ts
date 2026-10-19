@@ -2,24 +2,13 @@ import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 
 import { SongSession } from '../src/song-session.js';
+import { telemetry } from './support/song-handoff-telemetry.js';
 
 const VIDEO = 'dQw4w9WgXcQ';
 const A = { participantId: 'participant-a', transportId: 'playback-tab-a', generation: 1 };
 const B = { participantId: 'participant-b', transportId: 'playback-tab-b', generation: 1 };
 const B_OTHER = { participantId: 'participant-b', transportId: 'playback-tab-b-other', generation: 1 };
 const C = { participantId: 'participant-c', transportId: 'playback-tab-c', generation: 1 };
-
-function telemetry(currentTime: number, overrides: Record<string, unknown> = {}) {
-  return {
-    videoId: VIDEO,
-    state: 1,
-    currentTime,
-    duration: 200,
-    playbackRate: 1,
-    bufferedFraction: 0.8,
-    ...overrides,
-  };
-}
 
 describe('prepared song handoff', () => {
   test('a handoff whose target vanishes does not hold the room song for ever', () => {

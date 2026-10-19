@@ -4,6 +4,7 @@ import test, { describe } from 'node:test';
 import { CalibrationSession, type CalibrationContext } from '../src/calibration-session.js';
 import type { TimingCalibrationAnalysis } from '../src/timing-calibration.js';
 import { laggedPair, pulseTrain, toInt16 } from './helpers/harness.js';
+import { deferred } from './support/deferred.js';
 
 const RATE = 48_000;
 const DURATION_MS = 6_000;
@@ -54,16 +55,6 @@ function makeSession(options: {
   });
 
   return harness;
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
 }
 
 const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve));

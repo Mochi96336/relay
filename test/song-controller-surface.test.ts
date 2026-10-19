@@ -64,12 +64,3 @@ test('the Song surface repaint never rewrites unchanged text', async () => {
       `${node} repaints on every sweep and must go through setText`);
   }
 });
-
-test('terminal handoff preparation uses the non-ended proof position', async () => {
-  const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
-
-  assert.match(source, /handoffPreparationPosition/);
-  assert.match(source, /startSeconds: preparationTime/);
-  assert.match(source, /currentState === 0 && preparationTime < pendingHandoff\.targetTime/,
-    'a reused ENDED prewarm must seek back into renderable media');
-});

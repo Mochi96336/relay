@@ -233,6 +233,20 @@ stable session identity as well as the revocation epoch, so an old close cannot
 publish Mic ended for the replacement or unmute its Listen path. Lifecycle events
 report that state; they do not allocate session identities.
 
+### Playback handoff owns target preparation and audibility
+
+PlaybackHandoff owns the target's preparation, readiness, commit, realignment,
+rollback and completion. Its mute provenance belongs to a physical player and
+survives replacement preparation. Commit must mute before it can load or play;
+only the explicit matching completion packet may request restored audibility.
+The local Take-review guard still has the final say about that device's sound.
+
+Initialization checks identity before constructing a player. Delayed work is
+scoped to both the handoff and the phase entry: retrying the same handoff cannot
+revive an old commit watchdog. Fresh timeline samples replace pending samples
+without extending the proof deadline. DOM, API construction, room commands and
+outgoing-release authority remain adapters with their own boundaries.
+
 ### Evidence length is not evidence
 
 Capture collectors keep missing PCM as zeros so sample positions stay truthful.

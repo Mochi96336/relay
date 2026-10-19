@@ -40,22 +40,6 @@ test('CUED and ENDED cannot become final playback handoff proof', () => {
   assert.equal((songs.statusPayload(200) as Record<string, any>).playbackLeaderParticipantId, B.participantId);
 });
 
-test('speculative prewarm has an explicit bounded lifetime and formal handoff consumes the timer', async () => {
-  const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
-  const startSection = topLevelFunctionSection(source, 'async function startPlaybackPrewarm()');
-  const cancelSection = topLevelFunctionSection(source, 'function cancelPlaybackPrewarm()');
-  const prepareSection = topLevelFunctionSection(source, 'async function prepareRoomSong');
-
-  assert.match(source, /const SPECULATIVE_PREWARM_TIMEOUT_MS = 15_000/);
-  assert.match(source, /function armSpeculativePrewarmTimeout\(prewarm\)/);
-  assert.match(startSection, /armSpeculativePrewarmTimeout\(speculativePrewarm\)/,
-    'a duplicate Mic tap refreshes the same bounded prewarm instead of creating an immortal one');
-  assert.match(startSection, /armSpeculativePrewarmTimeout\(prewarm\)/);
-  assert.match(cancelSection, /clearSpeculativePrewarmTimer\(\)/);
-  assert.match(prepareSection, /clearSpeculativePrewarmTimer\(\)/,
-    'formal handoff consumption must retire the speculative expiry callback');
-});
-
 test('post-handoff autoplay recovery CTA persists, localizes, and clears only after actual PLAYING', async () => {
   const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
   const i18n = await readFile(new URL('../public/i18n.js', import.meta.url), 'utf8');

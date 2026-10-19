@@ -1847,3 +1847,113 @@ test('production DOM: terminal completion waits for retired context and cannot u
   expect(await page.evaluate(() => window.__audioContexts.filter(context => context.capture).map(context => context.closeCalls))).toEqual([1, 1]);
   expect(await page.evaluate(() => window.__trackStops)).toBe(2);
 });
+
+async function handoffPhone(page, { deferApi = false } = {}) {
+  await installProductionDomHarness(page);
+  await page.addInitScript(({ deferApi }) => {
+    window.__handoffPlayers = [];
+    window.__handoffPlayerCalls = [];
+    window.__installHandoffApi = () => {
+      window.YT = { Player: class {
+        constructor(_target, { videoId, events }) {
+          Object.assign(this, { videoId, events, state: 5, position: 0, rate: 1, muted: false });
+          window.__handoffPlayers.push(this);
+          setTimeout(() => events.onReady({ target: this }), 0);
+        }
+        getIframe() { return document.querySelector('#youtube-player'); }
+        getVideoData() { return { video_id: this.videoId }; }
+        getPlayerState() { return this.state; }
+        getCurrentTime() { return this.position; }
+        getDuration() { return 200; }
+        getPlaybackRate() { return this.rate; }
+        getVideoLoadedFraction() { return 0.8; }
+        isMuted() { return this.muted; }
+        mute() {
+          if (this.failMute) throw Error('test: mute failed');
+          this.muted = true; window.__handoffPlayerCalls.push('mute');
+        }
+        unMute() { this.muted = false; window.__handoffPlayerCalls.push('unmute'); }
+        loadVideoById({ videoId, startSeconds }) {
+          Object.assign(this, { videoId, position: startSeconds, state: 1 });
+          window.__handoffPlayerCalls.push('load');
+        }
+        seekTo(position) { this.position = position; window.__handoffPlayerCalls.push('seek'); }
+        setPlaybackRate(rate) { this.rate = rate; }
+        playVideo() { this.state = 1; window.__handoffPlayerCalls.push('play'); }
+        pauseVideo() { this.state = 2; window.__handoffPlayerCalls.push('pause'); }
+      } };
+    };
+    if (!deferApi) window.__installHandoffApi();
+  }, { deferApi });
+  await page.route('https://www.youtube.com/**', route => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(command => command.type === 'playback-hello'));
+}
+
+async function prepareHandoff(page, handoffId) {
+  await page.evaluate(id => window.__relayInteractionHarness.broadcast({
+    type: 'song-handoff-prepare', handoffId: id, videoId: 'dQw4w9WgXcQ', serverTime: 40, state: 1, playbackRate: 1,
+  }), handoffId);
+  await page.waitForFunction(id => window.__relayInteractionHarness.commands.some(command =>
+    command.type === 'song-handoff-ready' && command.handoffId === id), handoffId);
+}
+
+async function commitHandoff(page, handoffId) {
+  await page.evaluate(id => window.__relayInteractionHarness.broadcast({
+    type: 'song-handoff-commit', handoffId: id, serverTime: 41, state: 1,
+  }), handoffId);
+}
+
+test('production DOM: replacing handoff preparation preserves the original audibility on cancellation', async ({ page }) => {
+  await handoffPhone(page); await prepareHandoff(page, 'h1'); await prepareHandoff(page, 'h2');
+  expect(await page.evaluate(() => window.__handoffPlayers[0].muted)).toBe(true);
+  await page.evaluate(() => window.__relayInteractionHarness.broadcast({ type: 'song-handoff-cancelled', handoffId: 'h2' }));
+  expect(await page.evaluate(() => window.__handoffPlayers[0].muted)).toBe(false);
+  expect(await page.evaluate(() => window.__handoffPlayerCalls.filter(call => call === 'unmute').length)).toBe(1);
+});
+
+test('production DOM: handoff commit cannot play after mute fails', async ({ page }) => {
+  await handoffPhone(page); await prepareHandoff(page, 'h1');
+  await page.evaluate(() => { window.__handoffPlayers[0].muted = false; window.__handoffPlayers[0].failMute = true; });
+  await commitHandoff(page, 'h1');
+  await page.waitForFunction(() => window.__relayInteractionHarness.commands.some(command =>
+    command.type === 'song-handoff-failed' && command.handoffId === 'h1' && command.reason === 'commit-failed'));
+  expect(await page.evaluate(() => window.__handoffPlayerCalls.includes('play'))).toBe(false);
+  expect(await page.evaluate(() => window.__handoffPlayers[0].state)).toBe(2);
+});
+
+test('production DOM: direct handoff completion respects the Take review audibility guard', async ({ page }) => {
+  await handoffPhone(page); await prepareHandoff(page, 'h1'); await commitHandoff(page, 'h1');
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('relay:playback-view', { detail: { role: 'holder' } })));
+  expect(await page.evaluate(() => window.__handoffPlayers[0].muted)).toBe(true);
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('relay-take-review-playback', { detail: { active: true } }));
+    window.__relayInteractionHarness.broadcast({ type: 'song-handoff-complete', handoffId: 'h1' });
+  });
+  expect(await page.evaluate(() => window.__handoffPlayers[0].muted)).toBe(true);
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('relay-take-review-playback', { detail: { active: false } })));
+  expect(await page.evaluate(() => window.__handoffPlayers[0].muted)).toBe(false);
+});
+
+test('production DOM: cancelled API loading cannot create a stale handoff player', async ({ page }) => {
+  await handoffPhone(page, { deferApi: true });
+  let releaseApi;
+  const released = new Promise(resolve => { releaseApi = resolve; });
+  await page.route('https://www.youtube.com/iframe_api', async route => {
+    await released;
+    await route.fulfill({ contentType: 'application/javascript', body: `
+      window.__installHandoffApi();
+      window.onYouTubeIframeAPIReady?.();
+      queueMicrotask(() => queueMicrotask(() => { window.__handoffApiSettled = true; }));
+    ` });
+  });
+  const requested = page.waitForRequest('https://www.youtube.com/iframe_api');
+  await page.evaluate(() => window.__relayInteractionHarness.broadcast({
+    type: 'song-handoff-prepare', handoffId: 'h1', videoId: 'dQw4w9WgXcQ', serverTime: 40, state: 1, playbackRate: 1,
+  }));
+  await requested;
+  await page.evaluate(() => window.__relayInteractionHarness.broadcast({ type: 'song-handoff-cancelled', handoffId: 'h1' }));
+  releaseApi();
+  await page.waitForFunction(() => window.__handoffApiSettled);
+  expect(await page.evaluate(() => window.__handoffPlayers.length)).toBe(0);
+});

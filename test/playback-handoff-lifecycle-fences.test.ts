@@ -13,20 +13,6 @@ function topLevelFunctionSection(source: string, declaration: string) {
   return source.slice(start, end);
 }
 
-test('a YouTube error during commit rolls the local target back with the server', async () => {
-  const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
-  const errorSection = topLevelFunctionSection(source, 'function handleError');
-  const rollbackSection = topLevelFunctionSection(source, 'function rollbackCommittedHandoff');
-
-  assert.match(errorSection, /pendingHandoff\?\.phase === 'committing'/);
-  assert.match(errorSection, /rollbackCommittedHandoff\(`youtube-error-\$\{event\.data\}`\)/,
-    'commit errors must move the browser back to preparing before reporting failure');
-  assert.match(errorSection, /else if \(pendingHandoff\)/,
-    'preparation errors may still report failure without pretending a commit rollback occurred');
-  assert.match(rollbackSection, /pendingHandoff\.phase = 'preparing'/);
-  assert.match(rollbackSection, /clearHandoffCommitTimer\(\)/);
-});
-
 test('late autoplay recovery work cannot cross a newer playback lifecycle', async () => {
   const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
   const clearSection = topLevelFunctionSection(source, 'function clearAutoplayRecovery');

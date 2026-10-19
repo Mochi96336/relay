@@ -69,7 +69,7 @@ test('readiness and diagnostics only start from Technical details', () => {
   assert.match(system, /function startReadinessRefresh\(\) \{\s*if \(!diagnosticsPanel\.open\) return;/);
 
   const toggleStart = system.indexOf("diagnosticsPanel.addEventListener('toggle'");
-  const toggleEnd = system.indexOf("document.querySelectorAll('[data-diagnostics-tab]'", toggleStart);
+  const toggleEnd = system.indexOf('\n  });', toggleStart);
   assert.ok(toggleStart >= 0 && toggleEnd > toggleStart);
   const toggle = system.slice(toggleStart, toggleEnd);
   assert.match(toggle, /startReadinessRefresh\(\)/);

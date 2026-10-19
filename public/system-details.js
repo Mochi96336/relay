@@ -505,15 +505,36 @@ if (
     }
   });
 
-  document.querySelectorAll('[data-diagnostics-tab]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const tab = button.dataset.diagnosticsTab;
-      document.querySelectorAll('[data-diagnostics-tab]').forEach((candidate) => {
-        candidate.setAttribute('aria-selected', candidate === button ? 'true' : 'false');
-      });
-      document.querySelectorAll('[data-diagnostics-panel]').forEach((panel) => {
-        panel.hidden = panel.dataset.diagnosticsPanel !== tab;
-      });
+  const tabs = [...diagnosticsPanel.querySelectorAll('[data-diagnostics-tab]')];
+  const panels = [...diagnosticsPanel.querySelectorAll('[data-diagnostics-panel]')];
+
+  function selectTab(button) {
+    for (const candidate of tabs) {
+      const selected = candidate === button;
+      candidate.setAttribute('aria-selected', String(selected));
+      candidate.tabIndex = selected ? 0 : -1;
+    }
+    for (const panel of panels) {
+      panel.hidden = panel.id !== button.getAttribute('aria-controls');
+    }
+  }
+
+  tabs.forEach((button, index) => {
+    button.addEventListener('click', () => selectTab(button));
+    button.addEventListener('keydown', (event) => {
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      let nextIndex;
+      switch (event.key) {
+        case 'ArrowLeft': nextIndex = (index + tabs.length - 1) % tabs.length; break;
+        case 'ArrowRight': nextIndex = (index + 1) % tabs.length; break;
+        case 'Home': nextIndex = 0; break;
+        case 'End': nextIndex = tabs.length - 1; break;
+        default: return;
+      }
+      event.preventDefault();
+      const next = tabs[nextIndex];
+      selectTab(next);
+      next.focus();
     });
   });
 

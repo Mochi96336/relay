@@ -168,3 +168,66 @@ test('registered Live feature messages rerender through the base provider', asyn
   await page.evaluate(() => window.relayI18n.setLocale('en', { persist: false }));
   await expect(page.locator('#stop-recording')).toHaveText('Stop recording');
 });
+
+async function expectDiagnosticsTab(page, name) {
+  const tab = page.locator(`#diagnostics-tab-${name}`);
+  const panel = page.getByRole('tabpanel');
+  await expect(tab).toBeFocused();
+  await expect(tab).toHaveAttribute('aria-selected', 'true');
+  await expect(tab).toHaveAttribute('tabindex', '0');
+  await expect(page.getByRole('tab', { selected: true })).toHaveCount(1);
+  await expect(page.locator('[role="tab"][tabindex="0"]')).toHaveCount(1);
+  await expect(panel).toHaveCount(1);
+  await expect(panel).toHaveAttribute('id', await tab.getAttribute('aria-controls'));
+  await expect(panel).toHaveAttribute('aria-labelledby', await tab.getAttribute('id'));
+  await expect(panel).toHaveAccessibleName(await tab.innerText());
+}
+
+test('Diagnostics tabs: keyboard navigation wraps, supports Home/End and keeps one Tab stop', async ({ page }) => {
+  await openState(page, 'system');
+  await page.locator('#diagnostics-panel > summary').click();
+  await page.locator('#copy-diagnostics').focus();
+  await page.keyboard.press('Tab');
+  await expectDiagnosticsTab(page, 'overview');
+
+  for (const name of ['mic', 'audio', 'timing', 'robot', 'raw', 'overview']) {
+    await page.keyboard.press('ArrowRight');
+    await expectDiagnosticsTab(page, name);
+  }
+  for (const [key, name] of [
+    ['ArrowLeft', 'raw'], ['ArrowLeft', 'robot'], ['Home', 'overview'], ['End', 'raw'],
+  ]) {
+    await page.keyboard.press(key);
+    await expectDiagnosticsTab(page, name);
+  }
+  await page.keyboard.press('Control+ArrowLeft');
+  await expectDiagnosticsTab(page, 'raw');
+  await page.keyboard.press('Shift+Tab');
+  await expect(page.locator('#copy-diagnostics')).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expectDiagnosticsTab(page, 'raw');
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('tabpanel')).toBeFocused();
+  await expect(page.getByRole('tabpanel')).toHaveCSS('outline-style', 'solid');
+  await page.keyboard.press('Shift+Tab');
+  await expectDiagnosticsTab(page, 'raw');
+});
+
+test('Diagnostics tabs: click, locale changes and reopening retain the active panel', async ({ page }) => {
+  await openState(page, 'system');
+  const summary = page.locator('#diagnostics-panel > summary');
+  await summary.click();
+  await page.locator('#diagnostics-tab-timing').click();
+  await expectDiagnosticsTab(page, 'timing');
+  await page.evaluate(() => window.relayI18n.setLocale('en', { persist: false }));
+  await expectDiagnosticsTab(page, 'timing');
+  await expect(page.getByRole('tabpanel')).toHaveAccessibleName('Timing');
+  await summary.click();
+  await expect(page.getByRole('tabpanel')).toHaveCount(0);
+  await summary.click();
+  await page.locator('#copy-diagnostics').focus();
+  await page.keyboard.press('Tab');
+  await expectDiagnosticsTab(page, 'timing');
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('tabpanel')).toBeFocused();
+});

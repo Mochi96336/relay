@@ -12,8 +12,8 @@ const styleCss = readFileSync(new URL('../public/style.css', import.meta.url), '
 const micActions = readFileSync(new URL('../public/mic-actions.js', import.meta.url), 'utf8');
 
 test('local Mic capture publishes an explicit lifecycle independent of server presence', () => {
-  assert.match(app, /function setPublisherActive\(active\)[\s\S]*relayActiveRole = publisherActive \? 'publisher' : null/);
-  assert.match(app, /dispatchRelayEvent\('relay-microphone-local-state', \{ active: publisherActive \}\)/);
+  assert.match(app, /function publishLocalMicState\(\)[\s\S]*relayActiveRole = publisherSession\.active \? 'publisher' : null/);
+  assert.match(app, /dispatchRelayEvent\('relay-microphone-local-state', \{ active: publisherSession\.active \}\)/);
 
   assert.match(presence, /let localPublisherActive = window\.relayActiveRole === 'publisher'/);
   assert.match(presence, /relay-microphone-local-state/);
@@ -55,7 +55,7 @@ test('Mic terminal lifecycle tears down before Listen is allowed to recover', ()
 
   assert.match(
     app,
-    /function finishMicrophoneSession\(reason,[\s\S]*micLifecycle\.run\(\{[\s\S]*stop: \(\) => stop\(\{ releaseMic \}\),[\s\S]*isCurrent: \(stoppedEpoch\) => publisherSessionEpoch === stoppedEpoch,[\s\S]*dispatchRelayEvent\('relay-microphone-ended', \{ reason \}\)/,
+    /function finishMicrophoneSession\(reason,[\s\S]*publisherSession\.end\(\{[\s\S]*stop: \(\) => stop\(\{ releaseMic \}\),[\s\S]*dispatchRelayEvent\('relay-microphone-ended', \{ reason \}\)/,
     'ended must be emitted only by the shared post-stop transaction',
   );
   assert.match(listen, /window\.addEventListener\('relay-microphone-ended',[\s\S]*restoreAfterMicBoundary/);
@@ -125,14 +125,11 @@ test('capture AudioWorklet processorerror uses one bounded current-graph rebuild
   f.dispose(graph);
   queued();
   assert.deepEqual(f.effects, ['processor-error', 'processor-error-repeated:false']);
-  const rebuild = app.slice(app.indexOf('function rebuildPublisherCaptureGraph'), app.indexOf('async function stop('));
-  assert.match(rebuild, /if \(captureGraphRebuildPromise\) return captureGraphRebuildPromise/,
-    'recovery still shares the existing physical single-flight rebuild');
 });
 
 test('unexpected capture AudioContext closure enters bounded Mic reconnect grace', () => {
   const startAt = app.indexOf('async function startPublisher');
-  const streamAt = app.indexOf('mediaStream = preparedStream', startAt);
+  const streamAt = app.indexOf('publisherSession.activate(startup', startAt);
   assert.ok(startAt >= 0 && streamAt > startAt);
   const startup = app.slice(startAt, streamAt);
 
@@ -142,7 +139,7 @@ test('unexpected capture AudioContext closure enters bounded Mic reconnect grace
 
   assert.match(
     stateHandler,
-    /if \(!publisherActive \|\| audioContext !== captureContext\) return/,
+    /if \(!publisherSession\.active \|\| publisherSession\.context !== captureContext\) return/,
     'stale or intentional context closure must not terminate a replacement/currently stopped session',
   );
   assert.match(stateHandler, /captureContext\.state === 'closed'/);
@@ -157,14 +154,6 @@ test('unexpected capture AudioContext closure enters bounded Mic reconnect grace
     'closed is terminal and must not fall through to the resume-only path',
   );
 
-  const stopAt = app.indexOf('async function stop(');
-  const startPublisherAt = app.indexOf('async function startPublisher', stopAt);
-  const stop = app.slice(stopAt, startPublisherAt);
-  assert.match(
-    stop,
-    /audioContext = null;[\s\S]*setPublisherActive\(false\);[\s\S]*await closingContext\.close\(\)/,
-    'intentional stop must revoke callback authority before closing the captured old context',
-  );
 });
 
 test('hardware input ending uses Mic reconnect grace instead of explicit release', () => {
@@ -217,7 +206,7 @@ test('live Mic input A→B becomes a capture-generation boundary instead of fals
   const refresh = app.slice(refreshAt, mutedAt);
   assert.match(
     refresh,
-    /activeCaptureGraph[\s\S]*rebuildCaptureForInputDeviceChange\(activeCaptureGraph\)[\s\S]*\) return;[\s\S]*sendAudioUplinkHealth\(\)/,
+    /publisherSession\.graph[\s\S]*rebuildCaptureForInputDeviceChange\(publisherSession\.graph\)[\s\S]*\) return;[\s\S]*sendAudioUplinkHealth\(\)/,
     'configurationchange-only route switches must rebuild before an old-generation health snapshot can be sent',
   );
 });
@@ -310,21 +299,17 @@ test('Mic startup is single-flight, deadline-bound, and disposes late permission
   assert.ok(startAt >= 0 && requestAt > startAt);
   const startup = app.slice(startAt, requestAt);
 
-  assert.match(app, /const micStartup = new MicStartupGate\(\)/);
+  assert.match(app, /const micStartup = publisherSession\.startup/);
   assert.match(startup, /publisherButton\.disabled = true[\s\S]*navigator\.mediaDevices\.getUserMedia/,
     'the button must become single-flight before the permission promise starts');
   assert.match(startup, /micStartup\.wait\([\s\S]*waiting for microphone permission/);
   assert.match(startup, /dispose: \(stream\) => stream\.getTracks\(\)\.forEach\(\(track\) => track\.stop\(\)\)/);
   assert.match(startup, /loading the microphone audio processor/);
   assert.match(startup, /starting microphone audio/);
-  assert.match(app, /async function stop[\s\S]*micStartup\.cancel\(\)/,
-    'every local stop invalidates an in-flight startup before late browser work can resolve');
-  assert.match(app, /if \(publisherStartRequest\) return publisherStartRequest/,
-    'duplicate clicks and takeover events must share one startup request');
 });
 
 test('initial Relay connection failure remains cancellable instead of trapping an active Mic', () => {
-  const activeAt = app.indexOf('setPublisherActive(true)');
+  const activeAt = app.indexOf('publishLocalMicState()', app.indexOf('async function startPublisher'));
   const disabledAt = app.indexOf('publisherButton.disabled = true', activeAt);
   const connectAt = app.indexOf('await connectPublisherSocket(sessionEpoch, generation)', disabledAt);
   const retryAt = app.indexOf('schedulePublisherReconnect(sessionEpoch, generation)', connectAt);

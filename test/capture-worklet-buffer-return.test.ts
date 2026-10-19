@@ -107,11 +107,14 @@ test('the pool stays bounded however many buffers come back', async () => {
 
 for (const mode of ['pcm', 'opus', 'stale']) {
   test(`production page returns ${mode} buffer only after its consumer is finished`, () => {
-    const f = captureFixture();
     const buffer = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer;
     const packets: ArrayBuffer[] = [];
     const encodes: number[][] = [];
     const drops: unknown[][] = [];
+    const f = captureFixture(null, mode === 'opus' ? {
+      bitrate: 128000, reset() {}, setBitrate() {}, close() {},
+      encode: (pcm: ArrayBuffer) => { encodes.push([...new Uint8Array(pcm)]); return true; },
+    } : null);
     f.usePcmHandler({
       audioTransport: {
         maxPacketBytes: () => 28,
@@ -121,9 +124,6 @@ for (const mode of ['pcm', 'opus', 'stale']) {
           return { sent: true };
         },
       },
-      micOpus: mode === 'opus' ? {
-        encode: (pcm: ArrayBuffer) => { encodes.push([...new Uint8Array(pcm)]); return true; },
-      } : null,
       recordUplinkDrop: (...args: unknown[]) => drops.push(args),
     });
     const graph = f.install();

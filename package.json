@@ -14,7 +14,7 @@
     "robot:source": "bash scripts/robot-source.sh",
     "robot:recovery-dry-run": "tsx src/robot-semantic-recovery-dry-run-entry.ts",
     "robot:recovery-live": "bash scripts/robot-semantic-recovery-live.sh",
-    "check": "tsc --noEmit",
+    "check": "tsc --noEmit && tsc --project tsconfig.browser-core.json",
     "test": "node --import tsx --test --test-concurrency=1 test/*.test.ts",
     "test:webtransport-loopback": "node --import tsx scripts/webtransport-loopback.mjs"
   },

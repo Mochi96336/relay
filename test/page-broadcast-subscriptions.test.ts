@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { RelayClient, sleep, startRelay } from './helpers/harness.js';
+import { functionCode, parseTypeScriptSource } from './support/source-contract.js';
 
 const RATE = 48_000;
 const PLAYING_TELEMETRY = {
@@ -97,7 +98,8 @@ type PageSubscription = {
   page: string;
   constant: string;
   handlerStart: string;
-  handlerEnd: string;
+  /** null reads one complete named function, independent of its neighbours. */
+  handlerEnd: string | null;
   /** Other readers on the same socket, such as a transport the page binds to it. */
   otherHandlers?: Handler[];
 };
@@ -106,12 +108,18 @@ async function pageSource(file: string) {
   return (await readFile(new URL(`../public/${file}`, import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
 }
 
-function handledTypes(source: string, start: string, end: string, label: string) {
-  const from = source.indexOf(start);
-  const to = source.indexOf(end, from);
-  assert.ok(from >= 0 && to > from, `${label} keeps its socket message handler`);
+function handledTypes(source: string, start: string, end: string | null, label: string) {
+  let section: string;
+  if (end === null) {
+    section = functionCode(parseTypeScriptSource(new URL(`../public/${label}`, import.meta.url), source), start);
+  } else {
+    const from = source.indexOf(start);
+    const to = source.indexOf(end, from);
+    assert.ok(from >= 0 && to > from, `${label} keeps its socket message handler`);
+    section = source.slice(from, to);
+  }
   const types = new Set(
-    [...source.slice(from, to).matchAll(/message\??\.type [!=]== '([^']+)'/g)].map((match) => match[1]),
+    [...section.matchAll(/message\??\.type [!=]== '([^']+)'/g)].map((match) => match[1]),
   );
   assert.ok(types.size > 0, `${label}: the handler's message types were not found`);
   return types;
@@ -145,8 +153,8 @@ const PAGES: PageSubscription[] = [
   {
     page: 'app.js',
     constant: 'PUBLISHER_BROADCAST_TYPES',
-    handlerStart: 'function handleServerMessage(',
-    handlerEnd: 'function canKeepPublishing() {',
+    handlerStart: 'handleServerMessage',
+    handlerEnd: null,
     otherHandlers: [{
       file: 'audio-transport.js',
       start: 'observePublisherSocketMessage(socket, epoch, event) {',

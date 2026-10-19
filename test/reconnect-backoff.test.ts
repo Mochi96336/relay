@@ -49,8 +49,8 @@ describe('publisher reconnect backoff', () => {
     );
     assert.match(schedule, /publisherReconnectBackoff\.nextDelayMs\(\)/);
     assert.doesNotMatch(app, /SOCKET_RECONNECT_MS/, 'no fixed one-second wait remains');
-    assert.match(app, /adoptSocket\(ws\);\s*publisherReconnectBackoff\.noteConnected\(/);
-    assert.match(app, /if \(socket !== ws\) return;\s*publisherReconnectBackoff\.noteClosed\(/);
+    assert.match(app, /adoptSocket\(ws, sessionEpoch, expectedGeneration\)[\s\S]*publisherReconnectBackoff\.noteConnected\(/);
+    assert.match(app, /if \(publisherSession\.socket !== ws\) return;\s*publisherReconnectBackoff\.noteClosed\(/);
   });
 
   it('drives the Listen monitor socket reconnect too', () => {

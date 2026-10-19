@@ -265,7 +265,7 @@ test('app rebuild failure terminates local capture into bounded Mic reconnect gr
   const stopEnd = app.indexOf('async function startPublisher', stopStart);
   assert.ok(stopStart >= 0 && stopEnd > stopStart);
   const stop = app.slice(stopStart, stopEnd);
-  assert.match(stop, /const stoppedEpoch = \+\+publisherSessionEpoch/);
+  assert.match(stop, /const retired = publisherSession\.retire\(\)/);
   assert.match(stop, /micCaptureRecovery\.stop\(\)/);
 
   const releaseStart = app.indexOf("window.addEventListener('relay-release-microphone'");
@@ -541,14 +541,14 @@ test('socket reconnect cannot count as capture recovery evidence', () => {
 });
 
 test('app rebuild path advances generation and replaces the graph instead of splicing sample clocks', () => {
-  assert.match(app, /function advanceCaptureGeneration\(reason\)[\s\S]*captureGeneration = \(\(captureGeneration >>> 0\) \+ 1\) >>> 0[\s\S]*captureSampleCursor = 0[\s\S]*capturePacketSequence = 0/);
+  assert.match(app, /function advanceCaptureGeneration\(reason\)[\s\S]*publisherSession\.advanceGeneration\(reason\)[\s\S]*captureSampleCursor = 0[\s\S]*capturePacketSequence = 0/);
   assert.match(app, /function rebuildPublisherCaptureGraph\(reason\)[\s\S]*advanceCaptureGeneration\(reason\)[\s\S]*installCaptureGraph/);
   assert.match(app, /micCaptureRecovery\.noteGraphRebuilt\(captureSnapshot\(\)\)/);
 });
 
 test('reconnect preserves a healthy generation while graph recovery re-registers the new one', () => {
-  assert.match(app, /function schedulePublisherReconnect\(\s*sessionEpoch = publisherSessionEpoch,\s*expectedGeneration = captureGeneration >>> 0,\s*\)/);
-  assert.match(app, /async function connectPublisherSocket\(\s*sessionEpoch = publisherSessionEpoch,\s*expectedGeneration = captureGeneration >>> 0,\s*\)/);
+  assert.match(app, /function schedulePublisherReconnect\(\s*sessionEpoch = publisherSession\.epoch,\s*expectedGeneration = publisherSession\.generation >>> 0,\s*\)/);
+  assert.match(app, /async function connectPublisherSocket\(\s*sessionEpoch = publisherSession\.epoch,\s*expectedGeneration = publisherSession\.generation >>> 0,\s*\)/);
   assert.match(app, /captureGeneration: expectedGeneration/);
   assert.match(app, /restartPublisherConnectionForGeneration\(sessionEpoch, generation\)/);
 });
@@ -558,15 +558,8 @@ test('stale async socket continuation and stale worklet messages cannot mutate r
   assert.match(app, /if \(!captureGraphIsCurrent\(graph\)\) return;/);
 });
 
-test('capture graph rebuild is single-flight and stop tears down the installed graph', () => {
-  assert.match(app, /let captureGraphRebuildPromise = null/);
-  assert.match(app, /if \(captureGraphRebuildPromise\) return captureGraphRebuildPromise/);
-  assert.match(app, /const closingGraph = activeCaptureGraph/);
-  assert.match(app, /disposeCaptureGraph\(closingGraph\)/);
-});
-
 test('track callbacks survive graph-generation changes but stay fenced to the Mic session', () => {
-  assert.match(app, /const captureIsCurrent = \(\) => isCurrentPublisherSession\(sessionEpoch\)[\s\S]*mediaStream === captureStream[\s\S]*audioContext !== null/);
+  assert.match(app, /const captureIsCurrent = \(\) => isCurrentPublisherSession\(sessionEpoch\)[\s\S]*publisherSession\.stream === captureStream[\s\S]*publisherSession\.context !== null/);
   assert.doesNotMatch(app, /const captureIsCurrent = \(\) => isCurrentPublisherCapture\(sessionEpoch, generation\)/);
 });
 

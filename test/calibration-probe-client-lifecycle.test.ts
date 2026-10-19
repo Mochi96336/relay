@@ -10,11 +10,12 @@ const source = parseTypeScriptSource(new URL('../public/app.js', import.meta.url
 function publisher() {
   const calls: unknown[][] = [];
   const env = {
-    publisherSessionEpoch: 1, captureGeneration: 2,
+    publisherSession: { epoch: 1, generation: 2, encoder: null, stream: null,
+      advanceGeneration() { this.generation++; }, active: false },
     calibrationProbePlayback: {
       play: async (...args: unknown[]) => { calls.push(['play', ...args]); },
       cancelPending: () => calls.push(['cancelPending']),
-      retire: () => calls.push(['retire', env.captureGeneration]),
+      retire: () => calls.push(['retire', env.publisherSession.generation]),
     },
   };
   const scope = vm.createContext(env);

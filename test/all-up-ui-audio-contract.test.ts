@@ -8,8 +8,7 @@ const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf
 
 test('all-up phone UI keeps #13 singer ownership while using the v2 media plane', () => {
   assert.match(app, /role:\s*'publisher'/);
-  assert.match(app, /let publisherActive = false/);
-  assert.match(app, /setPublisherActive\(true\)/);
+  assert.match(app, /new PublisherSession/);
   assert.match(app, /new PreferredAudioTransport/);
   assert.match(app, /audioPacketVersion: AUDIO_PACKET_VERSION/);
   assert.match(app, /splitPcmForPacketLimit/);

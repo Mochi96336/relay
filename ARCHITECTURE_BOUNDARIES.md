@@ -219,6 +219,20 @@ Two of those steps are easy to omit and expensive to miss:
   audio was captured. Any generation change that outlives a running analysis
   promotes evidence measured in a frame that no longer exists.
 
+### Browser Mic resources belong to one session
+
+PublisherSession owns the active track, context, encoder, capture graph and
+control socket. Stop revokes their authority synchronously, then closes the
+captured resources once. Prepared startup resources remain with MicStartupGate
+until the session accepts them; cancelling never waits for a browser permission
+prompt that cannot be aborted.
+
+Graph and context recovery share one capture-scoped operation. A replacement
+session may start while retired cleanup finishes. Terminal completion uses the
+stable session identity as well as the revocation epoch, so an old close cannot
+publish Mic ended for the replacement or unmute its Listen path. Lifecycle events
+report that state; they do not allocate session identities.
+
 ### Evidence length is not evidence
 
 Capture collectors keep missing PCM as zeros so sample positions stay truthful.

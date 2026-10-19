@@ -165,7 +165,7 @@ test('Listen uses playback and play-and-record AudioSession claims at user inten
     /function restoreAfterMicBoundary[\s\S]*setTimeout\(/,
     'Mic AudioSession release must not depend on a guessed later task',
   );
-  assert.match(appSource, /function finishMicrophoneSession[\s\S]*isCurrent: \(stoppedEpoch\) => publisherSessionEpoch === stoppedEpoch[\s\S]*dispatchRelayEvent\('relay-microphone-ended'/);
+  assert.match(appSource, /function finishMicrophoneSession[\s\S]*publisherSession\.end\([\s\S]*dispatchRelayEvent\('relay-microphone-ended'/);
   assert.match(listenSource, /relay-microphone-ended'[\s\S]*restoreAfterMicBoundary\(\)/);
   assert.match(listenSource, /relay-microphone-start-failed'[\s\S]*restoreAfterMicBoundary\('mic-failed-resume'\)/);
 });
@@ -265,7 +265,7 @@ test('the capture context is restarted from every state Safari reports', () => {
   // `interrupted` is the state a backgrounded iPhone reports, and checking only
   // for `suspended` skipped the commonest case entirely.
   assert.match(appSource, /import \{ shouldRequestAudioResume \}/);
-  assert.match(appSource, /function resumePublisherAudioContext[\s\S]*shouldRequestAudioResume\(audioContext\.state\)/);
+  assert.match(appSource, /function resumePublisherAudioContext[\s\S]*shouldRequestAudioResume\(publisherSession\.context\.state\)/);
   // And nothing waits on it: that promise can be accepted and never settle.
-  assert.doesNotMatch(appSource, /await audioContext\.resume\(\)/);
+  assert.doesNotMatch(appSource, /await publisherSession\.context\.resume\(\)/);
 });

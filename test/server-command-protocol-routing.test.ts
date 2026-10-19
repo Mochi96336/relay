@@ -103,7 +103,7 @@ test('the server composition boundary owns transport and room command effects', 
   assert.match(server, /broadcastJson\(mixSettingsPayload\(\)\)/);
   assert.match(server, /requireMicOwnerCommand\(socket, 'start-timing-calibration'\)/);
   assert.match(server, /productStatusPayload\(nowMs\)\.actions/);
-  assert.match(server, /restartManualBootCalibration\(nowMs\)/);
+  assert.match(server, /calibrationCoordinator\.startManualBoot\(nowMs\)/);
   assert.match(server, /contentCalibration\.startManual\(nowMs\)/);
   assert.match(server, /parseAudioUplinkHealth\(payload\)/);
   assert.match(server, /const nowMs = performance\.now\(\)/);

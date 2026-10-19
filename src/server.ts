@@ -29,6 +29,7 @@ import {
   MAX_CAPTURE_GAP_MS,
   type CalibrationContext,
 } from './calibration-session.js';
+import { CalibrationCoordinator } from './calibration-coordinator.js';
 import { ContentCalibrationCoordinator } from './content-calibration-coordinator.js';
 import { analyzeTimingCalibrationInWorker } from './timing-calibration-worker-client.js';
 import { applyMicOwnerTransitionEffects } from './mic-owner-transition-application.js';
@@ -1109,6 +1110,24 @@ const bootProbe = new BootProbeCoordinator({
   },
   changed: () => broadcastJson(timingCalibrationStatusPayload()),
   onBackingMeasured: keepRobotBackingPath,
+});
+
+const calibrationCoordinator = new CalibrationCoordinator(COLLECTION_SILENCE_GRACE_MS, {
+  content: contentCalibration,
+  probe: bootProbe,
+  timing: timingRuntime,
+  route: {
+    robotActive: robotRouteActive,
+    bootSettled: bootProbeSettled,
+    sweepContentTransition: sweepRobotContentTransition,
+  },
+  alignment: {
+    apply: syncAppliedCalibration,
+    reapplyBoot: maybeReapplyBootCalibration,
+  },
+  silentSides,
+  timingChanged: () => broadcastJson(timingCalibrationStatusPayload()),
+  sourceChanged: () => broadcastJson(sourceStatusPayload()),
 });
 
 function clearContentValidationBaseline() {
@@ -2657,44 +2676,6 @@ function maybeReapplyBootCalibration(nowMs: number) {
   bootProbe.reapply(advanceMs, currentDeltaMs(nowMs));
 }
 
-/**
- * Retires a content calibration that belongs to the pre-Robot route.
- *
- * This exists because a route can *become* Robot underneath a content run that
- * was measured for a legacy backing path. It must not touch a content run the
- * Robot route started for itself: once the boot probe has settled, content is
- * the strategy this route is supposed to be running, and resetting it here also
- * discards the confirmed boot result, dropping the live mixer to its network
- * estimate mid-upgrade.
- */
-function dropLegacyCalibrationForRobot() {
-  if (!robotRouteActive() || timingRuntime.calibrationKind !== 'content') return;
-  if (bootProbeSettled()) return;
-
-  clearContentValidationBaseline();
-  calibration.reset();
-  timingRuntime.clearCalibrationKind();
-  timingRuntime.resetAutoCalibrationSchedule();
-  syncAppliedCalibration();
-}
-
-/**
- * A manual recalibration on the Robot route: a fresh Boot Probe run. The
- * command handler has already checked authority and that calibration is
- * available.
- */
-function restartManualBootCalibration(nowMs: number) {
-  clearContentValidationBaseline();
-  calibration.beginExternalRecalibration();
-  // Keep the previously confirmed authority interpreted under its own
-  // strategy before the replacement candidate switches orchestration kind.
-  // The candidate must not revoke a known-good content alignment merely by
-  // announcing that the next measurement will use boot probes.
-  syncAppliedCalibration();
-  bootProbe.restart(nowMs);
-  broadcastJson(sourceStatusPayload());
-}
-
 const youtubeTimelineTimer = setInterval(() => {
   const nowMs = performance.now();
   choir?.tick(nowMs);
@@ -2714,35 +2695,12 @@ const youtubeTimelineTimer = setInterval(() => {
     broadcastJson(roomSongCommandStatusPayload(nowMs));
   }
 
-  if (calibration.collecting) {
-    const silent = silentSides(nowMs - COLLECTION_SILENCE_GRACE_MS);
-    if (silent.length > 0) {
-      calibration.fail(
-        `Calibration stopped: no audio from the ${silent.join(' or ')}. `
-        + 'Restart the backing source: on a development desktop the source page was probably reloaded, which drops the tab capture.',
-      );
-    } else if (!calibration.tick(nowMs)) {
-      broadcastJson(timingCalibrationStatusPayload());
-    }
-  }
+  calibrationCoordinator.tick(nowMs);
 
   if (session.active && nowMs - lastMixHealthAt >= MIX_HEALTH_INTERVAL_MS) {
     lastMixHealthAt = nowMs;
     broadcastJson(mixHealthPayload());
   }
-
-  bootProbe.expireRequest(nowMs);
-
-  dropLegacyCalibrationForRobot();
-  if (syncAppliedCalibration()) {
-    broadcastJson(sourceStatusPayload());
-    broadcastJson(timingCalibrationStatusPayload());
-  }
-  bootProbe.finishAnalysis(nowMs);
-  bootProbe.startIfReady(nowMs);
-  maybeReapplyBootCalibration(nowMs);
-  sweepRobotContentTransition(nowMs);
-  contentCalibration.tick(nowMs);
 
   sweepPreparedSongHandoff(nowMs);
 
@@ -3296,7 +3254,7 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     }
 
     if (calibrationAction.startCalibrationMode === 'boot-probe') {
-      restartManualBootCalibration(nowMs);
+      calibrationCoordinator.startManualBoot(nowMs);
       return;
     }
 
@@ -3687,7 +3645,7 @@ function backingActivated(
     takeController.noteQualityEvent('backing-transport-connected');
   }
 
-  dropLegacyCalibrationForRobot();
+  calibrationCoordinator.retireLegacyForRobot(performance.now());
   if (captureReplaced) backingCaptureRestarted();
   sendJson(socket, { type: 'registered', role: 'backing', robot: backingRuntime.isRobot });
   startLiveSource();
@@ -3926,7 +3884,7 @@ function robotSourceActivated(previous: RelaySocket | null, replaced: boolean) {
   robotPlayerOffset.reset();
   robotContentTimeline.reset();
   clearRobotContentTransition();
-  dropLegacyCalibrationForRobot();
+  calibrationCoordinator.retireLegacyForRobot(performance.now());
   syncAppliedCalibration();
   broadcastJson(sourceStatusPayload());
   broadcastJson(timingCalibrationStatusPayload());

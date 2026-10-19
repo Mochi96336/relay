@@ -2,23 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { SongSession } from '../src/song-session.js';
+import { telemetry } from './support/song-handoff-telemetry.js';
 
-const VIDEO = 'dQw4w9WgXcQ';
 const A = { participantId: 'participant-a', transportId: 'playback-tab-a', generation: 1 };
 const B = { participantId: 'participant-b', transportId: 'playback-tab-b', generation: 1 };
 const B_RELOADED = { ...B, generation: 2 };
-
-function telemetry(currentTime: number, overrides: Record<string, unknown> = {}) {
-  return {
-    videoId: VIDEO,
-    state: 1,
-    currentTime,
-    duration: 200,
-    playbackRate: 1,
-    bufferedFraction: 0.8,
-    ...overrides,
-  };
-}
 
 test('reloading the prepared target cannot mint a fresh whole-handoff deadline', () => {
   const songs = new SongSession();

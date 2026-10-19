@@ -2,20 +2,9 @@ import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 
 import { YouTubeTimelineTracker } from '../src/youtube-timeline.js';
+import { telemetry } from './support/timeline-telemetry.js';
 
 const VIDEO = 'dQw4w9WgXcQ';
-
-function telemetry(overrides: Record<string, unknown> = {}) {
-  return {
-    videoId: VIDEO,
-    state: 1,
-    currentTime: 10,
-    duration: 200,
-    playbackRate: 1,
-    bufferedFraction: 0.5,
-    ...overrides,
-  };
-}
 
 describe('YouTubeTimelineTracker', () => {
   test('ignores telemetry without a valid video id', () => {

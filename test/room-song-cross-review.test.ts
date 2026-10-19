@@ -10,48 +10,13 @@ import {
 import { shouldSetPlaybackRate } from '../public/room-song-seek-policy.js';
 import { parseRoomSongCommand } from '../src/room-song-command.js';
 import { RoomSongCommandSession } from '../src/room-song-command-session.js';
-
-const A = { participantId: 'participant-a', transportId: 'playback-tab-a', generation: 1 };
-const VIDEO = 'dQw4w9WgXcQ';
+import { A, VIDEO, room, telemetry } from './support/room-song-fixtures.js';
 
 function command(commandId: string, action: string, extra: Record<string, unknown> = {}) {
   const parsed = parseRoomSongCommand({ commandId, expectedRevision: 0, action, ...extra });
   assert.equal(parsed.ok, true);
   if (!parsed.ok) throw new Error('invalid command fixture');
   return parsed.request;
-}
-
-function room(overrides: Record<string, unknown> = {}) {
-  return {
-    type: 'youtube-timeline-status',
-    videoId: VIDEO,
-    state: 2,
-    serverTime: 10,
-    youtubeTime: 10,
-    ageMs: 0,
-    playbackRate: 1,
-    playbackLeaderParticipantId: A.participantId,
-    playbackTransportId: A.transportId,
-    playbackGeneration: A.generation,
-    connected: true,
-    leaderConnected: true,
-    leaderFresh: true,
-    handoffState: 'idle',
-    ...overrides,
-  };
-}
-
-function telemetry(overrides: Record<string, unknown> = {}) {
-  return {
-    videoId: VIDEO,
-    state: 1,
-    currentTime: 10,
-    duration: 200,
-    playbackRate: 1,
-    bufferedFraction: 0.8,
-    timelineDeltaSeconds: 0,
-    ...overrides,
-  };
 }
 
 function pendingPlay(commandId: string) {
@@ -156,7 +121,6 @@ test('rate actuation and convergence share one equality tolerance', () => {
     false,
   );
 });
-
 
 function pendingPlayThenRate(prefix: string) {
   const session = new RoomSongCommandSession();

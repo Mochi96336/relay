@@ -2,24 +2,13 @@ import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 
 import { SongSession } from '../src/song-session.js';
+import { telemetry } from './support/timeline-telemetry.js';
 
 const VIDEO = 'dQw4w9WgXcQ';
 const A = { participantId: 'participant-a', transportId: 'playback-tab-a', generation: 1 };
 const A_RELOAD = { participantId: 'participant-a', transportId: 'playback-tab-a', generation: 2 };
 const A_OTHER_TAB = { participantId: 'participant-a', transportId: 'playback-tab-b', generation: 1 };
 const B = { participantId: 'participant-b', transportId: 'playback-tab-c', generation: 1 };
-
-function telemetry(overrides: Record<string, unknown> = {}) {
-  return {
-    videoId: VIDEO,
-    state: 1,
-    currentTime: 10,
-    duration: 200,
-    playbackRate: 1,
-    bufferedFraction: 0.5,
-    ...overrides,
-  };
-}
 
 describe('SongSession', () => {
   test('first valid transport becomes the invisible playback leader while the mic is free', () => {

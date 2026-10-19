@@ -9,6 +9,7 @@ import {
   type MixFrameEvidence,
 } from '../src/audio-session.js';
 import type { PcmFrame } from '../src/pcm-frame.js';
+import { random } from './support/seeded-random.js';
 
 /**
  * A bit-exact record of what AudioSession does with fixed inputs.
@@ -37,14 +38,6 @@ function makeSession(overrides: Partial<AudioSessionOptions> = {}) {
     backingRetentionMs: 6_000,
     ...overrides,
   });
-}
-
-function random(seed: number) {
-  let state = seed >>> 0;
-  return () => {
-    state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
-    return state / 0x1_0000_0000;
-  };
 }
 
 type Signal = (sourceIndex: number, sourceRate: number) => number;

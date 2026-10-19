@@ -1,18 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { FakeSocket } from './support/fake-socket.js';
 
 const transportModuleUrl = new URL('../public/audio-transport.js', import.meta.url);
 const packetizerModuleUrl = new URL('../public/audio-packetizer.js', import.meta.url);
-
-class FakeSocket {
-  readyState = 1;
-  bufferedAmount = 0;
-  sent: unknown[] = [];
-
-  send(payload: unknown) {
-    this.sent.push(payload);
-  }
-}
 
 class DeferredDatagramWriter {
   // Deliberately reports no writable-stream capacity. Relay must use its own

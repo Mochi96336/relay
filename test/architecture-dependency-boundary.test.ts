@@ -5,7 +5,7 @@ import test from 'node:test';
 import {
   readSourceTree,
   staticModuleSpecifiers,
-} from './helpers/source-contract.js';
+} from './helpers/repository-sources.js';
 
 const existingServerToPublicDebt: string[] = [];
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { RelayClient, sleep, startRelay, waitForNewMessage } from './helpers/harness.js';
+import { RelayClient, sleep, startRelay } from './helpers/harness.js';
 
 const RATE = 48_000;
 const VIDEO = 'dQw4w9WgXcQ';

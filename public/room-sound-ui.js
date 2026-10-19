@@ -19,7 +19,6 @@ const actionNote = document.querySelector('#listen-note');
 
 let latestState = window.relayListenState ?? null;
 
-
 function localized(key) {
   return key ? t(key) : '';
 }

@@ -11,7 +11,6 @@ import {
   resetPcmTimeline,
   retainsPcmAfter,
   trimPcmTimeline,
-  type PcmChunk,
   type PcmTimeline,
 } from './pcm-timeline.js';
 import { MicClockTrim } from './mic-clock-trim.js';
@@ -20,7 +19,6 @@ import { MicInputClipping } from './mic-input-clipping.js';
 import { MicGainRamp } from './mic-gain-ramp.js';
 import { MicLimiter } from './mic-limiter.js';
 import { MicRawMeter } from './mic-raw-meter.js';
-import type { MicSlewRead } from './mic-frame-reader.js';
 import { MixBus } from './mix-bus.js';
 import { MicTrack, type AlignmentState, type MicReadPlan } from './mic-track.js';
 import { SourceOutputEdge } from './source-output-edge.js';
@@ -193,11 +191,6 @@ export class AudioSession {
   private roomMicGainDb: number;
   private micPremixedValue = false;
 
-
-
-
-
-
   /**
    * In-band capture-clock restarts cannot retire queued old PCM at ingest time.
    * Keep every unread old-capture frontier in order: more than one restart can
@@ -216,7 +209,6 @@ export class AudioSession {
   private readonly backingEdge: SourceOutputEdge;
   private readonly sourceEdgeFadeSamples: number;
 
-
   private backingStarvedFrames = 0;
 
   private backingUnplayableRunFrames = 0;
@@ -226,10 +218,7 @@ export class AudioSession {
 
   private readonly micLimiter: MicLimiter;
 
-
   private readonly micRawMeter: MicRawMeter;
-
-
 
   /** Holds the Mic read head inside audio that has arrived. */
   private readonly micFrontier: MicFrontierCorrection;

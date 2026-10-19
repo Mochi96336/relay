@@ -1,4 +1,5 @@
 import {
+  activeBackingBands,
   extractMusicTimingFeatures,
   musicBandScore,
   type MusicTimingFeatures,
@@ -38,17 +39,6 @@ function median(values: number[]) {
   return sorted.length % 2 === 1
     ? sorted[middle]
     : (sorted[middle - 1] + sorted[middle]) / 2;
-}
-
-function activeBackingBands(features: MusicTimingFeatures) {
-  const strongest = Math.max(...features.bandActivity);
-  if (!(strongest > 0)) return [];
-  const relativeFloor = strongest * 0.12;
-  const active: number[] = [];
-  for (let band = 0; band < features.bandCount; band += 1) {
-    if (features.bandActivity[band] >= relativeFloor) active.push(band);
-  }
-  return active;
 }
 
 function scoreOverlap(

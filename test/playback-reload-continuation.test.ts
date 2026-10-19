@@ -5,7 +5,7 @@ import test from 'node:test';
 import { parseRoomSongCommand } from '../src/room-song-command.js';
 import { RoomSongCommandSession } from '../src/room-song-command-session.js';
 import { SongSession } from '../src/song-session.js';
-import { RelayClient, sleep, startRelay } from './helpers/harness.js';
+import { RelayClient, startRelay } from './helpers/harness.js';
 
 const RATE = 48_000;
 const VIDEO = 'dQw4w9WgXcQ';

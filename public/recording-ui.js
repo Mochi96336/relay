@@ -1,4 +1,5 @@
 import './live-i18n.js';
+import { formatDuration } from './time-format.js';
 
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const strip = document.querySelector('.take-strip');
@@ -16,13 +17,6 @@ const START_POLICY_BLOCK_REASONS = new Set([
   'room-blocked',
   'take-active',
 ]);
-
-function formatDuration(durationMs) {
-  const totalSeconds = Math.max(0, Math.round(Number(durationMs) / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${String(seconds).padStart(2, '0')}`;
-}
 
 function blockingIssueCopy(issue) {
   const key = {

@@ -3,39 +3,11 @@ import test, { describe } from 'node:test';
 
 import { parseRoomSongCommand } from '../src/room-song-command.js';
 import { RoomSongCommandSession } from '../src/room-song-command-session.js';
+import { A, VIDEO, command, room } from './support/room-song-fixtures.js';
 
-const A = { participantId: 'participant-a', transportId: 'playback-tab-a', generation: 1 };
 const A2 = { participantId: 'participant-a', transportId: 'playback-tab-a2', generation: 1 };
 const B = { participantId: 'participant-b', transportId: 'playback-tab-b', generation: 1 };
-const VIDEO = 'dQw4w9WgXcQ';
 const OTHER_VIDEO = '9bZkp7q19f0';
-
-function command(commandId: string, expectedRevision: number, action: string, extra: Record<string, unknown> = {}) {
-  const parsed = parseRoomSongCommand({ commandId, expectedRevision, action, ...extra });
-  assert.equal(parsed.ok, true);
-  if (!parsed.ok) throw new Error('invalid room song command fixture');
-  return parsed.request;
-}
-
-function room(overrides: Record<string, unknown> = {}) {
-  return {
-    type: 'youtube-timeline-status',
-    videoId: VIDEO,
-    state: 2,
-    serverTime: 10,
-    youtubeTime: 10,
-    ageMs: 0,
-    playbackRate: 1,
-    playbackLeaderParticipantId: A.participantId,
-    playbackTransportId: A.transportId,
-    playbackGeneration: A.generation,
-    connected: true,
-    leaderConnected: true,
-    leaderFresh: true,
-    handoffState: 'idle',
-    ...overrides,
-  };
-}
 
 function telemetry(overrides: Record<string, unknown> = {}) {
   return {

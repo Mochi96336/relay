@@ -2,38 +2,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import { parseRoomSongCommand } from '../src/room-song-command.js';
 import { RoomSongCommandSession } from '../src/room-song-command-session.js';
-
-const A = { participantId: 'participant-a', transportId: 'playback-tab-a', generation: 1 };
-const VIDEO = 'dQw4w9WgXcQ';
-
-function command(commandId: string, expectedRevision: number, action: string, extra: Record<string, unknown> = {}) {
-  const parsed = parseRoomSongCommand({ commandId, expectedRevision, action, ...extra });
-  assert.equal(parsed.ok, true);
-  if (!parsed.ok) throw new Error('invalid room song command fixture');
-  return parsed.request;
-}
-
-function room(overrides: Record<string, unknown> = {}) {
-  return {
-    type: 'youtube-timeline-status',
-    videoId: VIDEO,
-    state: 2,
-    serverTime: 10,
-    youtubeTime: 10,
-    ageMs: 0,
-    playbackRate: 1,
-    playbackLeaderParticipantId: A.participantId,
-    playbackTransportId: A.transportId,
-    playbackGeneration: A.generation,
-    connected: true,
-    leaderConnected: true,
-    leaderFresh: true,
-    handoffState: 'idle',
-    ...overrides,
-  };
-}
+import { A, VIDEO, command, room } from './support/room-song-fixtures.js';
 
 function telemetry(overrides: Record<string, unknown> = {}) {
   return {

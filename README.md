@@ -199,5 +199,6 @@ Claims about those boundaries should come from explicit handset/robot rehearsal,
 - [SESSION_MODEL.md](SESSION_MODEL.md) — participant identity, presence, Mic lease, takeover, reconnect, and publisher transport lifecycle.
 - [ROBOT_DEPLOYMENT.md](ROBOT_DEPLOYMENT.md) — robot Chromium/PipeWire route, launcher, systemd deployment, infrastructure auth, and optional WebTransport setup.
 - [OBSERVATION_CONTRACT.md](OBSERVATION_CONTRACT.md) — stable machine-readable monitoring contract.
+- [CHOIR.md](CHOIR.md) — the second Mic (two singers, off unless enabled): roles, media path, how the second voice is placed, and its diagnostics.
 
 The README intentionally stays at the repository-entry level. Detailed state machines, calibration internals, implementation history, temporary debugging paths, and PR-era milestones belong in their owning code, tests, or dedicated engineering documents rather than being duplicated here.

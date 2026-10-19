@@ -141,7 +141,7 @@ export function estimatePitchPeriod(history: Int16Array, sampleRate: number) {
 }
 
 /** Share of fill power given to periodic repetition for a pitch correlation. */
-export function voicingForCorrelation(correlation: number) {
+function voicingForCorrelation(correlation: number) {
   if (correlation >= FULLY_VOICED_CORRELATION) return 1;
   if (correlation <= NOISE_CORRELATION_CEILING) return 0;
   return correlation * Math.min(1, (correlation - NOISE_CORRELATION_CEILING) / VOICING_RAMP);

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { loadRelayConfig } from '../src/config.js';
-import { readRepositoryTextFile } from './helpers/source-contract.js';
+import { readRepositoryTextFile } from './helpers/repository-sources.js';
 
 test('server entry parses deployment config once and delegates activation', () => {
   const entry = readRepositoryTextFile('src/server-entry.ts');

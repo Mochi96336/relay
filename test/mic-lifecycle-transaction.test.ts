@@ -3,16 +3,7 @@ import test from 'node:test';
 
 // @ts-expect-error Production browser helpers intentionally ship as plain JS.
 import { MicLifecycleTransaction } from '../public/mic-lifecycle-transaction.js';
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
+import { deferred } from './support/deferred.js';
 
 test('Mic terminal event is not observable until async teardown resolves', async () => {
   const teardown = deferred<number>();

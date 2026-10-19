@@ -12,6 +12,7 @@ import {
   toInt16,
   waitForNewMessage,
 } from './helpers/harness.js';
+import { playingTelemetry } from './support/playing-telemetry.js';
 
 const RATE = 48_000;
 const FAST = {
@@ -24,19 +25,6 @@ const FAST = {
   RELAY_CALIBRATION_PROBE: '0',
   RELAY_CALIBRATION_VALIDATION: '0',
 };
-
-const playingStartedAtMs = Date.now();
-function playingTelemetry() {
-  return {
-    type: 'youtube-telemetry',
-    videoId: 'dQw4w9WgXcQ',
-    state: 1,
-    currentTime: 42 + (Date.now() - playingStartedAtMs) / 1_000,
-    duration: 200,
-    playbackRate: 1,
-    networkRttMs: 40,
-  };
-}
 
 function tone(seconds: number, gain: number) {
   return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, 5), gain);

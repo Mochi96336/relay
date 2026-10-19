@@ -7,6 +7,7 @@ import {
   type CalibrationContext,
 } from '../src/calibration-session.js';
 import type { TimingCalibrationAnalysis } from '../src/timing-calibration.js';
+import { deferred } from './support/deferred.js';
 
 const RATE = 1_000;
 const DURATION_MS = 10;
@@ -27,16 +28,6 @@ function analysis(micLagMs: number): TimingCalibrationAnalysis {
     micLevelDbfs: -20,
     backingLevelDbfs: -12,
   };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
 }
 
 const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve));

@@ -1,120 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-type Listener = (event: any) => void;
-
-class FakeWindow {
-  relayIdentityReady = Promise.resolve();
-  relayProductAuthority: any = null;
-  relayI18n = { t: (key: string, vars?: Record<string, string>) => vars ? `${key}${JSON.stringify(vars)}` : key };
-  relayParticipantId = 'viewer';
-  relayParticipantCapability = 'capability';
-  relayNickname = 'Interaction Viewer';
-  private listeners = new Map<string, Listener[]>();
-
-  addEventListener(type: string, listener: Listener) {
-    const listeners = this.listeners.get(type) ?? [];
-    listeners.push(listener);
-    this.listeners.set(type, listeners);
-  }
-
-  dispatchEvent(event: any) {
-    for (const listener of this.listeners.get(event.type) ?? []) listener(event);
-    return true;
-  }
-}
-
-class FakeNode {
-  dataset: Record<string, string> = {};
-  style: Record<string, string> = {};
-  attributes = new Map<string, string>();
-  classList = { add() {} };
-  children: FakeNode[] = [];
-  textContent = '';
-  hidden = false;
-
-  setAttribute(name: string, value: string) {
-    this.attributes.set(name, value);
-  }
-
-  append(...nodes: FakeNode[]) {
-    this.children.push(...nodes);
-  }
-
-  replaceChildren(...nodes: FakeNode[]) {
-    this.children = [...nodes];
-  }
-
-  /** The meter's waveform path, painted by index.html. */
-  querySelector(selector: string): FakeNode | null {
-    if (selector !== '.voice-presence-wave') return null;
-    this.children[0] ??= new FakeNode();
-    return this.children[0];
-  }
-
-  addEventListener() {}
-}
-
-class FakeEvent {
-  type: string;
-
-  constructor(type: string) {
-    this.type = type;
-  }
-}
-
-class FakeCustomEvent extends FakeEvent {
-  detail: any;
-
-  constructor(type: string, init: { detail?: any } = {}) {
-    super(type);
-    this.detail = init.detail;
-  }
-}
-
-class FakeWebSocket {
-  static CONNECTING = 0;
-  static OPEN = 1;
-  static CLOSING = 2;
-  static CLOSED = 3;
-  static latest: FakeWebSocket | null = null;
-
-  readyState = FakeWebSocket.CONNECTING;
-  private listeners = new Map<string, Listener[]>();
-
-  constructor(_url: string) {
-    FakeWebSocket.latest = this;
-    queueMicrotask(() => {
-      this.readyState = FakeWebSocket.OPEN;
-      this.dispatch('open', new FakeEvent('open'));
-    });
-  }
-
-  addEventListener(type: string, listener: Listener) {
-    const listeners = this.listeners.get(type) ?? [];
-    listeners.push(listener);
-    this.listeners.set(type, listeners);
-  }
-
-  send(_data: string) {}
-
-  close() {
-    if (this.readyState === FakeWebSocket.CLOSED) return;
-    this.readyState = FakeWebSocket.CLOSED;
-    this.dispatch('close', new FakeEvent('close'));
-  }
-
-  emit(payload: any) {
-    this.dispatch('message', {
-      type: 'message',
-      data: JSON.stringify(payload),
-    });
-  }
-
-  private dispatch(type: string, event: any) {
-    for (const listener of this.listeners.get(type) ?? []) listener(event);
-  }
-}
+import { FakeCustomEvent, FakeEvent, FakeNode, FakeWebSocket, FakeWindow } from './support/live-status-dom.js';
 
 function productStatus(ownerId: string, duet: Record<string, unknown> | null) {
   return {
@@ -138,7 +25,9 @@ async function flush() {
 }
 
 test('the heading names the second singer for the owner, the second singer and everyone else', async () => {
-  const fakeWindow = new FakeWindow();
+  const fakeWindow = new FakeWindow({
+    t: (key: string, vars?: Record<string, string>) => vars ? `${key}${JSON.stringify(vars)}` : key,
+  });
   const title = new FakeNode();
   const detail = new FakeNode();
   const nodes = new Map<string, FakeNode>([

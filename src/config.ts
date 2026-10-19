@@ -40,7 +40,7 @@ export function envNumber(
   return value;
 }
 
-export function envBoolean(env: Env, name: string, fallback: boolean) {
+function envBoolean(env: Env, name: string, fallback: boolean) {
   const raw = rawValue(env, name);
   if (raw === undefined) return fallback;
 

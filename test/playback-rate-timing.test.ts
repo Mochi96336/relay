@@ -4,7 +4,7 @@ import test from 'node:test';
 import {
   findUniqueFunctionSource,
   readRepositoryTextFile,
-} from './helpers/source-contract.js';
+} from './helpers/repository-sources.js';
 
 const server = readRepositoryTextFile('src/server.ts');
 

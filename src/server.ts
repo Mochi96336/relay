@@ -1,4 +1,3 @@
-import { probeScheduleTime, sanitizeProbeTimingDiagnostics } from './probe-timing-diagnostics.js';
 import { SampleSongFallback } from './sample-song-fallback.js';
 import { ChoirRuntime, refuseChoirMessage } from './choir-runtime.js';
 import path from 'node:path';
@@ -16,24 +15,16 @@ import { parseAudioUplinkHealth, type AudioUplinkHealth } from './audio-uplink-h
 import { parseMicPresenceTelemetry } from './mic-presence-telemetry.js';
 import { micPresenceDisplayValues } from '../shared/mic-presence-precision.js';
 import { monitorBacklogBudgetBytes } from './monitor-backpressure.js';
-import { combineBootCalibration, mediaToWallMs } from './boot-calibration.js';
-import { BootProbeRuntime } from './boot-probe-runtime.js';
+import { mediaToWallMs } from './boot-calibration.js';
+import { BootProbeCoordinator } from './boot-probe-coordinator.js';
 import { decideBootProbeMixerApplication } from './boot-probe-mixer-application.js';
 import { decideBootProbeReapplication } from './boot-probe-reapplication.js';
-import {
-  bootProbeStartAuthorityAllowsAttempt,
-  selectBootProbeStartTarget,
-} from './boot-probe-start-policy.js';
-import { bootProbeTopologyReady } from './boot-probe-topology-admission-policy.js';
-import { decideBootProbeAnalysisReadiness } from './boot-probe-analysis-readiness-policy.js';
-import { decideBootProbeAnalysisEvidence } from './boot-probe-analysis-evidence-policy.js';
-import { decideBootProbeRunIdentity } from './boot-probe-run-identity-policy.js';
 import { decideCalibrationMixerApplication } from './calibration-mixer-application.js';
 import {
   decideCalibrationApplicability,
   type CalibrationApplicability,
 } from './calibration-applicability.js';
-import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
+import { PROBE_REFERENCE_MS } from './calibration-probe.js';
 import {
   CalibrationSession,
   MAX_CAPTURE_GAP_MS,
@@ -416,7 +407,7 @@ const choir = relayConfig.choir ? new ChoirRuntime({
     // Never across the boot probe's own Robot request: the Robot page answers
     // one request at a time.
     available: () => backingRuntime.isRobot && sourceRuntime.connected()
-      && sourceRuntime.socket !== null && bootProbeRuntime.lifecycleIdle,
+      && sourceRuntime.socket !== null && bootProbe.idle,
     playProbe: (request) => {
       if (!sourceRuntime.socket) return false;
       sendJson(sourceRuntime.socket, { type: 'play-calibration-probe', target: 'backing', ...request });
@@ -430,10 +421,6 @@ const choir = relayConfig.choir ? new ChoirRuntime({
   requestedGainDb: requestedMicGainDb,
 }) : null;
 
-const bootProbeRuntime = new BootProbeRuntime({
-  maxAttempts: PROBE_MAX_ATTEMPTS,
-  retryMs: PROBE_RETRY_MS,
-});
 const ROBOT_OFFSET_FRESH_MS = 2_000;
 const ROBOT_OFFSET_WINDOW_MS = relayConfig.robotOffsetWindowMs;
 // robot-player-offset is a residual tracking measurement, not an arbitrary
@@ -780,8 +767,8 @@ function probeCalibrationExhausted(nowMs = performance.now()) {
 function bootProbeSettled(nowMs = performance.now()) {
   if (!robotProbeTimingActive()) return true;
   if (probeCalibrationExhausted(nowMs)) return true;
-  return bootProbeRuntime.pathDifferenceMs !== null
-    && bootProbeRuntime.completedContextMatches(bootProbeContext());
+  return bootProbe.pathDifferenceMs !== null
+    && bootProbe.completedContextMatches(bootProbeContext());
 }
 
 function robotContentFallbackPrimingActive(nowMs = performance.now()) {
@@ -1101,10 +1088,44 @@ const contentCalibrationValidator = new ContentCalibrationValidator({
   },
 });
 
+const bootProbe = new BootProbeCoordinator({
+  sampleRate: MIX_SAMPLE_RATE,
+  maxAttempts: PROBE_MAX_ATTEMPTS,
+  retryMs: PROBE_RETRY_MS,
+  leadMs: PROBE_LEAD_MS,
+  searchMarginMs: PROBE_SEARCH_MARGIN_MS,
+  minCorrelation: PROBE_MIN_CORRELATION,
+  replyTimeoutMs: PROBE_REPLY_TIMEOUT_MS,
+  analysisTimeoutMs: PROBE_ANALYSIS_TIMEOUT_MS,
+  debug: PROBE_DEBUG,
+}, {
+  audio: session,
+  calibration,
+  timing: timingRuntime,
+  context: bootProbeContext,
+  sourceRate: (target) => target === 'mic' ? micRuntime.sampleRate : backingRuntime.sampleRate,
+  enabled: robotProbeTimingActive,
+  takeBlocked: takeBlocksCalibration,
+  calibrationStale: calibrationIsStale,
+  robotRouteActive,
+  topology: () => ({ backingIsRobot: backingRuntime.isRobot, robotSourceConnected: sourceRuntime.connected() }),
+  pathReady: (target, nowMs) => target === 'mic'
+    ? micRuntime.controlConnected() && micPlayable(nowMs)
+    : backingRuntime.connected() && backingPlayable(nowMs) && sourceRuntime.connected(),
+  deltaMs: currentDeltaMs,
+  playbackRate: currentPlaybackRate,
+  send: (target, request) => {
+    const socket = target === 'mic' ? micRuntime.publisher : sourceRuntime.socket;
+    if (socket) sendJson(socket, request);
+  },
+  changed: () => broadcastJson(timingCalibrationStatusPayload()),
+  onBackingMeasured: keepRobotBackingPath,
+});
+
 /**
  * Tells the mixer a content calibration was just measured from the Mic
  * timeline. A Boot Probe promotion also lands here, but only a fresh probe is a
- * new measurement (see maybeFinishProbeAnalysis); a reapply reuses an old one.
+ * new measurement (see BootProbeCoordinator); a reapply reuses an old one.
  */
 function noteContentMicMeasurement() {
   if (calibration.confirmedRevision === micMeasuredCalibrationRevision) return;
@@ -1518,7 +1539,7 @@ function calibrationApplicability(kind = appliedCalibrationKind()): CalibrationA
  * what the boot strategy currently wants.
  */
 function bootProbeAdvanceMs(nowMs: number) {
-  const pathDifferenceMs = bootProbeRuntime.pathDifferenceMs;
+  const pathDifferenceMs = bootProbe.pathDifferenceMs;
   if (pathDifferenceMs === null) return null;
   // The measured path difference is wall time and rate-independent; the player
   // delta is media time and is not.
@@ -1556,10 +1577,10 @@ function desiredCalibratedMicLagMs(nowMs: number): number | null {
 
   if (robotRouteActive() && kind === 'boot-probe') {
     if (calibration.result === null || calibrationIsStale()) return null;
-    if (!bootProbeRuntime.completedContextMatches(bootProbeContext())) return null;
+    if (!bootProbe.completedContextMatches(bootProbeContext())) return null;
     // With no Song there is no player-relative term, exactly as the applier
     // reads it: the measured path difference is the whole correction.
-    if (!roomHasSong(nowMs)) return bootProbeRuntime.pathDifferenceMs;
+    if (!roomHasSong(nowMs)) return bootProbe.pathDifferenceMs;
     if (calibrationApplicability(kind) !== 'apply') return null;
     return bootProbeAdvanceMs(nowMs);
   }
@@ -1608,11 +1629,11 @@ function syncAppliedCalibration() {
       activeMicLagMs: active,
       roomHasSong: roomHasSong(nowMs),
       resultMicLagMs: result?.micLagMs ?? null,
-      pathDifferenceMs: bootProbeRuntime.pathDifferenceMs,
+      pathDifferenceMs: bootProbe.pathDifferenceMs,
       calibrationStale: calibrationIsStale(),
-      completedContextMatches: bootProbeRuntime.completedContextMatches(bootProbeContext()),
+      completedContextMatches: bootProbe.completedContextMatches(bootProbeContext()),
       applicability: calibrationApplicability(calibrationKind),
-      storedDeltaMs: bootProbeRuntime.calibrationResult?.deltaMs ?? null,
+      storedDeltaMs: bootProbe.calibrationResult?.deltaMs ?? null,
       currentDeltaMs: currentDeltaMs(nowMs),
     });
     if (decision.kind === 'hold') return false;
@@ -1821,7 +1842,7 @@ function observationStatusV1Payload() {
 }
 
 function probeStatus(nowMs = performance.now()) {
-  return bootProbeRuntime.status(nowMs);
+  return bootProbe.status(nowMs);
 }
 
 function bootProbeInProgress(nowMs = performance.now()) {
@@ -1838,8 +1859,6 @@ function takeBlocksCalibration() {
   return takeController.lifecycle === 'recording' || takeController.lifecycle === 'finalizing';
 }
 
-const bootProbeTimingEvidence: Partial<Record<ProbeTarget, Record<string, unknown>>> = {};
-let completedBootProbeTimingEvidence: Partial<Record<ProbeTarget, Record<string, unknown>>> | null = null;
 let robotOffsetTimingEvidence: Record<string, number | null> | null = null;
 
 function timingCalibrationStatusPayload() {
@@ -1873,16 +1892,16 @@ function timingCalibrationStatusPayload() {
     vocalFineTuneMs: alignment.fineTuneMs,
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
     requestedMicAdvanceMs: session.requestedMicAdvanceMs,
-    probeCorrelation: bootProbeRuntime.correlations,
+    probeCorrelation: bootProbe.correlations,
     probeActive: bootProbeInProgress(nowMs),
     probePhase: probe.phase,
     probeAttempts: probe.attempts,
     probeMaxAttempts: probe.maxAttempts,
     probeError: probe.error,
-    bootCalibration: bootProbeRuntime.calibrationResult,
+    bootCalibration: bootProbe.calibrationResult,
     bootCalibrationMic: bootCalibrationMicLabel(),
-    bootProbeTimingEvidence,
-    completedBootProbeTimingEvidence,
+    bootProbeTimingEvidence: bootProbe.timingEvidence,
+    completedBootProbeTimingEvidence: bootProbe.completedTimingEvidence,
     robotOffsetTimingEvidence,
     robotPlayerOffsetMs: robotDeltaIsFresh(nowMs) ? robotPlayerOffset.offsetMs(nowMs) : null,
     automatic: timingRuntime.automatic,
@@ -1897,8 +1916,8 @@ function timingCalibrationStatusPayload() {
  */
 function bootCalibrationMicLabel() {
   const ownerId = participants.micOwnerId;
-  if (!ownerId || !bootProbeRuntime.calibrationResult
-    || !bootProbeRuntime.completedContextMatches(bootProbeContext())) return null;
+  if (!ownerId || !bootProbe.calibrationResult
+    || !bootProbe.completedContextMatches(bootProbeContext())) return null;
   return { nickname: participants.participant(ownerId)?.nickname ?? null };
 }
 
@@ -1963,8 +1982,8 @@ function readinessPayload(nowMs = performance.now()) {
       && session.alignment.calibratedMicLagMs !== null,
     calibrationStale: calibrationIsStale(),
     calibrationKind: appliedCalibrationKind(),
-    probeCorrelation: bootProbeRuntime.correlations,
-    bootCalibration: bootProbeRuntime.calibrationResult,
+    probeCorrelation: bootProbe.correlations,
+    bootCalibration: bootProbe.calibrationResult,
   });
 }
 
@@ -2156,12 +2175,11 @@ function restartLiveSourceAfterMicReconnect() {
 }
 
 function abandonProbeRun() {
-  bootProbeRuntime.abandonRun();
+  bootProbe.abandon();
 }
 
 function clearBootCalibrationState() {
-  bootProbeRuntime.clear();
-  completedBootProbeTimingEvidence = null;
+  bootProbe.clear();
 }
 
 /**
@@ -2468,7 +2486,7 @@ function reportMicTimelineFolds(nowMs = performance.now()) {
   if (contentCalibrationValidator.collecting) contentCalibrationValidator.cancel(nowMs);
   // Only a run in flight: resetting an idle or failed one would play the probe
   // again mid-song.
-  if (probeStatus(nowMs).active || bootProbeRuntime.hasMicLeg) abandonProbeRun();
+  if (probeStatus(nowMs).active || bootProbe.hasMicLeg) abandonProbeRun();
 }
 
 /** Who a diagnostic line is about: the room nickname plus a stable id prefix. */
@@ -2653,9 +2671,8 @@ function maybeAutoCalibrate(nowMs: number) {
   })) return;
 
   const freshConfirmedResult = calibration.confirmedResult !== null && !calibrationIsStale();
-  // appliedCalibrationKind() lazily synchronizes confirmed authority metadata.
-  // Preserve the historical short-circuit: only fresh Robot authority needs
-  // that stateful read to distinguish replaceable Boot from terminal content.
+  // Only fresh Robot authority needs to distinguish a replaceable boot
+  // baseline from terminal content authority.
   const appliedKind = freshConfirmedResult && robotRoute
     ? appliedCalibrationKind()
     : null;
@@ -2700,9 +2717,8 @@ function contentValidationPathReady(nowMs: number) {
     calibrationCollecting: calibration.collecting,
   })) return false;
 
-  // appliedCalibrationKind() lazily synchronizes confirmed authority metadata.
-  // Keep that stateful read after the prerequisite short-circuit, matching the
-  // historical admission ordering rather than sampling every fact eagerly.
+  // Provenance describes the confirmed measurement still serving the mixer,
+  // independently of any replacement strategy currently collecting.
   const confirmed = calibration.confirmedResult;
   const appliedKind = appliedCalibrationKind();
   if (!contentValidationAuthorityReady({
@@ -2740,31 +2756,6 @@ function maybeValidateContentCalibration(nowMs: number) {
   contentCalibrationValidator.maybeStart(nowMs);
 }
 
-function probeGeneration(target: ProbeTarget) {
-  return target === 'mic' ? session.micGeneration : session.backingGeneration;
-}
-
-/** One boot probe side's timeline, as the mixer holds it. */
-function probeTimeline(target: ProbeTarget) {
-  return target === 'mic'
-    ? {
-      totalSamples: session.micTotalSamples,
-      read: (start: number, count: number) => session.readMic(start, count),
-      evidence: (start: number, count: number) => session.readMicEvidence(start, count),
-    }
-    : {
-      totalSamples: session.backingTotalSamples,
-      read: (start: number, count: number) => session.readBacking(start, count),
-      evidence: (start: number, count: number) => session.readBackingEvidence(start, count),
-    };
-}
-
-function peakMagnitude(samples: Int16Array) {
-  let peak = 0;
-  for (const sample of samples) peak = Math.max(peak, Math.abs(sample));
-  return peak;
-}
-
 function bootProbeContext() {
   return {
     sessionGeneration: session.generation,
@@ -2773,358 +2764,6 @@ function bootProbeContext() {
     micSourceRate: micRuntime.sampleRate,
     backingSourceRate: backingRuntime.sampleRate,
   };
-}
-
-function probePathReady(target: ProbeTarget, nowMs: number) {
-  // A boot probe is a two-leg measurement of one Robot route, so admitting a
-  // leg whose topology does not exist is what strands a run: the Mic leg
-  // succeeds, the backing leg sits in `backing-waiting` forever, and because
-  // nothing was ever requested no attempt is ever spent - so the bounded run
-  // never terminates. `decideCalibrationStart` already refuses this for manual
-  // and product-advertised starts; the automatic scheduler needs the same rule
-  // rather than a second, laxer policy.
-  if (robotRouteActive() && !bootProbeTopologyReady({
-    backingIsRobot: backingRuntime.isRobot,
-    robotSourceConnected: sourceRuntime.connected(),
-  })) {
-    return false;
-  }
-  if (target === 'mic') {
-    return micRuntime.controlConnected() && micPlayable(nowMs);
-  }
-  return backingRuntime.connected()
-    && backingPlayable(nowMs)
-    && sourceRuntime.connected();
-}
-
-/**
- * BootProbeRuntime decides whether a failed attempt retries or ends the run.
- * A run that ends hands timing back to whatever it was before the probe.
- */
-function failProbeAttempt(target: ProbeTarget, reason: string, nowMs: number) {
-  const failure = bootProbeRuntime.failAttempt(target, reason, nowMs);
-  const probe = bootProbeRuntime.status(nowMs);
-  console.log('[probe-attempt-failed]', JSON.stringify({
-    target, reason, attempt: probe.attempts[target], maxAttempts: probe.maxAttempts,
-    terminal: failure !== null,
-  }));
-  if (failure) {
-    timingRuntime.restoreCandidateKindToAuthority();
-    calibration.failPreservingPrimed(failure.message);
-    return;
-  }
-  broadcastJson(timingCalibrationStatusPayload());
-}
-
-function sendProbeRequest(target: ProbeTarget, nowMs: number) {
-  if (timingRuntime.calibrationKind !== 'boot-probe') {
-    timingRuntime.beginBootProbe(true);
-  }
-
-  const requestId = bootProbeRuntime.nextRequestId();
-  const request = {
-    target,
-    requestId,
-    serverSentAtMs: nowMs,
-    sessionGeneration: session.generation,
-    generation: probeGeneration(target),
-  };
-  if (!bootProbeRuntime.beginRequest(request)) return;
-  delete bootProbeTimingEvidence[target];
-
-  if (PROBE_DEBUG) console.log(`[probe] ${target} sent #${requestId} generation=${request.generation}`);
-
-  const payload = { type: 'play-calibration-probe', target, requestId, leadMs: PROBE_LEAD_MS };
-  if (target === 'mic') {
-    sendJson(micRuntime.publisher!, payload);
-  } else if (sourceRuntime.socket) {
-    sendJson(sourceRuntime.socket, payload);
-  }
-  broadcastJson(timingCalibrationStatusPayload());
-}
-
-function maybeStartProbeCalibration(nowMs: number) {
-  if (!robotProbeTimingActive() || takeBlocksCalibration()) return;
-  if (!session.active || calibration.collecting) return;
-
-  const context = bootProbeContext();
-  if (bootProbeRuntime.micLegStaleForContext(context)) {
-    abandonProbeRun();
-  }
-
-  const candidateIsBootProbe = timingRuntime.calibrationKind === 'boot-probe';
-  const hasCalibrationResult = calibration.result !== null;
-  if (!bootProbeStartAuthorityAllowsAttempt({
-    candidateIsBootProbe,
-    hasCalibrationResult,
-    calibrationStale: candidateIsBootProbe && hasCalibrationResult
-      ? calibrationIsStale()
-      : false,
-    calibrationTransactionActive: calibration.transactionActive,
-  })) return;
-
-  if (!bootProbeRuntime.lifecycleIdle) return;
-
-  const probeErrored = probeStatus(nowMs).error !== null;
-  const hasMicLeg = bootProbeRuntime.hasMicLeg;
-  const completedContextMatches = !probeErrored
-    && !calibration.transactionActive
-    && !hasMicLeg
-    && bootProbeRuntime.completedContextMatches(context);
-  const target = selectBootProbeStartTarget({
-    probeErrored,
-    calibrationTransactionActive: calibration.transactionActive,
-    hasMicLeg,
-    completedContextMatches,
-  });
-  if (target === null) return;
-  if (!bootProbeRuntime.canStart(target, nowMs)) return;
-  if (!probePathReady(target, nowMs)) return;
-  sendProbeRequest(target, nowMs);
-}
-
-/**
- * The one place a probe client's answer is fenced against the run it claims.
- *
- * A capture-generation mismatch on the *reply* is deliberately not handled
- * here. `ProbeLifecycle.acceptClientReply()` already drops it without consuming
- * the request, because the phone reports its live AudioWorklet generation
- * rather than echoing the request: a racy mismatch must leave the current
- * request authoritative so the real acknowledgement can still land. Anything
- * that reaches this function has already passed that fence.
- */
-function acceptCurrentProbeClientResult(
-  reply: { requestId: unknown; generation: unknown },
-  options: { logCaptureGenerationMismatch?: boolean } = {},
-) {
-  const pending = bootProbeRuntime.acceptClientReply(reply.requestId, reply.generation);
-  if (!pending) return null;
-
-  const sessionCurrent = session.active
-    && pending.sessionGeneration === session.generation;
-  const captureGenerationMatches = sessionCurrent
-    ? probeGeneration(pending.target) === pending.generation
-    : false;
-  const identity = decideBootProbeRunIdentity({
-    sessionCurrent,
-    captureGenerationMatches,
-  });
-
-  if (identity.kind === 'abandon') {
-    if (
-      identity.reason === 'capture-generation'
-      && options.logCaptureGenerationMismatch
-      && PROBE_DEBUG
-    ) {
-      console.log(`[probe] ${pending.target} dropped: capture generation changed`);
-    }
-    abandonProbeRun();
-    broadcastJson(timingCalibrationStatusPayload());
-    return null;
-  }
-
-  return pending;
-}
-
-function handleProbeReply(reply: { requestId: unknown; generation: unknown; timingDiagnostics?: unknown }, nowMs: number) {
-  const pending = acceptCurrentProbeClientResult(reply, { logCaptureGenerationMismatch: true });
-  if (!pending) return;
-
-  const client = sanitizeProbeTimingDiagnostics(reply.timingDiagnostics);
-  const schedule = probeScheduleTime(pending.serverSentAtMs, nowMs, PROBE_LEAD_MS, client);
-  bootProbeTimingEvidence[pending.target] = {
-    requestId: pending.requestId, sessionGeneration: pending.sessionGeneration,
-    captureGeneration: pending.generation, serverReceivedAtMs: nowMs,
-    roundTripMs: nowMs - pending.serverSentAtMs,
-    client, schedule,
-  };
-  const targetSample = Math.round(session.sessionSampleAt(schedule.targetAtMs));
-  const marginSamples = Math.round((MIX_SAMPLE_RATE * PROBE_SEARCH_MARGIN_MS) / 1000);
-  const referenceSamples = Math.round((MIX_SAMPLE_RATE * PROBE_REFERENCE_MS) / 1000);
-
-  bootProbeRuntime.beginAnalysis({
-    target: pending.target,
-    targetSample,
-    windowStart: targetSample - Math.round(marginSamples / 8),
-    windowSamples: referenceSamples + marginSamples,
-    sessionGeneration: pending.sessionGeneration,
-    generation: pending.generation,
-    deadlineMs: nowMs + PROBE_ANALYSIS_TIMEOUT_MS,
-  });
-  broadcastJson(timingCalibrationStatusPayload());
-}
-
-function handleProbeFailure(
-  reply: { requestId: unknown; generation: unknown; reason: unknown },
-  nowMs: number,
-) {
-  const pending = acceptCurrentProbeClientResult(reply);
-  if (!pending) return;
-
-  const rawReason = typeof reply.reason === 'string' ? reply.reason.trim() : '';
-  const reason = rawReason ? rawReason.slice(0, 240) : 'client could not play the probe';
-  failProbeAttempt(pending.target, reason, nowMs);
-}
-
-/**
- * Makes a completed Boot Probe the room's calibration. `result` is read only
- * after `mutateProbe` has run, because some callers read probe state that the
- * mutation itself produces.
- */
-function promoteBootProbeCalibration(
-  mutateProbe: () => void,
-  result: () => { micLagMs: number; confidence: number },
-) {
-  mutateProbe();
-  timingRuntime.markBootProbeAuthority();
-  calibration.applyExternalResult(result());
-}
-
-function maybeFinishProbeAnalysis(nowMs: number) {
-  const waiting = bootProbeRuntime.pendingAnalysis;
-  if (!waiting) return;
-
-  const reached = probeTimeline(waiting.target).totalSamples;
-  const needed = waiting.windowStart + waiting.windowSamples;
-  const sessionCurrent = session.active
-    && waiting.sessionGeneration === session.generation;
-  const captureGenerationMatches = sessionCurrent
-    ? probeGeneration(waiting.target) === waiting.generation
-    : false;
-  const readiness = decideBootProbeAnalysisReadiness({
-    sessionCurrent,
-    captureGenerationMatches,
-    nowMs,
-    deadlineMs: waiting.deadlineMs,
-    reachedSamples: reached,
-    neededSamples: needed,
-  });
-
-  if (readiness.kind === 'abandon') {
-    if (readiness.reason === 'capture-generation' && PROBE_DEBUG) {
-      console.log(`[probe] ${waiting.target} analysis dropped: capture generation changed`);
-    }
-    abandonProbeRun();
-    broadcastJson(timingCalibrationStatusPayload());
-    return;
-  }
-
-  if (readiness.kind === 'timeout') {
-    if (PROBE_DEBUG) {
-      console.log(
-        `[probe] ${waiting.target} analysis timed out: reached=${reached} needed=${needed}`,
-      );
-    }
-    bootProbeRuntime.takeAnalysis();
-    failProbeAttempt(waiting.target, 'captured audio did not reach the analyzer before timeout', nowMs);
-    return;
-  }
-
-  if (readiness.kind === 'wait') return;
-  const analysis = bootProbeRuntime.takeAnalysis();
-  if (!analysis) return;
-
-  const timeline = probeTimeline(analysis.target);
-  const rangeEvidence = timeline.evidence(analysis.windowStart, analysis.windowSamples);
-  const evidenceDecision = decideBootProbeAnalysisEvidence({
-    gapSamples: rangeEvidence.gapSamples,
-    frontierMissingSamples: rangeEvidence.frontierMissingSamples,
-    sampleRate: MIX_SAMPLE_RATE,
-    maxGapMs: MAX_CAPTURE_GAP_MS,
-  });
-  if (evidenceDecision.kind === 'reject') {
-    const reason = evidenceDecision.reason === 'frontier-missing'
-      ? `captured audio window was incomplete (${evidenceDecision.frontierMissingSamples} samples beyond the capture frontier)`
-      : `captured audio gap ${evidenceDecision.gapMs.toFixed(1)} ms exceeded ${MAX_CAPTURE_GAP_MS} ms`;
-    failProbeAttempt(analysis.target, reason, nowMs);
-    return;
-  }
-
-  const window = timeline.read(analysis.windowStart, analysis.windowSamples);
-  const { offsetSamples, correlation } = locateProbe(window, MIX_SAMPLE_RATE);
-  const actualSample = analysis.windowStart + offsetSamples;
-  const latencyMs = ((actualSample - analysis.targetSample) / MIX_SAMPLE_RATE) * 1000;
-  bootProbeRuntime.noteCorrelation(analysis.target, correlation);
-
-  if (PROBE_DEBUG) {
-    const controlSeconds = 20;
-    const recent = timeline.read(reached - MIX_SAMPLE_RATE * controlSeconds, MIX_SAMPLE_RATE * controlSeconds);
-    console.log(
-      `[probe] ${analysis.target} correlation=${correlation.toFixed(3)} latencyMs=${latencyMs.toFixed(0)}`
-      + ` windowPeak=${peakMagnitude(window)} recent${controlSeconds}sPeak=${peakMagnitude(recent)}`
-      + ` windowStart=${analysis.windowStart} needed=${needed} reached=${reached}`,
-    );
-  }
-
-  if (correlation < PROBE_MIN_CORRELATION) {
-    // The attempt ran and the chime was not in the capture: with headphones it
-    // never reaches the Mic, so trying again the same way will not find it.
-    bootProbeRuntime.markAttemptUnheard(analysis.target);
-    failProbeAttempt(
-      analysis.target,
-      `correlation ${correlation.toFixed(3)} was below ${PROBE_MIN_CORRELATION.toFixed(3)}`,
-      nowMs,
-    );
-    return;
-  }
-
-  const leg = { targetSample: analysis.targetSample, actualSample, correlation };
-  const evidence = bootProbeTimingEvidence[analysis.target];
-  if (evidence && evidence.sessionGeneration === analysis.sessionGeneration
-    && evidence.captureGeneration === analysis.generation) {
-    Object.assign(evidence, { targetSample: analysis.targetSample, actualSample,
-      latencyMs, correlation, serverAnalyzedAtMs: nowMs });
-  }
-
-  if (analysis.target === 'mic') {
-    bootProbeRuntime.setMicLeg({
-      ...leg,
-      sessionGeneration: session.generation,
-      micGeneration: analysis.generation,
-      micSourceRate: micRuntime.sampleRate,
-    });
-    broadcastJson(timingCalibrationStatusPayload());
-    return;
-  }
-
-  // The Robot leg stands on its own: keep it for the second Mic, whoever
-  // holds the Mic next.
-  keepRobotBackingPath(latencyMs);
-
-  const micLeg = bootProbeRuntime.takeMicLegForContext({
-    sessionGeneration: session.generation,
-    micGeneration: session.micGeneration,
-    micSourceRate: micRuntime.sampleRate,
-  });
-  if (micLeg === null) return;
-
-  const result = combineBootCalibration({
-    mic: micLeg,
-    backing: leg,
-    deltaMs: currentDeltaMs(nowMs),
-    sampleRate: MIX_SAMPLE_RATE,
-    playbackRate: currentPlaybackRate(nowMs),
-  });
-
-  if (PROBE_DEBUG) {
-    console.log(
-      `[probe] combined advanceMs=${result.advanceMs.toFixed(0)}`
-      + ` (mic ${result.micLatencyMs.toFixed(0)} - backing ${result.backingLatencyMs.toFixed(0)}`
-      + ` + delta ${result.deltaMs.toFixed(0)}) confidence=${result.confidence.toFixed(3)}`,
-    );
-  }
-
-  promoteBootProbeCalibration(
-    () => {
-      bootProbeRuntime.recordCalibration(bootProbeContext(), result);
-      completedBootProbeTimingEvidence = structuredClone(bootProbeTimingEvidence);
-      session.noteMicCalibrationMeasured();
-    },
-    () => ({
-      micLagMs: result.advanceMs,
-      confidence: Math.max(0, Math.min(1, result.confidence)),
-    }),
-  );
 }
 
 function currentDeltaMs(nowMs: number) {
@@ -3162,11 +2801,11 @@ function maybeReapplyBootCalibration(nowMs: number) {
       ? null
       : calibrationApplicability(appliedKind),
     roomHasSong: roomHasSong(nowMs),
-    pathDifferenceReady: bootProbeRuntime.pathDifferenceMs !== null,
+    pathDifferenceReady: bootProbe.pathDifferenceMs !== null,
     calibrationCollecting: calibration.collecting,
     calibrationTransactionActive: calibration.transactionActive,
     robotDeltaFresh: robotDeltaIsFresh(nowMs),
-    completedContextMatches: bootProbeRuntime.completedContextMatches(bootProbeContext()),
+    completedContextMatches: bootProbe.completedContextMatches(bootProbeContext()),
     advanceMs: bootProbeAdvanceMs(nowMs),
     appliedMicLagMs: applied,
     reapplyThresholdMs: BOOT_DELTA_REAPPLY_MS,
@@ -3178,10 +2817,7 @@ function maybeReapplyBootCalibration(nowMs: number) {
     const why = decision.reason === 'reclaim' ? 'reclaimed by boot baseline' : 'delta moved';
     console.log(`[probe] ${why}; advanceMs ${applied?.toFixed(0) ?? 'none'} -> ${advanceMs.toFixed(0)}`);
   }
-  promoteBootProbeCalibration(
-    () => bootProbeRuntime.reapplyCalibration(advanceMs, currentDeltaMs(nowMs)),
-    () => ({ micLagMs: advanceMs, confidence: bootProbeRuntime.confidence ?? 0 }),
-  );
+  bootProbe.reapply(advanceMs, currentDeltaMs(nowMs));
 }
 
 /**
@@ -3218,11 +2854,7 @@ function restartManualBootCalibration(nowMs: number) {
   // The candidate must not revoke a known-good content alignment merely by
   // announcing that the next measurement will use boot probes.
   syncAppliedCalibration();
-  timingRuntime.beginBootProbe(false);
-  abandonProbeRun();
-  bootProbeRuntime.resetCorrelations();
-  maybeStartProbeCalibration(nowMs);
-  broadcastJson(timingCalibrationStatusPayload());
+  bootProbe.restart(nowMs);
   broadcastJson(sourceStatusPayload());
 }
 
@@ -3262,18 +2894,15 @@ const youtubeTimelineTimer = setInterval(() => {
     broadcastJson(mixHealthPayload());
   }
 
-  const expiredProbe = bootProbeRuntime.takeExpiredRequest(nowMs, PROBE_REPLY_TIMEOUT_MS);
-  if (expiredProbe) {
-    failProbeAttempt(expiredProbe.target, 'playback acknowledgement timed out', nowMs);
-  }
+  bootProbe.expireRequest(nowMs);
 
   dropLegacyCalibrationForRobot();
   if (syncAppliedCalibration()) {
     broadcastJson(sourceStatusPayload());
     broadcastJson(timingCalibrationStatusPayload());
   }
-  maybeFinishProbeAnalysis(nowMs);
-  maybeStartProbeCalibration(nowMs);
+  bootProbe.finishAnalysis(nowMs);
+  bootProbe.startIfReady(nowMs);
   maybeReapplyBootCalibration(nowMs);
   sweepRobotContentTransition(nowMs);
   maybeAutoCalibrate(nowMs);
@@ -3988,10 +3617,10 @@ const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<Relay
     if (target === 'mic' ? fromPublisher : fromActiveRobot) {
       const nowMs = performance.now();
       if (payload.type === 'calibration-probe-played') {
-        handleProbeReply({ requestId: payload.requestId, generation: payload.generation,
+        bootProbe.played({ requestId: payload.requestId, generation: payload.generation,
           timingDiagnostics: payload.timingDiagnostics }, nowMs);
       } else {
-        handleProbeFailure(
+        bootProbe.failed(
           { requestId: payload.requestId, generation: payload.generation, reason: payload.reason },
           nowMs,
         );

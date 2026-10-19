@@ -47,7 +47,7 @@ function micLegMatchesContext(leg: BootProbeMicLeg, context: BootProbeMicLegCont
  * ProbeLifecycle remains the request/retry state machine. This class owns the
  * companion evidence/result state that must reset and survive with that machine
  * as one unit. PCM capture, probe correlation, boot-calibration math, timing
- * authority and application into AudioSession remain outside this aggregate.
+ * authority and application into AudioSession remain with the boot coordinator and domain owners outside this aggregate.
  */
 export class BootProbeRuntime {
   private readonly lifecycle: ProbeLifecycle;

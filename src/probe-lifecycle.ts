@@ -52,10 +52,10 @@ export type ProbeLifecycleStatus = {
 /**
  * Owns only the retry/request state for boot probe calibration.
  *
- * AudioSession still owns PCM history and the server still owns the measured
+ * AudioSession still owns PCM history and the boot coordinator owns the measured
  * leg values. Keeping those domains separate matters: a failed backing attempt
  * may retry without throwing away a valid Mic measurement, while a real capture
- * generation change can still reset the whole run at the server boundary.
+ * generation change can still reset the whole run at the coordinator boundary.
  */
 export class ProbeLifecycle {
   private request: ProbeRequest | null = null;

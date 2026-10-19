@@ -33,13 +33,13 @@ test('server keeps Robot and Take hard guards while delegating boot reapply poli
     /replacementApplicability: appliedKind === 'boot-probe'[\s\S]*?\? null[\s\S]*?: calibrationApplicability\(appliedKind\)/,
   );
   assert.match(reapply, /roomHasSong: roomHasSong\(nowMs\)/);
-  assert.match(reapply, /pathDifferenceReady: bootProbeRuntime\.pathDifferenceMs !== null/);
+  assert.match(reapply, /pathDifferenceReady: bootProbe\.pathDifferenceMs !== null/);
   assert.match(reapply, /calibrationCollecting: calibration\.collecting/);
   assert.match(reapply, /calibrationTransactionActive: calibration\.transactionActive/);
   assert.match(reapply, /robotDeltaFresh: robotDeltaIsFresh\(nowMs\)/);
   assert.match(
     reapply,
-    /completedContextMatches: bootProbeRuntime\.completedContextMatches\(bootProbeContext\(\)\)/,
+    /completedContextMatches: bootProbe\.completedContextMatches\(bootProbeContext\(\)\)/,
   );
   assert.match(reapply, /advanceMs: bootProbeAdvanceMs\(nowMs\)/);
   assert.match(reapply, /appliedMicLagMs: applied/);
@@ -50,23 +50,12 @@ test('server keeps Robot and Take hard guards while delegating boot reapply poli
   assert.doesNotMatch(reapply, /Math\.abs\(advanceMs - applied\) < BOOT_DELTA_REAPPLY_MS/);
 });
 
-test('server retains rate arithmetic, mutation, promotion ordering, and debug effects', () => {
+test('server retains rate arithmetic and delegates result mutation to the boot coordinator', () => {
   const reapply = functionCode(server, 'maybeReapplyBootCalibration');
   const advance = functionCode(server, 'bootProbeAdvanceMs');
-
-  assert.match(
-    advance,
-    /mediaToWallMs\(currentDeltaMs\(nowMs\), currentPlaybackRate\(nowMs\)\)/,
-  );
-  assert.match(reapply, /const advanceMs = decision\.advanceMs/);
-  assert.match(
-    reapply,
-    /decision\.reason === 'reclaim' \? 'reclaimed by boot baseline' : 'delta moved'/,
-  );
-  assert.match(
-    reapply,
-    /promoteBootProbeCalibration\([\s\S]*bootProbeRuntime\.reapplyCalibration\(advanceMs, currentDeltaMs\(nowMs\)\)[\s\S]*micLagMs: advanceMs[\s\S]*confidence: bootProbeRuntime\.confidence \?\? 0/,
-  );
+  assert.match(advance, /mediaToWallMs\(currentDeltaMs\(nowMs\), currentPlaybackRate\(nowMs\)\)/);
+  assert.match(reapply, /bootProbe\.reapply\(/);
+  assert.doesNotMatch(reapply, /applyExternalResult|markBootProbeAuthority|reapplyCalibration/);
 });
 
 test('pure boot reapply policy owns no runtime or effect authority', () => {
@@ -74,6 +63,6 @@ test('pure boot reapply policy owns no runtime or effect authority', () => {
   assert.doesNotMatch(code, /^import /m);
   assert.doesNotMatch(
     code,
-    /bootProbeRuntime\.|timingRuntime\.|calibration\.|session\.|BootProbeRuntime|TimingRuntime|CalibrationSession|AudioSession/,
+    /bootProbe\.|timingRuntime\.|calibration\.|session\.|BootProbeRuntime|TimingRuntime|CalibrationSession|AudioSession/,
   );
 });

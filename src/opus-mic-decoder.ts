@@ -17,7 +17,7 @@ import { createRequire } from 'node:module';
  * hole stays a hole in the timeline, concealed and counted downstream exactly
  * as before.
  */
-export const OPUS_MIC_FRAME_SAMPLES = 960;
+const OPUS_MIC_FRAME_SAMPLES = 960;
 /** Concealment fades to silence well within this; a longer hole needs no more. */
 const MAX_CONCEALED_FRAMES = 50;
 const OPUS_RESET_STATE = 4028;

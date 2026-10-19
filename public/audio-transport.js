@@ -16,7 +16,7 @@ const WEB_SOCKET_OPEN = 1;
  * those headers on any path that carries a conventional 1200-byte QUIC packet,
  * and splits one 20 ms 48 kHz mono chunk into two datagrams rather than many.
  */
-export const DEFAULT_DATAGRAM_PACKET_BYTES_CEILING = 1000;
+const DEFAULT_DATAGRAM_PACKET_BYTES_CEILING = 1000;
 
 /**
  * Outgoing datagrams that may sit queued, in packets.
@@ -26,7 +26,7 @@ export const DEFAULT_DATAGRAM_PACKET_BYTES_CEILING = 1000;
  * backpressured link should still start dropping quickly rather than building
  * a backlog of audio that is already too late to be worth sending.
  */
-export const DEFAULT_DATAGRAM_QUEUE_PACKETS = 4;
+const DEFAULT_DATAGRAM_QUEUE_PACKETS = 4;
 
 /**
  * Longest an accepted WebTransport datagram write may stay unresolved before
@@ -34,7 +34,7 @@ export const DEFAULT_DATAGRAM_QUEUE_PACKETS = 4;
  * new packets, so the next packet after this deadline demotes the stalled path
  * and continues over WebSocket without replaying already-submitted datagrams.
  */
-export const DEFAULT_DATAGRAM_WRITE_TIMEOUT_MS = 1000;
+const DEFAULT_DATAGRAM_WRITE_TIMEOUT_MS = 1000;
 
 /**
  * Datagrams waiting for a free write slot, in packets and in age.
@@ -50,8 +50,8 @@ export const DEFAULT_DATAGRAM_WRITE_TIMEOUT_MS = 1000;
  * 48 packets holds the ~400 ms capture-dispatch budget at two datagrams per
  * 20 ms chunk.
  */
-export const DEFAULT_DATAGRAM_BACKLOG_PACKETS = 48;
-export const DEFAULT_DATAGRAM_BACKLOG_MS = 200;
+const DEFAULT_DATAGRAM_BACKLOG_PACKETS = 48;
+const DEFAULT_DATAGRAM_BACKLOG_MS = 200;
 
 /**
  * Oldest an accepted datagram may wait inside the browser before it is dropped
@@ -64,14 +64,14 @@ export const DEFAULT_DATAGRAM_BACKLOG_MS = 200;
  * queued past 300 ms cannot be heard on time. Best effort: whether Safari
  * honours it is what the reported value and [mic-uplink-backlog] are for.
  */
-export const DEFAULT_DATAGRAM_OUTGOING_MAX_AGE_MS = 300;
+const DEFAULT_DATAGRAM_OUTGOING_MAX_AGE_MS = 300;
 
 /**
  * Recently sent media packets kept to answer Relay's retransmission requests.
  * About 1.3 s of 48 kHz audio at two datagrams per 20 ms chunk - longer than
  * Relay will ever hold a hole, so a request never names a packet already gone.
  */
-export const DEFAULT_RETRANSMIT_BUFFER_PACKETS = 128;
+const DEFAULT_RETRANSMIT_BUFFER_PACKETS = 128;
 
 /**
  * Backoff before re-offering WebTransport after a transport-level demotion.
@@ -83,7 +83,7 @@ export const DEFAULT_RETRANSMIT_BUFFER_PACKETS = 128;
  * retried here: media recovery releases it once the fallback has proven
  * healthy for a while (see DEFAULT_WEBTRANSPORT_QUARANTINE_RELEASE_OBSERVATIONS).
  */
-export const DEFAULT_WEBTRANSPORT_RETRY_DELAYS_MS = Object.freeze([2_000, 5_000, 15_000, 30_000]);
+const DEFAULT_WEBTRANSPORT_RETRY_DELAYS_MS = Object.freeze([2_000, 5_000, 15_000, 30_000]);
 /** A short, bounded name for a WebTransport failure, for uplink health. */
 function webTransportErrorName(error) {
   const name = typeof error?.name === 'string' && error.name ? error.name : 'Error';

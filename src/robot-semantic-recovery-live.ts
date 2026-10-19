@@ -31,7 +31,7 @@ import {
 
 const execFileAsync = promisify(execFile) as RobotSemanticRecoveryExec;
 
-export const ROBOT_SEMANTIC_RECOVERY_LIVE_STATE_BASENAME =
+const ROBOT_SEMANTIC_RECOVERY_LIVE_STATE_BASENAME =
   'relay-robot-semantic-recovery-live.json';
 
 export type RobotSemanticRecoverySleep = (delayMs: number) => Promise<void>;
@@ -147,7 +147,7 @@ export async function restartRobotRouteService(
  * read, the iteration is blind and cannot contribute to a success proof. If the
  * route becomes inactive, verification exits immediately and never restarts it.
  */
-export async function verifyRobotSemanticRecovery(options: {
+async function verifyRobotSemanticRecovery(options: {
   port: number;
   requestTimeoutMs: number;
   verificationTimeoutMs: number;

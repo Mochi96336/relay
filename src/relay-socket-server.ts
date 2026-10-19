@@ -157,7 +157,7 @@ export type MonitorSocketTransportOptions = {
  * behind now. The lifetime total never falls, so one slow phone that has since
  * recovered, or left, would otherwise read as a current room fault.
  */
-export const MONITOR_RECENT_DROP_WINDOW_MS = 10_000;
+const MONITOR_RECENT_DROP_WINDOW_MS = 10_000;
 
 export type MonitorRecentDrops = {
   /** PCM frames dropped for any listener within the window. */

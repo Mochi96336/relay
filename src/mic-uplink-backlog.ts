@@ -59,7 +59,7 @@ export type MicUplinkBacklogOptions = {
 
 export const DEFAULT_MIC_UPLINK_BACKLOG_START_MS = 400;
 export const DEFAULT_MIC_UPLINK_BACKLOG_END_MS = 200;
-export const DEFAULT_MIC_UPLINK_BACKLOG_REPEAT_MS = 2_000;
+const DEFAULT_MIC_UPLINK_BACKLOG_REPEAT_MS = 2_000;
 /** The most real time a capture is taken to lose, as a fraction. */
 const MAX_CAPTURE_LOSS_FRACTION = 0.05;
 

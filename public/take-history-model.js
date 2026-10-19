@@ -17,7 +17,7 @@ export function validHistoryEntry(entry) {
   );
 }
 
-export function historyEntryFromCurrentTake(take) {
+function historyEntryFromCurrentTake(take) {
   if (
     !take
     || typeof take.takeId !== 'string'

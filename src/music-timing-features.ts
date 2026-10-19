@@ -9,7 +9,7 @@ export type MusicTimingFeatures = {
   bandActivity: Float64Array;
 };
 
-export const MUSIC_TIMING_BANDS_HZ = [
+const MUSIC_TIMING_BANDS_HZ = [
   [120, 250],
   [250, 500],
   [500, 1_000],

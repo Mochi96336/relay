@@ -20,7 +20,7 @@ export type MicAudibilityKind =
   /** Every received sample was exactly zero. */
   | 'digital-silence';
 
-export const MIC_AUDIBILITY_KINDS: readonly MicAudibilityKind[] = [
+const MIC_AUDIBILITY_KINDS: readonly MicAudibilityKind[] = [
   'uplink-underfed',
   'mix-unplayable',
   'digital-silence',

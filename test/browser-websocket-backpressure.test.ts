@@ -3,19 +3,10 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 import { parseTypeScriptSource, variableInitializerCode } from './support/source-contract.js';
+import { FakeSocket } from './support/fake-socket.js';
 
 const moduleUrl = new URL('../public/audio-transport.js', import.meta.url).href;
 const appUrl = new URL('../public/app.js', import.meta.url);
-
-class FakeSocket {
-  readyState = 1;
-  bufferedAmount = 0;
-  sent: unknown[] = [];
-
-  send(payload: unknown) {
-    this.sent.push(payload);
-  }
-}
 
 test('websocket media fallback has a 200 ms PCM16 realtime ceiling', async () => {
   const {

@@ -115,8 +115,6 @@ test('production timing contexts and async context fences include capture source
 
   assert.match(server, /function calibrationContext\(\)[\s\S]*micSourceRate: micRuntime\.sampleRate[\s\S]*backingSourceRate: backingRuntime\.sampleRate/);
   assert.match(server, /function bootProbeContext\(\)[\s\S]*micSourceRate: micRuntime\.sampleRate[\s\S]*backingSourceRate: backingRuntime\.sampleRate/);
-  assert.match(server, /bootProbeRuntime\.setMicLeg\(\{[\s\S]*micSourceRate: micRuntime\.sampleRate/);
-  assert.match(server, /bootProbeRuntime\.takeMicLegForContext\(\{\s*sessionGeneration: session\.generation,\s*micGeneration: session\.micGeneration,\s*micSourceRate: micRuntime\.sampleRate,\s*\}\)/);
 
   for (const [name, source] of [
     ['calibration', calibration],

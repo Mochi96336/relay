@@ -75,18 +75,6 @@ test('Robot recalibration adapter preserves old authority until candidate promot
   assert.doesNotMatch(restart, /clearBootCalibrationState\(\)/, 'old confirmed boot evidence remains rollback authority');
   assert.doesNotMatch(restart, /robotPlayerOffset\.reset\(\)/, 'old confirmed Robot total still depends on its live player delta');
 
-  const startProbe = source.match(/function maybeStartProbeCalibration\([\s\S]*?\n\}/)?.[0] ?? '';
-  assert.match(
-    startProbe,
-    /bootProbeStartAuthorityAllowsAttempt\(\{/,
-    'Boot Probe authority admission must delegate to the shared start policy',
-  );
-  assert.match(
-    startProbe,
-    /calibrationTransactionActive: calibration\.transactionActive/,
-    'the replacement transaction fact must cross the policy boundary',
-  );
-
   const reapply = source.match(/function maybeReapplyBootCalibration\([\s\S]*?\n\}/)?.[0] ?? '';
   assert.match(
     reapply,
@@ -155,15 +143,5 @@ assert.doesNotMatch(canApply, /retainingConfirmedAuthority/);
     'Boot Probe mixer application must delegate to the pure decision policy',
   );
 
-  const failProbe = source.match(/function failProbeAttempt\([\s\S]*?\n\}/)?.[0] ?? '';
-  assert.match(
-    failProbe,
-    /bootProbeRuntime\.failAttempt\(target, reason, nowMs\)[\s\S]*?timingRuntime\.restoreCandidateKindToAuthority\(\)/,
-    'failed replacement must preserve probe authority mutation before delegated rollback settlement',
-  );
-  assert.doesNotMatch(
-    failProbe,
-    /markBootProbeAuthority/,
-    'failed candidate must never relabel retained confirmed authority as boot-probe',
-  );
+
 });

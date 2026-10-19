@@ -90,7 +90,7 @@ test('content gates ask whether the boot probe settled, not whether it failed', 
   assert.match(settled, /probeCalibrationExhausted\(nowMs\)/, 'exhaustion is one way to settle');
   assert.match(
     settled,
-    /bootProbeRuntime\.pathDifferenceMs !== null/,
+    /bootProbe\.pathDifferenceMs !== null/,
     'a completed baseline is the other way to settle',
   );
   assert.match(settled, /completedContextMatches\(bootProbeContext\(\)\)/);

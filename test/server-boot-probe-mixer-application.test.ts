@@ -26,7 +26,7 @@ test('server samples Boot Probe facts and delegates mixer application policy', (
   assert.match(sync, /activeMicLagMs: active/);
   assert.match(sync, /roomHasSong: roomHasSong\(nowMs\)/);
   assert.match(sync, /applicability: calibrationApplicability\(calibrationKind\)/);
-  assert.match(sync, /storedDeltaMs: bootProbeRuntime\.calibrationResult\?\.deltaMs \?\? null/);
+  assert.match(sync, /storedDeltaMs: bootProbe\.calibrationResult\?\.deltaMs \?\? null/);
   assert.match(sync, /currentDeltaMs: currentDeltaMs\(nowMs\)/);
   assert.match(sync, /if \(decision\.kind === 'hold'\) return false;/);
   assert.match(sync, /session\.setAlignment\(\{ calibratedMicLagMs: decision\.micLagMs \}\)/);
@@ -40,6 +40,6 @@ test('Boot Probe mixer policy owns no runtime or AudioSession authority', () => 
   assert.doesNotMatch(code, /^import /m);
   assert.doesNotMatch(
     code,
-    /bootProbeRuntime\.|timingRuntime\.|calibration\.|session\.|BootProbeRuntime|TimingRuntime|CalibrationSession|AudioSession/,
+    /bootProbe\.|timingRuntime\.|calibration\.|session\.|BootProbeRuntime|TimingRuntime|CalibrationSession|AudioSession/,
   );
 });

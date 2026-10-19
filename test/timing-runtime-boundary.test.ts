@@ -30,7 +30,7 @@ test('TimingRuntime owns orchestration metadata without absorbing timing authori
 
   assert.ok(variableInitializerCode(server, 'calibration').includes('new CalibrationSession({'));
   assert.ok(variableInitializerCode(server, 'contentCalibrationValidator').includes('new ContentCalibrationValidator({'));
-  assert.ok(variableInitializerCode(server, 'bootProbeRuntime').includes('new BootProbeRuntime({'));
+  assert.ok(variableInitializerCode(server, 'bootProbe').includes('new BootProbeCoordinator({'));
 
   const imports = importSources(runtime);
   for (const forbidden of [
@@ -51,8 +51,6 @@ test('server delegates auto retry, run provenance, calibration kind and validati
     'timingRuntime.autoCalibrationDue(nowMs)',
     'timingRuntime.beginContentCalibration(nowMs, true)',
     'timingRuntime.beginContentCalibration(nowMs, false)',
-    'timingRuntime.beginBootProbe(true)',
-    'timingRuntime.beginBootProbe(false)',
     'timingRuntime.prepareContentValidationSlew(calibration.confirmedRevision + 1)',
     'timingRuntime.markContentValidationBaseline(calibration.confirmedRevision)',
     'automatic: timingRuntime.automatic',

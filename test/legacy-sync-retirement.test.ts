@@ -4,7 +4,7 @@ import test from 'node:test';
 import {
   productionRuntimeSources,
   readRepositoryTextFile,
-} from './helpers/source-contract.js';
+} from './helpers/repository-sources.js';
 
 const html = readRepositoryTextFile('public/index.html');
 const production = productionRuntimeSources();

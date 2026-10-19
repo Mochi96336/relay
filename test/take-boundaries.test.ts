@@ -10,6 +10,7 @@ import { TakeController } from '../src/take-controller.js';
 import type { TakeQualityFrameState } from '../src/take-quality.js';
 import { takeSongSnapshotFromRoom } from '../src/take-song-snapshot.js';
 import { YouTubeTimelineTracker } from '../src/youtube-timeline.js';
+import { waitForReady } from './support/take-controller-ready.js';
 
 const RATE = 48_000;
 const FRAME_MS = 20;
@@ -39,21 +40,6 @@ function boundaryFor(session: AudioSession, nowMs: number) {
     sampleRate: session.sampleRate,
     nowMs,
   });
-}
-
-function waitForReady(directory: string) {
-  let resolveReady: (() => void) | null = null;
-  const ready = new Promise<void>((resolve) => { resolveReady = resolve; });
-  const controller = new TakeController({
-    directory,
-    sampleRate: RATE,
-    storagePolicy: { maxBytes: 0, maxAgeMs: 0, minFreeBytes: 0 },
-    onStorageError: (error) => { throw error; },
-    onChange: (status) => {
-      if (status.lifecycle === 'ready') resolveReady?.();
-    },
-  });
-  return { controller, ready };
 }
 
 test('fractional command time cannot round backward across a full-frame boundary', () => {

@@ -13,6 +13,7 @@ import type { PcmFrame } from '../src/pcm-frame.js';
 import { TakeController } from '../src/take-controller.js';
 import type { TakeQualityFrameState } from '../src/take-quality.js';
 import { TakeSession } from '../src/take-session.js';
+import { waitForReady } from './support/take-controller-ready.js';
 
 const RATE = 48_000;
 const FRAME_SAMPLES = 960;
@@ -70,21 +71,6 @@ async function recordDrainedFrames(input: {
     );
   }, input.nowMs, input.maxFrames);
   return { emitted, positions, evidence };
-}
-
-function waitForReady(directory: string) {
-  let resolveReady: (() => void) | null = null;
-  const ready = new Promise<void>((resolve) => { resolveReady = resolve; });
-  const controller = new TakeController({
-    directory,
-    sampleRate: RATE,
-    storagePolicy: { maxBytes: 0, maxAgeMs: 0, minFreeBytes: 0 },
-    onStorageError: (error) => { throw error; },
-    onChange: (status) => {
-      if (status.lifecycle === 'ready') resolveReady?.();
-    },
-  });
-  return { controller, ready };
 }
 
 test('Take records exactly the addressed first and final full mix frames', async () => {

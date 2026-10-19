@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { AudioSession, type MixFrameEvidence } from '../src/audio-session.js';
 import { MicCaptureDeliveryMonitor } from '../src/mic-capture-delivery.js';
+import { random } from './support/seeded-random.js';
 
 const RATE = 48_000;
 const CHUNK = 480; // the phone's 10 ms packets
@@ -19,14 +20,6 @@ function chunk(firstSampleIndex: number, generation = GENERATION) {
     pcm.writeInt16LE(Math.round(value), i * 2);
   }
   return { generation, firstSampleIndex, pcm };
-}
-
-function random(seed: number) {
-  let state = seed >>> 0;
-  return () => {
-    state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
-    return state / 0x1_0000_0000;
-  };
 }
 
 type Phone = {

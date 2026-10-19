@@ -8,6 +8,7 @@ import {
 import { roomSongCommandConvergence } from '../shared/room-song-command-convergence.js';
 import { RoomSongCommandSession } from '../src/room-song-command-session.js';
 import { SongSession } from '../src/song-session.js';
+import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
 const VIDEO = 'dQw4w9WgXcQ';
 const OTHER_VIDEO = 'M7lc1UVf-VE';
@@ -19,16 +20,7 @@ const A = {
 const A_RELOAD = { ...A, generation: 11 };
 
 function telemetry(state: number, currentTime = 199, overrides: Record<string, unknown> = {}) {
-  return {
-    videoId: VIDEO,
-    state,
-    currentTime,
-    duration: 199,
-    playbackRate: 1,
-    bufferedFraction: 1,
-    timelineDeltaSeconds: 0,
-    ...overrides,
-  };
+  return youtubeTelemetry({ state, currentTime, duration: 199, bufferedFraction: 1, timelineDeltaSeconds: 0, ...overrides });
 }
 
 function endedRoom(overrides: Record<string, unknown> = {}) {

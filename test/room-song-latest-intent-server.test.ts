@@ -2,20 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { RelayClient, startRelay } from './helpers/harness.js';
+import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
 const VIDEO = 'dQw4w9WgXcQ';
 
 function telemetry(currentTime: number, state: number, transportId: string) {
   return {
     type: 'youtube-telemetry',
-    videoId: VIDEO,
-    state,
-    currentTime,
-    duration: 200,
-    playbackRate: 1,
-    bufferedFraction: 0.7,
-    playbackTransportId: transportId,
-    playbackGeneration: 1,
+    ...youtubeTelemetry({ state, currentTime, bufferedFraction: 0.7, playbackTransportId: transportId, playbackGeneration: 1 }),
   };
 }
 

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { RelayClient, startRelay } from './helpers/harness.js';
+import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
 const RATE = 48_000;
 const VIDEO = 'dQw4w9WgXcQ';
@@ -45,16 +46,7 @@ async function publisher(
 }
 
 function telemetry(currentTime: number, overrides: Record<string, unknown> = {}) {
-  return {
-    type: 'youtube-telemetry',
-    videoId: VIDEO,
-    state: 1,
-    currentTime,
-    duration: 200,
-    playbackRate: 1,
-    bufferedFraction: 0.8,
-    ...overrides,
-  };
+  return { type: 'youtube-telemetry', ...youtubeTelemetry({ currentTime, ...overrides }) };
 }
 
 async function establishPlayingRoom(client: RelayClient, currentTime: number) {

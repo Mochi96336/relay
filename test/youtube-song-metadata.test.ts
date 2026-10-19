@@ -2,17 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { YouTubeTimelineTracker } from '../src/youtube-timeline.js';
+import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
 function telemetry(overrides: Record<string, unknown> = {}) {
-  return {
-    videoId: 'dQw4w9WgXcQ',
-    state: 1,
-    currentTime: 10,
-    duration: 200,
-    playbackRate: 1,
-    bufferedFraction: 0.5,
-    ...overrides,
-  };
+  return youtubeTelemetry({ bufferedFraction: 0.5, ...overrides });
 }
 
 test('YouTube timeline exposes descriptive title and author without affecting timing', () => {

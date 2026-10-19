@@ -297,19 +297,33 @@
               </div>
 
               <div class="diagnostics-tabs" role="tablist" aria-label="Relay diagnostics" data-i18n-aria-label="diag.tabsAria">
-                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="overview" aria-selected="true" data-i18n="diag.tab.overview">Overview</button>
-                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="mic" aria-selected="false" data-i18n="diag.tab.mic">Mic</button>
-                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="audio" aria-selected="false" data-i18n="diag.tab.audio">Audio</button>
-                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="timing" aria-selected="false" data-i18n="diag.tab.timing">Timing</button>
-                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="robot" aria-selected="false" data-i18n="diag.tab.robot">Robot</button>
-                <button class="diagnostics-tab" type="button" role="tab" data-diagnostics-tab="raw" aria-selected="false" data-i18n="diag.tab.raw">Raw</button>
+                <button id="diagnostics-tab-overview" class="diagnostics-tab" type="button" role="tab"
+                  aria-controls="diagnostics-panel-overview" aria-selected="true" tabindex="0"
+                  data-diagnostics-tab="overview" data-i18n="diag.tab.overview">Overview</button>
+                <button id="diagnostics-tab-mic" class="diagnostics-tab" type="button" role="tab"
+                  aria-controls="diagnostics-panel-mic" aria-selected="false" tabindex="-1"
+                  data-diagnostics-tab="mic" data-i18n="diag.tab.mic">Mic</button>
+                <button id="diagnostics-tab-audio" class="diagnostics-tab" type="button" role="tab"
+                  aria-controls="diagnostics-panel-audio" aria-selected="false" tabindex="-1"
+                  data-diagnostics-tab="audio" data-i18n="diag.tab.audio">Audio</button>
+                <button id="diagnostics-tab-timing" class="diagnostics-tab" type="button" role="tab"
+                  aria-controls="diagnostics-panel-timing" aria-selected="false" tabindex="-1"
+                  data-diagnostics-tab="timing" data-i18n="diag.tab.timing">Timing</button>
+                <button id="diagnostics-tab-robot" class="diagnostics-tab" type="button" role="tab"
+                  aria-controls="diagnostics-panel-robot" aria-selected="false" tabindex="-1"
+                  data-diagnostics-tab="robot" data-i18n="diag.tab.robot">Robot</button>
+                <button id="diagnostics-tab-raw" class="diagnostics-tab" type="button" role="tab"
+                  aria-controls="diagnostics-panel-raw" aria-selected="false" tabindex="-1"
+                  data-diagnostics-tab="raw" data-i18n="diag.tab.raw">Raw</button>
               </div>
 
-              <section class="diagnostics-view" data-diagnostics-panel="overview">
+              <section id="diagnostics-panel-overview" class="diagnostics-view" role="tabpanel" tabindex="0"
+                aria-labelledby="diagnostics-tab-overview" data-diagnostics-panel="overview">
                 <dl id="diag-overview-ledger" class="diagnostic-ledger"></dl>
               </section>
 
-              <section class="diagnostics-view" data-diagnostics-panel="mic" hidden>
+              <section id="diagnostics-panel-mic" class="diagnostics-view" role="tabpanel" tabindex="0"
+                aria-labelledby="diagnostics-tab-mic" data-diagnostics-panel="mic" hidden>
                 <p class="diagnostics-intro" data-i18n="diag.micIntro">Whether the voice is actually reaching the room, and what the device, network and Relay are doing about it. Updates every second while open.</p>
                 <p id="diag-mic-main-heading" class="diagnostic-group" hidden></p>
                 <dl id="diag-mic-ledger" class="diagnostic-ledger"></dl>
@@ -321,14 +335,16 @@
                 </div>
               </section>
 
-              <section class="diagnostics-view" data-diagnostics-panel="audio" hidden>
+              <section id="diagnostics-panel-audio" class="diagnostics-view" role="tabpanel" tabindex="0"
+                aria-labelledby="diagnostics-tab-audio" data-diagnostics-panel="audio" hidden>
                 <dl id="diag-audio-ledger" class="diagnostic-ledger"></dl>
                 <p class="diagnostic-group" data-i18n="diag.listen.heading">Room playback · by receiver</p>
                 <p id="diag-listeners-cumulative" class="diagnostics-intro" data-i18n="diag.listen.cumulative">Underruns, repeated audio, latency trimmed and overflow dropped are totals since this playback started, not a sign of a current fault.</p>
                 <div id="diag-listeners"></div>
               </section>
 
-              <section class="diagnostics-view" data-diagnostics-panel="timing" hidden>
+              <section id="diagnostics-panel-timing" class="diagnostics-view" role="tabpanel" tabindex="0"
+                aria-labelledby="diagnostics-tab-timing" data-diagnostics-panel="timing" hidden>
                 <dl id="diag-timing-ledger" class="diagnostic-ledger"></dl>
                 <div id="diag-duet-timing" hidden>
                   <p id="diag-duet-timing-heading" class="diagnostic-group"></p>
@@ -403,11 +419,13 @@
                 </details>
               </section>
 
-              <section class="diagnostics-view" data-diagnostics-panel="robot" hidden>
+              <section id="diagnostics-panel-robot" class="diagnostics-view" role="tabpanel" tabindex="0"
+                aria-labelledby="diagnostics-tab-robot" data-diagnostics-panel="robot" hidden>
                 <dl id="diag-robot-ledger" class="diagnostic-ledger"></dl>
               </section>
 
-              <section class="diagnostics-view" data-diagnostics-panel="raw" hidden>
+              <section id="diagnostics-panel-raw" class="diagnostics-view" role="tabpanel" tabindex="0"
+                aria-labelledby="diagnostics-tab-raw" data-diagnostics-panel="raw" hidden>
                 <pre id="diagnostics-raw" class="diagnostics-raw">{}</pre>
               </section>
 

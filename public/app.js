@@ -1300,13 +1300,13 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
   updateSingerControls();
   pendingPublisherTakeoverOwnerId = takeoverExpectedOwnerId;
 
-  let preparedStream = null;
-  let preparedContext = null;
+  let preparedEncoder = null;
+  const ownsEncoder = () => preparedEncoder !== null && publisherActive && micOpus === preparedEncoder;
   try {
     // Browser permission promises are not abortable on every supported phone.
     // The gate gives the UI a deadline and stops a stream that resolves after
     // this attempt was cancelled or superseded.
-    preparedStream = await micStartup.wait(
+    const preparedStream = await micStartup.wait(
       startup,
       navigator.mediaDevices.getUserMedia({
         audio: {
@@ -1333,22 +1333,29 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
     );
 
     if (micCodecConfig.opus) {
-      micOpus = await micStartup.wait(startup, createMicOpusTrial({
+      preparedEncoder = await micStartup.wait(startup, createMicOpusTrial({
         bitrate: micCodecConfig.bitrate,
         onPacket: packet => {
+          if (!ownsEncoder()) return;
           const result = audioTransport.send(packet);
           if (!result.sent) recordUplinkDrop(960, result.reason ?? 'disconnected');
         },
-        onDrop: recordUplinkDrop,
-        onBitrate: bitrate => audioTransport.fallback.setEncodedBitrate(bitrate),
+        onDrop: (samples, reason) => { if (ownsEncoder()) recordUplinkDrop(samples, reason); },
+        onBitrate: bitrate => { if (ownsEncoder()) audioTransport.fallback.setEncodedBitrate(bitrate); },
         onError: error => {
+          const preparing = micStartup.isCurrent(startup);
+          if (!preparing && !ownsEncoder()) return;
           console.error('Mic Opus failed', error);
-          if (publisherActive) finishMicrophoneSession('opus-failed', { releaseMic: false }).catch(console.error);
+          if (preparing) micStartup.cancel(startup, error);
+          else finishMicrophoneSession('opus-failed', { releaseMic: false }).catch(console.error);
         },
       }), { stage: 'preparing compressed microphone audio', dispose: encoder => encoder.close() });
-      audioTransport.fallback.setEncodedBitrate(micCodecConfig.bitrate);
     }
-    preparedContext = new AudioContext({ latencyHint: 'interactive', ...(micCodecConfig.opus ? { sampleRate: 48000 } : {}) });
+    const preparedContext = micStartup.own(
+      startup,
+      new AudioContext({ latencyHint: 'interactive', ...(micCodecConfig.opus ? { sampleRate: 48000 } : {}) }),
+      context => context.close(),
+    );
     if (micCodecConfig.opus && preparedContext.sampleRate !== 48000) throw new Error('Opus trial requires 48 kHz capture');
     const captureContext = preparedContext;
     captureContext.addEventListener('statechange', () => {
@@ -1379,16 +1386,17 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
     );
     if (!micStartup.isCurrent(startup)) throw new MicStartupCancelledError();
 
+    // Transfer ownership before any active-state event can invoke teardown.
+    micStartup.complete(startup);
     mediaStream = preparedStream;
-    preparedStream = null;
     audioContext = preparedContext;
-    preparedContext = null;
+    micOpus = preparedEncoder;
+    if (micOpus) audioTransport.fallback.setEncodedBitrate(micOpus.bitrate);
     const sessionEpoch = ++publisherSessionEpoch;
     const captureStream = mediaStream;
     captureAppliedSettings = readCaptureSettings(captureStream);
     setPublisherActive(true);
     publisherStarting = false;
-    micStartup.complete(startup);
 
     // A websocket reconnect keeps this generation. Only a true capture-clock
     // boundary (new Mic session or rebuilt graph) advances it.
@@ -1468,17 +1476,7 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
       schedulePublisherReconnect(sessionEpoch, generation);
     }
   } finally {
-    if (!publisherActive) {
-      micOpus?.close();
-      micOpus = null;
-      audioTransport.fallback.setEncodedBitrate(null);
-    }
-    if (preparedStream) preparedStream.getTracks().forEach((track) => track.stop());
-    if (preparedContext) {
-      try {
-        await preparedContext.close();
-      } catch {}
-    }
+    await micStartup.dispose(startup);
   }
 }
 

@@ -1,6 +1,6 @@
 import { performance } from 'node:perf_hooks';
 
-import type { CalibrationContext } from './calibration-session.js';
+import { sameCalibrationContext, type CalibrationContext } from './calibration-session.js';
 import { analyzeTimingCalibration, type TimingCalibrationAnalysis } from './timing-calibration.js';
 import { TimingWindowCollector } from './timing-window-collector.js';
 
@@ -65,15 +65,6 @@ type Candidate = {
 };
 
 const DEFAULT_MAX_GAP_MS = 300;
-
-function sameContext(a: CalibrationContext, b: CalibrationContext) {
-  return a.sessionGeneration === b.sessionGeneration
-    && a.micGeneration === b.micGeneration
-    && a.backingGeneration === b.backingGeneration
-    && (a.micSourceRate ?? null) === (b.micSourceRate ?? null)
-    && (a.backingSourceRate ?? null) === (b.backingSourceRate ?? null)
-    && a.sourceGeneration === b.sourceGeneration;
-}
 
 function finitePositive(name: string, value: number) {
   if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be positive.`);
@@ -222,7 +213,7 @@ export class ContentCalibrationValidator {
   /** Starts one validation window when its schedule is due. */
   maybeStart(nowMs = this.now()) {
     if (!this.enabled || this.baseline === null || this.state === 'collecting') return false;
-    if (!sameContext(this.baseline.context, this.context())) {
+    if (!sameCalibrationContext(this.baseline.context, this.context())) {
       this.clearBaseline();
       return false;
     }
@@ -281,7 +272,7 @@ export class ContentCalibrationValidator {
     // The window belongs to the baseline context that existed when it started.
     // A capture restart or seek must never be promoted as runtime drift.
     const currentContext = this.context();
-    if (!sameContext(this.baseline.context, currentContext)) {
+    if (!sameCalibrationContext(this.baseline.context, currentContext)) {
       this.clearBaseline();
       return;
     }
@@ -355,8 +346,8 @@ export class ContentCalibrationValidator {
   ) {
     if (
       this.baseline === null
-      || !sameContext(this.baseline.context, measuredContext)
-      || !sameContext(measuredContext, this.context())
+      || !sameCalibrationContext(this.baseline.context, measuredContext)
+      || !sameCalibrationContext(measuredContext, this.context())
     ) {
       this.clearBaseline();
       return;

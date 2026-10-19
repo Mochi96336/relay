@@ -1,5 +1,6 @@
 import {
   extractMusicTimingFeatures,
+  activeBackingBands,
   musicBandScore,
   type MusicTimingFeatures,
 } from './music-timing-features.js';
@@ -145,18 +146,6 @@ function scoreLagDetailed(
       (_band, index) => bandScores[index] >= MIN_SUPPORTING_BAND_SCORE,
     ),
   };
-}
-
-function activeBackingBands(features: MusicTimingFeatures) {
-  const strongest = Math.max(...features.bandActivity);
-  if (!(strongest > 0)) return [];
-
-  const relativeFloor = strongest * 0.12;
-  const active: number[] = [];
-  for (let band = 0; band < features.bandCount; band += 1) {
-    if (features.bandActivity[band] >= relativeFloor) active.push(band);
-  }
-  return active;
 }
 
 function globalLagScan(

@@ -33,7 +33,7 @@ function validPositive(value: number, name: string) {
   return value;
 }
 
-function validPositiveInt(value: number, name: string) {
+export function validPositiveInt(value: number, name: string) {
   if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer.`);
   return value;
 }

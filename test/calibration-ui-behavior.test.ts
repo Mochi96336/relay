@@ -460,7 +460,7 @@ test("the second Mic's Realign shows B's own value and replays only B's test ton
 
   ui.button.click();
   assert.equal(ui.commandCount(), 0, "never the main Mic's calibration");
-  assert.equal(ui.dispatched.at(-1)?.type, 'relay-choir-consent-command');
+  assert.equal(ui.dispatched.at(-1)?.type, 'relay-choir-command');
   assert.equal(ui.dispatched.at(-1)?.detail?.type, 'choir-probe-request');
   assert.equal(ui.button.disabled, true, 'held until the room answers');
 

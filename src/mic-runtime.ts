@@ -25,7 +25,7 @@ const RETRANSMIT_MIN_MIX_HEADROOM_MS = 60;
  */
 const RETRANSMIT_PATH_GRACE_MS = 500;
 
-export const DEFAULT_UPLINK_HEALTH_TIMEOUT_MS = 4_000;
+const DEFAULT_UPLINK_HEALTH_TIMEOUT_MS = 4_000;
 /**
  * A v2 publisher control socket is closed only once nothing at all has arrived
  * on it for this long. Health that is merely late is not a dead socket: on
@@ -35,7 +35,7 @@ export const DEFAULT_UPLINK_HEALTH_TIMEOUT_MS = 4_000;
  */
 export const DEFAULT_PUBLISHER_CONTROL_SILENCE_MS = 10_000;
 /** A socket that keeps talking but never sends health Relay accepts is closed after this. */
-export const DEFAULT_PUBLISHER_HEALTH_GIVE_UP_MS = 30_000;
+const DEFAULT_PUBLISHER_HEALTH_GIVE_UP_MS = 30_000;
 
 export type MicRuntimeOptions = {
   audioTransportConfig: AudioTransportConfig;

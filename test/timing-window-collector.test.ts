@@ -132,7 +132,6 @@ test('accepts negative timing coordinates from a backward media mapping', () => 
   assert.equal(window.backingGapSamples, 0);
 });
 
-
   test('peekRecentWindow is read-only and uses the newest shared evidence', () => {
     const collector = new TimingWindowCollector(100, 400);
     collector.observeMic(filled(180, 1_000), 0);

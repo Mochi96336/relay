@@ -4,6 +4,7 @@ import test from 'node:test';
 
 import { participantIdForCapability } from '../src/participant-capability.js';
 import { RelayClient, sleep, startRelay, waitForNewMessage } from './helpers/harness.js';
+import { requestProductStatus } from './support/client-commands.js';
 
 const RATE = 48_000;
 const FAST = {
@@ -15,19 +16,6 @@ const FAST = {
 
 function pcm(ms = 40) {
   return Buffer.alloc(Math.round((RATE * ms) / 1000) * 2);
-}
-
-async function requestProduct(
-  client: RelayClient,
-  predicate: (message: Record<string, any>) => boolean,
-) {
-  const start = client.messages.length;
-  client.send({ type: 'product-status-request' });
-  return waitForNewMessage(
-    client,
-    start,
-    (message) => message.type === 'product-status' && predicate(message),
-  );
 }
 
 test('Listen consumes authoritative session status on its own monitor socket', () => {
@@ -85,7 +73,7 @@ test('a connected Mic that never sends its first frame times out and recovers on
     singer.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await singer.waitForType('registered');
 
-    const starting = await requestProduct(
+    const starting = await requestProductStatus(
       observer,
       (message) => message.room?.mic?.ownerId === 'singer-first-frame',
     );
@@ -93,7 +81,7 @@ test('a connected Mic that never sends its first frame times out and recovers on
     assert.equal(starting.health, 'healthy');
 
     await sleep(180);
-    const timedOut = await requestProduct(
+    const timedOut = await requestProductStatus(
       observer,
       (message) => message.room?.mic?.state === 'interrupted',
     );
@@ -109,7 +97,7 @@ test('a connected Mic that never sends its first frame times out and recovers on
 
     singer.sendPcm(pcm());
     await sleep(40);
-    const recovered = await requestProduct(
+    const recovered = await requestProductStatus(
       observer,
       (message) => message.room?.mic?.state === 'live',
     );

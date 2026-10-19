@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import { AudioSession } from '../src/audio-session.js';
 import type { PcmFrame } from '../src/pcm-frame.js';
+import { seeded } from './support/seeded-random.js';
 
 const RATE = 48_000;
 const FRAME_MS = 20;
@@ -69,17 +70,6 @@ function maxAdjacentStep(buffers: Buffer[]) {
   }
 
   return { maximum, maximumAt };
-}
-
-function seeded(seed: number) {
-  let state = seed >>> 0;
-  return () => {
-    state ^= state << 13;
-    state ^= state >>> 17;
-    state ^= state << 5;
-    state >>>= 0;
-    return state / 0x1_0000_0000;
-  };
 }
 
 test('seeded live alignment authority changes never splice a continuous Mic tone', () => {

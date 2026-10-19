@@ -26,8 +26,8 @@
 
 import { FRAME_MAGIC } from './pcm-frame.js';
 
-export const MONITOR_CODEC_FRAME_VERSION = 2;
-export const MONITOR_CODEC_OPUS = 1;
+const MONITOR_CODEC_FRAME_VERSION = 2;
+const MONITOR_CODEC_OPUS = 1;
 export const MONITOR_CODEC_FRAME_HEADER_BYTES = 20;
 
 export type MonitorOpusEncoder = {

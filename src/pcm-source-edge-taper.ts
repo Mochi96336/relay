@@ -1,7 +1,7 @@
 import type { PcmChunk } from './pcm-timeline.js';
 
 /** Shared, byte-preserving source-gap tapers for Mic and backing captures. */
-export function fadeOutSourceEdge(previous: Int16Array, sourceEdgeFadeSamples: number) {
+function fadeOutSourceEdge(previous: Int16Array, sourceEdgeFadeSamples: number) {
   const fadeOutSamples = Math.min(sourceEdgeFadeSamples, previous.length);
   for (let offset = 0; offset < fadeOutSamples; offset += 1) {
     const index = previous.length - fadeOutSamples + offset;

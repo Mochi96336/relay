@@ -108,7 +108,7 @@ export function createWebTransportMediaTicket() {
   return randomBytes(24).toString('base64url');
 }
 
-export function pinnedCertificateHash(certPem: string): WebTransportCertificateHash {
+function pinnedCertificateHash(certPem: string): WebTransportCertificateHash {
   const certificate = new X509Certificate(certPem);
   const validFrom = Date.parse(certificate.validFrom);
   const validTo = Date.parse(certificate.validTo);

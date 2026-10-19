@@ -57,7 +57,6 @@ test('segments capture resets and excludes slewed read heads until settled', () 
   assert.ok(report.segments[0].excluded.settling >= 15);
 });
 
-
 test('does not compare Boot with itself when a Content label inherits its read head', () => {
   const ambiguous = analyze(r => { r.bootStoredMs = r.appliedMs; });
   assert.equal(ambiguous.segments[0].matchedSamples, 0);
@@ -68,7 +67,6 @@ test('does not compare Boot with itself when a Content label inherits its read h
   assert.equal(explicit.segments[0].errorsVsContent.boot.signedMedianMs, -70);
   assert.equal(explicit.segments[0].targetReferenceSamples, 35);
 });
-
 
 test('server restarts cannot merge captures that reuse generation numbers', () => {
   const report = analyze((r, i) => { r.serverIncarnation = i < 40 ? 'server-one' : 'server-two'; }, 80);

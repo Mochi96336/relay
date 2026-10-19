@@ -11,6 +11,7 @@ import {
   toInt16,
   waitForNewMessage,
 } from './helpers/harness.js';
+import { probeAudio } from './support/probe-audio.js';
 
 const RATE = 48_000;
 const PLAYING_TELEMETRY = {
@@ -25,19 +26,6 @@ const PLAYING_TELEMETRY = {
 
 function tone(seconds: number, gain = 0.6, seed = 5) {
   return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, seed), gain);
-}
-
-function probeAudio(leadMs = 20, tailMs = 1_800) {
-  const reference = generateProbeReference(RATE);
-  const probe = Buffer.alloc(reference.length * 2);
-  for (let i = 0; i < reference.length; i += 1) {
-    probe.writeInt16LE(reference[i], i * 2);
-  }
-  return Buffer.concat([
-    Buffer.alloc(Math.round((RATE * leadMs) / 1000) * 2),
-    probe,
-    Buffer.alloc(Math.round((RATE * tailMs) / 1000) * 2),
-  ]);
 }
 
 function assertBootUsesDelta(status: Record<string, any>, expectedDeltaMs: number) {

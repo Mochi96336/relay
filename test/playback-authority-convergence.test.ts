@@ -3,22 +3,11 @@ import test from 'node:test';
 
 import { canRecoverPlayback, playbackLeaderHealth } from '../public/playback-recovery.js';
 import { SongSession } from '../src/song-session.js';
+import { telemetry } from './support/timeline-telemetry.js';
 
 const VIDEO = 'dQw4w9WgXcQ';
 const A = { participantId: 'participant-a', transportId: 'playback-tab-a', generation: 1 };
 const B = { participantId: 'participant-b', transportId: 'playback-tab-b', generation: 1 };
-
-function telemetry(overrides: Record<string, unknown> = {}) {
-  return {
-    videoId: VIDEO,
-    state: 1,
-    currentTime: 10,
-    duration: 200,
-    playbackRate: 1,
-    bufferedFraction: 0.5,
-    ...overrides,
-  };
-}
 
 function observerCanRecover(songs: SongSession, nowMs: number) {
   const timeline = songs.statusPayload(nowMs) as Record<string, unknown>;

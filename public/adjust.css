@@ -1,41 +1,19 @@
 /* Adjust owns shared room mix and timing only. Local Listen is part of the
    persistent Live surface and keeps its existing single audio owner. */
 
-.adjust-sheet {
-  display: grid;
-  gap: 26px;
-}
-
-.adjust-heading,
 .adjust-group-heading,
-.adjust-row-heading,
-.timing-row {
+.adjust-row-heading {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 16px;
 }
 
-.adjust-heading strong {
-  font-size: 22px;
-  line-height: 1;
-  letter-spacing: -.035em;
-  font-weight: 640;
-}
-.adjust-heading > span,
 .adjust-group-heading > span:last-child {
   color: #777a82;
   font-size: 10px;
 }
 
-.adjust-group {
-  display: grid;
-  gap: 17px;
-}
-.adjust-group + .adjust-group {
-  padding-top: 22px;
-  border-top: 1px solid #25272c;
-}
 .adjust-group-heading .section-label { margin: 0; }
 
 .adjust-control {
@@ -113,7 +91,6 @@
 
 body[data-listen="off"] .local-listen .adjust-range { opacity: .6; }
 
-.timing-row { align-items: center; }
 #calibrate-status {
   min-width: 0;
   color: #c9c9cc;
@@ -125,10 +102,4 @@ body[data-listen="off"] .local-listen .adjust-range { opacity: .6; }
   flex: 0 0 auto;
   padding-right: 0;
   color: #bdbec2;
-}
-
-@media (max-height: 760px) {
-  .adjust-sheet { gap: 20px; }
-  .adjust-group { gap: 13px; }
-  .adjust-group + .adjust-group { padding-top: 17px; }
 }

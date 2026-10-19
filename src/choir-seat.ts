@@ -1,6 +1,6 @@
 type AuthenticatedSocket = object & { participantId?: string };
 
-export type ChoirJoin = Readonly<{
+export type ChoirSeatHolder = Readonly<{
   primaryId: string;
   secondaryId: string;
   /** The socket B joined from: the only one that speaks for B. */
@@ -16,13 +16,13 @@ export type ChoirJoin = Readonly<{
  *
  * A join is not tied to a song. It lasts while A holds the Mic and B's
  * socket stays open, across pauses, seeks and Takes. It grants no media by
- * itself: B's media socket still needs a one-use claim (ChoirSecondaryMediaTicketExperiment).
+ * itself: B's media socket still needs a one-use claim (ChoirMediaClaims).
  *
  * Real participant identity comes from a server-authenticated socket, never
  * from a client-supplied participantId or a nickname.
  */
-export class ChoirSecondaryConsentExperiment {
-  private current: ChoirJoin | null = null;
+export class ChoirSeat {
+  private current: ChoirSeatHolder | null = null;
 
   constructor(private readonly policy: {
     /** Whether `id` holds the Mic with its media live: required to join. */
@@ -38,7 +38,7 @@ export class ChoirSecondaryConsentExperiment {
     notifySocket: (socket: AuthenticatedSocket, payload: Record<string, unknown>) => void;
   }) {}
 
-  private valid(join: ChoirJoin) {
+  private valid(join: ChoirSeatHolder) {
     return this.policy.socketOpen(join.socket)
       && this.policy.holdsMic(join.primaryId)
       && this.policy.participantConnected(join.secondaryId);
@@ -71,7 +71,7 @@ export class ChoirSecondaryConsentExperiment {
   }
 
   /** The joined pair, if a B is in. */
-  active(): ChoirJoin | null {
+  active(): ChoirSeatHolder | null {
     this.sweep();
     return this.current;
   }
@@ -111,7 +111,7 @@ export class ChoirSecondaryConsentExperiment {
     return true;
   }
 
-  private notifyRevoked(join: ChoirJoin, reason: string) {
+  private notifyRevoked(join: ChoirSeatHolder, reason: string) {
     if (!this.policy.socketOpen(join.socket)) return;
     this.policy.notifySocket(join.socket, {
       type: 'choir-secondary-consent-status', status: 'revoked',

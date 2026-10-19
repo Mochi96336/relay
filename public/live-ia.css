@@ -133,7 +133,6 @@
 .performance-stage > .voice-input-evidence { order: 2; }
 .performance-stage > .mic-actions { order: 3; }
 .performance-stage > .takeover-row { order: 4; }
-.performance-stage > .choir-status { order: 4; }
 .performance-stage > .mic-live-control { order: 5; }
 .performance-stage > .take-strip { order: 6; }
 
@@ -327,13 +326,6 @@ body:has(.system-panel[open]) {
 /* A takeover confirmation replaces the original action; it does not stack a
    second choice underneath the same state. */
 .performance-stage:has(#mic-takeover:not([hidden])) .mic-actions {
-  display: none;
-}
-
-/* youtube-sync still maintains engineering clock telemetry, but Live must not
-   render it. Technical diagnostics remain available through System. */
-.song-stage .youtube-readout:has(#server-timeline-state),
-.song-stage #server-timeline-note {
   display: none;
 }
 

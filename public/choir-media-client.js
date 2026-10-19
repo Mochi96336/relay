@@ -47,7 +47,7 @@ const probePlayback = new CalibrationProbePlayback({
   sendControl: (message) => {
     const type = REPLY_TYPES[message.type];
     if (!type) return { sent: false, reason: 'unknown' };
-    window.dispatchEvent(new CustomEvent('relay-choir-consent-command', { detail: { ...message, type } }));
+    window.dispatchEvent(new CustomEvent('relay-choir-command', { detail: { ...message, type } }));
     return { sent: true };
   },
   onDisconnected: () => {},
@@ -86,7 +86,7 @@ function requestClaim() {
   const current = attempt;
   awaitingClaim = true;
   mediaWanted = false;
-  window.dispatchEvent(new CustomEvent('relay-choir-consent-command', {
+  window.dispatchEvent(new CustomEvent('relay-choir-command', {
     detail: { type: 'choir-secondary-media-claim-request' },
   }));
   claimTimer = setTimeout(() => {
@@ -99,14 +99,14 @@ function requestClaim() {
 
 window.addEventListener('relay-choir-stop-secondary-capture', disconnect);
 window.addEventListener('relay-choir-pause-secondary-media', closeMedia);
-window.addEventListener('relay-choir-media-mode', (event) => {
+window.addEventListener('relay-choir-availability', (event) => {
   const wasEnabled = enabled;
-  enabled = event.detail?.enabled === true;
+  enabled = event.detail?.available === true;
   if (!enabled && wasEnabled) disconnect();
-  // Media asked for while this module still waited for the mode.
+  // Media asked for while this module still waited to hear Choir is on.
   if (enabled && !wasEnabled) requestClaim();
 });
-window.addEventListener('relay-choir-consent-message', (event) => {
+window.addEventListener('relay-choir-message', (event) => {
   const msg = event.detail;
   if (msg?.type === 'choir-secondary-consent-status' && msg.status === 'revoked'
     && msg.reason === 'connection-closed' && msg.secondaryId === window.relayParticipantId) {
@@ -121,8 +121,8 @@ window.addEventListener('relay-choir-consent-message', (event) => {
 
 window.addEventListener('relay-choir-start-secondary-capture', async () => {
   // The singer's own tap starts capture even if this module has not heard
-  // Choir's mode yet (it can load after presence announced it). Media is
-  // claimed only once the mode is known and the server asked for it.
+  // that Choir is on yet (it can load after presence announced it). Media is
+  // claimed only once it has, and the server asked for it.
   if (preparing || capture.rate !== null) return;
   preparing = true;
   const currentPrepare = ++prepareAttempt;
@@ -276,7 +276,7 @@ window.addEventListener('relay-choir-song-anchor', (event) => {
   if (!enabled || !mediaSocket || mediaSocket.readyState !== WebSocket.OPEN || !detail) return;
   const captureAnchor = capture.anchorFor(Number(detail.sampledAtPerformanceMs));
   if (!captureAnchor) return;
-  window.dispatchEvent(new CustomEvent('relay-choir-consent-command', {
+  window.dispatchEvent(new CustomEvent('relay-choir-command', {
     detail: {
       type: 'choir-secondary-song-anchor', videoId: detail.videoId, state: detail.state,
       currentTime: detail.currentTime, playbackRate: detail.playbackRate, captureAnchor,
@@ -285,4 +285,4 @@ window.addEventListener('relay-choir-song-anchor', (event) => {
 });
 
 // Presence may have announced Choir before this module finished loading.
-window.dispatchEvent(new Event('relay-request-choir-media-mode'));
+window.dispatchEvent(new Event('relay-request-choir-availability'));

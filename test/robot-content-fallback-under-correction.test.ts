@@ -7,8 +7,13 @@ import {
   sleep,
   startRelay,
   toInt16,
-  type RelayServer,
 } from './helpers/harness.js';
+import {
+  backingBoundaryRequestCount,
+  playingTelemetry,
+  robotRoom,
+  type RobotRoom,
+} from './support/robot-content-room.js';
 
 const RATE = 48_000;
 const FRAME_SAMPLES = Math.round(RATE * 0.02);
@@ -42,53 +47,6 @@ const PROBE_FAST = {
   RELAY_CALIBRATION_TIMEOUT_MS: '20000',
   RELAY_HEARTBEAT_MS: '60000',
 };
-
-const playingTelemetry = {
-  type: 'youtube-telemetry',
-  videoId: 'dQw4w9WgXcQ',
-  state: 1,
-  currentTime: 42,
-  duration: 200,
-  playbackRate: 1,
-};
-
-type Session = {
-  backing: RelayClient;
-  publisher: RelayClient;
-  robot: RelayClient;
-  monitor: RelayClient;
-  close: () => void;
-};
-
-async function robotRoom(server: RelayServer): Promise<Session> {
-  const backing = await RelayClient.connect(server);
-  backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
-  await backing.waitForType('registered');
-
-  const publisher = await RelayClient.connect(server);
-  publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
-  await publisher.waitForType('registered');
-
-  const robot = await RelayClient.connect(server);
-  robot.send({ type: 'robot-source-hello' });
-
-  const monitor = await RelayClient.connect(server);
-  monitor.send({ type: 'register', role: 'monitor' });
-  await monitor.waitForType('registered');
-
-  return {
-    backing,
-    publisher,
-    robot,
-    monitor,
-    close() {
-      monitor.close();
-      robot.close();
-      publisher.close();
-      backing.close();
-    },
-  };
-}
 
 async function waitForCalibrationStatus(
   monitor: RelayClient,
@@ -171,7 +129,7 @@ function makeBackingFrame(
 }
 
 async function sendRange(
-  room: Session,
+  room: RobotRoom,
   mic: Buffer,
   master: Float64Array,
   startSample: number,
@@ -195,7 +153,7 @@ async function sendRange(
  * the transition worker's comparisons after a burst take longer than that.
  */
 function streamRange(
-  room: Session,
+  room: RobotRoom,
   mic: Buffer,
   master: Float64Array,
   startSample: number,
@@ -219,10 +177,6 @@ function streamRange(
     done,
     stop: () => { stopped = true; },
   };
-}
-
-function backingBoundaryRequestCount(backing: RelayClient) {
-  return backing.messages.filter((message) => message.type === 'backing-sample-boundary-request').length;
 }
 
 async function acknowledgeNextBackingBoundary(backing: RelayClient, previousCount: number) {

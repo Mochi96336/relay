@@ -9,7 +9,7 @@ export type MusicTimingFeatures = {
   bandActivity: Float64Array;
 };
 
-export const MUSIC_TIMING_BANDS_HZ = [
+const MUSIC_TIMING_BANDS_HZ = [
   [120, 250],
   [250, 500],
   [500, 1_000],
@@ -285,4 +285,16 @@ export function musicBandScore(
     length,
   );
   return energy * ENERGY_WEIGHT + flux * FLUX_WEIGHT;
+}
+
+/** The bands carrying at least 12% of the strongest band's activity: where the backing has music to match. */
+export function activeBackingBands(features: MusicTimingFeatures) {
+  const strongest = Math.max(...features.bandActivity);
+  if (!(strongest > 0)) return [];
+  const relativeFloor = strongest * 0.12;
+  const active: number[] = [];
+  for (let band = 0; band < features.bandCount; band += 1) {
+    if (features.bandActivity[band] >= relativeFloor) active.push(band);
+  }
+  return active;
 }

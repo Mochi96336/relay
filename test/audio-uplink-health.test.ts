@@ -405,7 +405,6 @@ describe('audio uplink health', () => {
   });
 });
 
-
 it('preserves optional sender monotonic sample timestamps and rejects malformed ones', () => {
   assert.equal(parseAudioUplinkHealth({ ...validHealth(), capturedAtPerformanceMs: 123.5 })?.capturedAtPerformanceMs, 123.5);
   assert.equal(parseAudioUplinkHealth(validHealth())?.capturedAtPerformanceMs, undefined);
@@ -413,7 +412,6 @@ it('preserves optional sender monotonic sample timestamps and rejects malformed 
     assert.equal(parseAudioUplinkHealth({ ...validHealth(), capturedAtPerformanceMs }), null);
   }
 });
-
 
 it('accepts staged capture clocks without accepting arbitrary or invalid clock data', () => {
   const captureClock = { contextSeconds: 12.2, originContextSeconds: 2,

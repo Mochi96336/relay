@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { encodePcmFrame } from '../src/pcm-frame.js';
 import { RelayClient, sleep, startRelay, waitForNewMessage } from './helpers/harness.js';
+import { requestProductStatus } from './support/client-commands.js';
 
 const RATE = 48_000;
 const FAST = {
@@ -16,19 +17,6 @@ function pcm(ms = 40) {
   return Buffer.alloc(Math.round((RATE * ms) / 1000) * 2);
 }
 
-async function requestProduct(
-  client: RelayClient,
-  predicate: (message: Record<string, any>) => boolean,
-) {
-  const start = client.messages.length;
-  client.send({ type: 'product-status-request' });
-  return waitForNewMessage(
-    client,
-    start,
-    (message) => message.type === 'product-status' && predicate(message),
-  );
-}
-
 test('Mic state distinguishes starting, flowing, stalled and reconnecting', async () => {
   const server = await startRelay(FAST);
   try {
@@ -37,7 +25,7 @@ test('Mic state distinguishes starting, flowing, stalled and reconnecting', asyn
     singer.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await singer.waitForType('registered');
 
-    const starting = await requestProduct(
+    const starting = await requestProductStatus(
       observer,
       (message) => message.room?.mic?.ownerId === 'singer-state',
     );
@@ -47,12 +35,12 @@ test('Mic state distinguishes starting, flowing, stalled and reconnecting', asyn
 
     singer.sendPcm(pcm());
     await sleep(40);
-    const live = await requestProduct(observer, (message) => message.room?.mic?.state === 'live');
+    const live = await requestProductStatus(observer, (message) => message.room?.mic?.state === 'live');
     assert.equal(live.lifecycle, 'live');
     assert.equal(live.health, 'healthy');
 
     await sleep(1_100);
-    const interrupted = await requestProduct(
+    const interrupted = await requestProductStatus(
       observer,
       (message) => message.room?.mic?.state === 'interrupted',
     );
@@ -61,7 +49,7 @@ test('Mic state distinguishes starting, flowing, stalled and reconnecting', asyn
 
     singer.close();
     await sleep(40);
-    const reconnecting = await requestProduct(
+    const reconnecting = await requestProductStatus(
       observer,
       (message) => message.room?.mic?.state === 'reconnecting',
     );
@@ -85,7 +73,7 @@ test('replayed legacy Mic PCM cannot keep streaming freshness alive', async () =
     const first = pcm();
     singer.sendPcm(first);
     await sleep(40);
-    await requestProduct(observer, (message) => message.room?.mic?.state === 'live');
+    await requestProductStatus(observer, (message) => message.room?.mic?.state === 'live');
 
     const replay = encodePcmFrame(singer.generationId, 0, first);
     const replayTimer = setInterval(() => singer.sendBinary(replay), 100);
@@ -95,7 +83,7 @@ test('replayed legacy Mic PCM cannot keep streaming freshness alive', async () =
       clearInterval(replayTimer);
     }
 
-    const interrupted = await requestProduct(
+    const interrupted = await requestProductStatus(
       observer,
       (message) => message.room?.mic?.state === 'interrupted',
     );
@@ -117,7 +105,7 @@ test('a new Mic owner cannot inherit the previous capture freshness', async () =
     await alice.waitForType('registered');
     alice.sendPcm(pcm());
     await sleep(40);
-    await requestProduct(observer, (message) => message.room?.mic?.state === 'live');
+    await requestProductStatus(observer, (message) => message.room?.mic?.state === 'live');
 
     const bob = await RelayClient.connect(server, '?participant=participant-bobby&name=Bob');
     bob.send({
@@ -128,7 +116,7 @@ test('a new Mic owner cannot inherit the previous capture freshness', async () =
     });
     await bob.waitFor((message) => message.type === 'registered' && message.takeover === true);
 
-    const beforeBobAudio = await requestProduct(
+    const beforeBobAudio = await requestProductStatus(
       observer,
       (message) => message.room?.mic?.ownerId === 'participant-bobby',
     );
@@ -136,7 +124,7 @@ test('a new Mic owner cannot inherit the previous capture freshness', async () =
 
     bob.sendPcm(pcm());
     await sleep(40);
-    const afterBobAudio = await requestProduct(
+    const afterBobAudio = await requestProductStatus(
       observer,
       (message) => (
         message.room?.mic?.ownerId === 'participant-bobby'
@@ -178,7 +166,7 @@ test('a room Song makes backing expected instead of silently becoming voice-only
     assert.equal(readiness.components.route.mode, 'song');
     assert.ok(readiness.reasons.includes('backing-not-connected'));
 
-    const product = await requestProduct(
+    const product = await requestProductStatus(
       observer,
       (message) => message.room?.song?.videoId === 'dQw4w9WgXcQ',
     );

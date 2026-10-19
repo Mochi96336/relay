@@ -156,7 +156,6 @@ it('retires direct-media authority at every Mic ownership terminal boundary', ()
   );
 });
 
-
 it('WebTransportMediaRuntime is inert until the optional media server starts', async () => {
   let starts = 0;
   const runtime = new WebTransportMediaRuntime(async () => {

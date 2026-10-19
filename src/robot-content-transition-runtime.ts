@@ -9,6 +9,7 @@ import {
   sweepRobotContentTransitionBounds,
   type RobotContentTransitionBounds,
   type RobotContentTransitionBoundsConfig,
+  validPositiveInt,
 } from './robot-content-transition-bounds.js';
 import { mediaToWallMs } from './boot-calibration.js';
 import {
@@ -143,11 +144,6 @@ type PendingBackingBoundary = {
 
 function validPositive(value: number, name: string) {
   if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be positive.`);
-  return value;
-}
-
-function validPositiveInt(value: number, name: string) {
-  if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer.`);
   return value;
 }
 

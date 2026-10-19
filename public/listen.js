@@ -382,7 +382,10 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     next.addEventListener('message', (event) => {
       if (socket !== next || connectEpoch !== transportEpoch) return;
       if (typeof event.data === 'string') {
-        try { handleMessage(JSON.parse(event.data)); } catch {}
+        // Only a malformed message is dropped; a fault in handling one surfaces.
+        let message;
+        try { message = JSON.parse(event.data); } catch { return; }
+        handleMessage(message);
         return;
       }
       if (!(event.data instanceof ArrayBuffer) || !audioGraphReady()) return;

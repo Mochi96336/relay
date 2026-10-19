@@ -13,7 +13,7 @@ let updateAnnounced = false;
  * than in its request URL. Reverse proxies and tunnel access logs commonly
  * retain request URLs; application messages stay inside the upgraded channel.
  */
-export function participantAuthenticationPayload() {
+function participantAuthenticationPayload() {
   const participantId = typeof window.relayParticipantId === 'string'
     ? window.relayParticipantId.trim()
     : '';

@@ -3,9 +3,9 @@ import test from 'node:test';
 
 import { parseRoomSongCommand } from '../src/room-song-command.js';
 import { RoomSongCommandSession } from '../src/room-song-command-session.js';
+import { VIDEO, telemetry } from './support/room-song-fixtures.js';
 
 const A = { participantId: 'participant-a', transportId: 'playback-tab-a', generation: 1 };
-const VIDEO = 'dQw4w9WgXcQ';
 
 function command(commandId: string, action: string, extra: Record<string, unknown> = {}) {
   const parsed = parseRoomSongCommand({ commandId, expectedRevision: 0, action, ...extra });
@@ -29,19 +29,6 @@ function room(overrides: Record<string, unknown> = {}) {
     leaderConnected: true,
     leaderFresh: true,
     handoffState: 'idle',
-    ...overrides,
-  };
-}
-
-function telemetry(overrides: Record<string, unknown> = {}) {
-  return {
-    videoId: VIDEO,
-    state: 1,
-    currentTime: 10,
-    duration: 200,
-    playbackRate: 1,
-    bufferedFraction: 0.8,
-    timelineDeltaSeconds: 0,
     ...overrides,
   };
 }

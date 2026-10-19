@@ -22,18 +22,18 @@ import { TimingWindowCollector, type TimingWindow } from './timing-window-collec
  * back to a cruder estimate and jumping it twice.
  */
 
-export const DUET_CONTENT_WINDOW_SECONDS = 6;
+export const CHOIR_CONTENT_WINDOW_SECONDS = 6;
 const RETRY_DELAY_MS = 2_500;
 const MAX_RETRY_DELAY_MS = 6_000;
 /** A singer's lag past this is a failed correlation, not a voice. */
 const MAX_LAG_MS = 2_800;
 
-export type DuetContentAnalysis = { micLagMs: number; confidence: number };
-export type DuetContentAnalyzer = (mic: Int16Array, backing: Int16Array) => Promise<DuetContentAnalysis>;
+export type ChoirContentAnalysis = { micLagMs: number; confidence: number };
+export type ChoirContentAnalyzer = (mic: Int16Array, backing: Int16Array) => Promise<ChoirContentAnalysis>;
 
 type Singer = 'primary' | 'secondary';
 
-export class DuetContent {
+export class ChoirContent {
   private readonly collectors: Record<Singer, TimingWindowCollector>;
   private readonly lags: Record<Singer, number | null> = { primary: null, secondary: null };
   /** The last measured difference, kept across a soft reset until re-measured. */
@@ -51,9 +51,9 @@ export class DuetContent {
   constructor(private readonly options: {
     sampleRate: number;
     minConfidence: number;
-    analyze: DuetContentAnalyzer;
+    analyze: ChoirContentAnalyzer;
   }) {
-    const windowSamples = DUET_CONTENT_WINDOW_SECONDS * options.sampleRate;
+    const windowSamples = CHOIR_CONTENT_WINDOW_SECONDS * options.sampleRate;
     this.collectors = {
       primary: new TimingWindowCollector(windowSamples),
       secondary: new TimingWindowCollector(windowSamples),
@@ -173,10 +173,10 @@ export class DuetContent {
 
 /**
  * The production analyzer: the six-second FFT correlation runs in one worker
- * thread, never on the 5 ms mixer tick. One job at a time (DuetContent never
+ * thread, never on the 5 ms mixer tick. One job at a time (ChoirContent never
  * overlaps them), each bounded by a timeout that replaces a stuck worker.
  */
-export function createDuetContentWorkerAnalyzer(sampleRate: number, timeoutMs = 2_000): DuetContentAnalyzer {
+export function createChoirContentWorkerAnalyzer(sampleRate: number, timeoutMs = 2_000): ChoirContentAnalyzer {
   let worker: Worker | null = null;
   let nextId = 1;
   const spawn = () => {

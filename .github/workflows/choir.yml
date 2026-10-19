@@ -1,9 +1,10 @@
-name: Choir experimental contracts
+name: Choir contracts
 
 on:
   pull_request:
     paths:
       - 'src/choir-*.ts'
+      - 'src/choir-*.mjs'
       - 'src/mic-track.ts'
       - 'src/pcm-ingest.ts'
       - 'src/audio-session.ts'
@@ -13,10 +14,7 @@ on:
       - 'test/audio-session-golden.test.ts'
       - 'test/mic-read-plan.test.ts'
       - 'CHOIR.md'
-      - '.github/workflows/choir-experiment.yml'
-  push:
-    branches:
-      - 'experiment/choir-*'
+      - '.github/workflows/choir.yml'
 
 permissions:
   contents: read
@@ -33,5 +31,5 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
-      - name: Exercise Choir contracts and exact N=1 Golden PCM baseline
+      - name: Choir contracts and the exact N=1 Golden PCM baseline
         run: node --import tsx --test --test-concurrency=1 test/choir-*.test.ts test/mic-track.test.ts test/pcm-ingest.test.ts test/mic-read-plan.test.ts test/audio-session-golden.test.ts

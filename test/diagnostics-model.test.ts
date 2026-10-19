@@ -468,7 +468,6 @@ it('Timing names sample/song when it actually controls fallback', () => {
   assert.equal(estimate.formula.value, '網路估計 +143 ms');
 });
 
-
 it('Timing hides expired YT state', () => {
   const rows = byKey(describeTiming({ source: source(),
     timeline: { connected: false, youtubeTime: 90, serverTime: 90, state: 1, playbackRate: 1 },

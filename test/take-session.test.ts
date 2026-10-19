@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { assessTakeQuality, type TakeQualityEvidence } from '../src/take-quality.js';
+import { assessTakeQuality } from '../src/take-quality.js';
 import { TakeSession, type TakeArtifact, type TakeSongSnapshot } from '../src/take-session.js';
+import { cleanTakeQualityEvidence } from './support/take-quality-evidence.js';
 
 const RATE = 48_000;
 
@@ -31,61 +32,7 @@ function position(firstSampleIndex = 0, generation = 1) {
 }
 
 function cleanQuality() {
-  const evidence: TakeQualityEvidence = {
-    sampleRate: RATE,
-    recordedSamples: RATE,
-    recordedDurationMs: 1_000,
-    micGapSamples: 0,
-    micGapMs: 0,
-    backingGapSamples: 0,
-    backingGapMs: 0,
-    micStarvedFrames: 0,
-    backingStarvedFrames: 0,
-    micStarvedSamples: 0,
-    backingStarvedSamples: 0,
-    micStarvedMs: 0,
-    backingStarvedMs: 0,
-    clippedSamples: 0,
-    clippedMs: 0,
-    micInputClippedSamples: 0,
-    micInputClippedMs: 0,
-    limitedSamples: 0,
-    limitedMs: 0,
-    unheaderedSamples: 0,
-    unheadered: false,
-    micUnavailableSamples: 0,
-    micUnavailableMs: 0,
-    backingUnavailableSamples: 0,
-    backingUnavailableMs: 0,
-    networkEstimateSamples: 0,
-    networkEstimateMs: 0,
-    calibrationStaleSamples: 0,
-    calibrationStaleMs: 0,
-    alignmentClampedSamples: 0,
-    alignmentClampedMs: 0,
-    robotDeltaMissingSamples: 0,
-    robotDeltaMissingMs: 0,
-    timingDivergedSamples: 0,
-    timingDivergedMs: 0,
-    peakTimingDivergenceMs: 0,
-    timingDivergenceToleranceMs: 40,
-    events: {
-      'mic-transport-disconnected': 0,
-      'mic-transport-connected': 0,
-      'mic-capture-restarted': 0,
-      'mic-input-gap': 0,
-      'backing-transport-disconnected': 0,
-      'backing-transport-connected': 0,
-      'backing-transport-replaced': 0,
-      'backing-capture-restarted': 0,
-      'robot-source-disconnected': 0,
-      'robot-source-connected': 0,
-      'robot-source-replaced': 0,
-      'mic-owner-changed': 0,
-      'server-shutdown': 0,
-    },
-  };
-  return assessTakeQuality(evidence);
+  return assessTakeQuality(cleanTakeQualityEvidence());
 }
 
 test('TakeSession owns one room recording lifecycle without owning the microphone', () => {

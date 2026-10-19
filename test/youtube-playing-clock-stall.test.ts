@@ -2,20 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { YouTubeTimelineTracker } from '../src/youtube-timeline.js';
+import { telemetry } from './support/timeline-telemetry.js';
 
 const VIDEO = 'dQw4w9WgXcQ';
-
-function telemetry(overrides: Record<string, unknown> = {}) {
-  return {
-    videoId: VIDEO,
-    state: 1,
-    currentTime: 10,
-    duration: 200,
-    playbackRate: 1,
-    bufferedFraction: 0.5,
-    ...overrides,
-  };
-}
 
 test('fresh 250 ms PLAYING telemetry cannot keep a frozen media clock authoritative', () => {
   const tracker = new YouTubeTimelineTracker();

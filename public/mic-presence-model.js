@@ -46,10 +46,10 @@ export function normalizePitchConfidence(pitchConfidence) {
   return Number.isFinite(value) ? clamp(value, 0, 1) : 0;
 }
 
-export const MIC_PRESENCE_MIN_LOBES = 1;
-export const MIC_PRESENCE_MAX_LOBES = 16;
+const MIC_PRESENCE_MIN_LOBES = 1;
+const MIC_PRESENCE_MAX_LOBES = 16;
 /** Where ripple density stops rising: above most sung notes. */
-export const MIC_PRESENCE_DENSEST_F0_HZ = 700;
+const MIC_PRESENCE_DENSEST_F0_HZ = 700;
 
 /**
  * Ripples across half the band for a pitch: evenly more per octave, from one

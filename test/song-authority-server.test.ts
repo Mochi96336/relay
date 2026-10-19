@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { RelayClient, sleep, startRelay } from './helpers/harness.js';
+import { registerPlayback } from './support/client-commands.js';
 
 const VIDEO = 'dQw4w9WgXcQ';
 
@@ -17,19 +18,6 @@ function telemetry(currentTime: number, transportId = 'playback-transport-a', ge
     playbackTransportId: transportId,
     playbackGeneration: generation,
   };
-}
-
-async function registerPlayback(client: RelayClient, transportId: string, generation = 1) {
-  client.send({
-    type: 'playback-hello',
-    playbackTransportId: transportId,
-    playbackGeneration: generation,
-  });
-  await client.waitFor((message) => (
-    message.type === 'playback-registered'
-    && message.playbackTransportId === transportId
-    && message.playbackGeneration === generation
-  ));
 }
 
 async function establishRoomSong(client: RelayClient, transportId: string, currentTime: number) {

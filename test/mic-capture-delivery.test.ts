@@ -2,16 +2,9 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
 import { MicCaptureDeliveryMonitor } from '../src/mic-capture-delivery.js';
+import { random } from './support/seeded-random.js';
 
 const RATE = 48_000;
-
-function random(seed: number) {
-  let state = seed >>> 0;
-  return () => {
-    state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
-    return state / 0x1_0000_0000;
-  };
-}
 
 /**
  * A phone reporting uplink health once a second. `lostMsBy(wallMs)` is the

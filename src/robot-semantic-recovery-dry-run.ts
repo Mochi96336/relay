@@ -15,7 +15,7 @@ import {
   type RobotSemanticRecoveryState,
 } from './robot-semantic-recovery-policy.js';
 
-export const ROBOT_SEMANTIC_RECOVERY_DRY_RUN_STATE_BASENAME =
+const ROBOT_SEMANTIC_RECOVERY_DRY_RUN_STATE_BASENAME =
   'relay-robot-semantic-recovery-dry-run.json';
 
 export function robotSemanticRecoveryDryRunStatePath(

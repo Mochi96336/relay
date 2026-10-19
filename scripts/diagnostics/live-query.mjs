@@ -10,7 +10,7 @@ ws.on('open', () => {
 let count = 0;
 ws.on('message', data => {
   const m = JSON.parse(data.toString());
-  if (m.type === 'take-status') { console.log(JSON.stringify({ type: m.type, lifecycle: m.lifecycle, state: m.state, phase: m.phase })); count++; }
+  if (m.type === 'take-status') { console.log(JSON.stringify({ type: m.type, lifecycle: m.lifecycle, takeId: m.take?.takeId ?? null })); count++; }
   if (m.type === 'timing-calibration-status') { console.log(JSON.stringify({ type: m.type, sampleSongFallback: m.sampleSongFallback, timingMode: m.timingMode })); count++; }
   if (count >= 2) { clearTimeout(timeout); ws.close(); }
 });

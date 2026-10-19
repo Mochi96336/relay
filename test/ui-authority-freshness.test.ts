@@ -4,6 +4,7 @@ import { runInNewContext } from 'node:vm';
 import test from 'node:test';
 
 import { authorityState } from '../public/authority-freshness.js';
+import { formatDuration } from '../public/time-format.js';
 
 const micActionsSource = readFileSync(new URL('../public/mic-actions.js', import.meta.url), 'utf8');
 const recordingUiSource = readFileSync(new URL('../public/recording-ui.js', import.meta.url), 'utf8');
@@ -13,7 +14,8 @@ const publisherSource = readFileSync(new URL('../public/app.js', import.meta.url
 const presenceSource = readFileSync(new URL('../public/presence.js', import.meta.url), 'utf8');
 
 function presenterBody(source: string) {
-  return source.replace(/^import '\.\/live-i18n\.js';\s*/, '');
+  return source.replace(/^import '\.\/live-i18n\.js';\s*/, '')
+    .replace(/^import \{ formatDuration \} from '\.\/time-format\.js';\s*/m, '');
 }
 
 function baseI18nEnglish() {
@@ -202,6 +204,7 @@ test('production recording presenter freezes last-known timer while Take authori
     document,
     Event,
     Date: FakeDate,
+    formatDuration,
     queueMicrotask,
     setTimeout,
     clearTimeout,

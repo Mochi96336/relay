@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import { TakeLibrary } from '../src/take-library.js';
 import type { TakeRecord } from '../src/take-session.js';
+import { wav } from './support/take-wav.js';
 
 const FINAL_ID = '99999999-9999-4999-8999-999999999991';
 const STAGED_ID = '99999999-9999-4999-8999-999999999992';
@@ -13,27 +14,8 @@ const ORPHAN_ID = '99999999-9999-4999-8999-999999999993';
 const SAMPLE_RATE = 48_000;
 const SAMPLE_COUNT = 4_800;
 
-function wav(sampleRate = SAMPLE_RATE, sampleCount = SAMPLE_COUNT) {
-  const dataBytes = sampleCount * 2;
-  const bytes = Buffer.alloc(44 + dataBytes);
-  bytes.write('RIFF', 0, 'ascii');
-  bytes.writeUInt32LE(36 + dataBytes, 4);
-  bytes.write('WAVE', 8, 'ascii');
-  bytes.write('fmt ', 12, 'ascii');
-  bytes.writeUInt32LE(16, 16);
-  bytes.writeUInt16LE(1, 20);
-  bytes.writeUInt16LE(1, 22);
-  bytes.writeUInt32LE(sampleRate, 24);
-  bytes.writeUInt32LE(sampleRate * 2, 28);
-  bytes.writeUInt16LE(2, 32);
-  bytes.writeUInt16LE(16, 34);
-  bytes.write('data', 36, 'ascii');
-  bytes.writeUInt32LE(dataBytes, 40);
-  return bytes;
-}
-
 function take(takeId: string, lifecycle: 'ready' | 'finalizing'): TakeRecord {
-  const bytes = wav();
+  const bytes = wav(SAMPLE_RATE, SAMPLE_COUNT);
   return {
     takeId,
     lifecycle,
@@ -74,7 +56,7 @@ function take(takeId: string, lifecycle: 'ready' | 'finalizing'): TakeRecord {
 test('valid final metadata stays authoritative when stale partial cleanup fails', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-repair-final-'));
   try {
-    await writeFile(path.join(directory, `${FINAL_ID}.wav`), wav());
+    await writeFile(path.join(directory, `${FINAL_ID}.wav`), wav(SAMPLE_RATE, SAMPLE_COUNT));
     await new TakeLibrary({ directory }).record(take(FINAL_ID, 'ready'));
 
     // A directory at the stale-part path deterministically makes non-recursive
@@ -105,7 +87,7 @@ test('valid staged metadata remains readable when cleanup and promotion cannot c
       sampleRate: SAMPLE_RATE,
       sampleCount: SAMPLE_COUNT,
     });
-    await writeFile(path.join(directory, `${STAGED_ID}.wav`), wav());
+    await writeFile(path.join(directory, `${STAGED_ID}.wav`), wav(SAMPLE_RATE, SAMPLE_COUNT));
 
     // Simulate an unremovable invalid final-sidecar path. Recovery cannot delete
     // it and therefore cannot rename the valid transaction candidate over it.

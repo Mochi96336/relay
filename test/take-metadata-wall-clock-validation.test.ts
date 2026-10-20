@@ -6,30 +6,12 @@ import test from 'node:test';
 
 import { TakeLibrary } from '../src/take-library.js';
 import type { TakeRecord } from '../src/take-session.js';
+import { wav } from './support/take-wav.js';
 
 const TAKE_ID = '99999999-9999-4999-8999-999999999999';
 const SAMPLE_RATE = 48_000;
 const SAMPLE_COUNT = 4_800;
 const MAX_JS_DATE_MS = 8_640_000_000_000_000;
-
-function wav() {
-  const dataBytes = SAMPLE_COUNT * 2;
-  const bytes = Buffer.alloc(44 + dataBytes);
-  bytes.write('RIFF', 0, 'ascii');
-  bytes.writeUInt32LE(36 + dataBytes, 4);
-  bytes.write('WAVE', 8, 'ascii');
-  bytes.write('fmt ', 12, 'ascii');
-  bytes.writeUInt32LE(16, 16);
-  bytes.writeUInt16LE(1, 20);
-  bytes.writeUInt16LE(1, 22);
-  bytes.writeUInt32LE(SAMPLE_RATE, 24);
-  bytes.writeUInt32LE(SAMPLE_RATE * 2, 28);
-  bytes.writeUInt16LE(2, 32);
-  bytes.writeUInt16LE(16, 34);
-  bytes.write('data', 36, 'ascii');
-  bytes.writeUInt32LE(dataBytes, 40);
-  return bytes;
-}
 
 function readyTake(): TakeRecord {
   return {
@@ -51,7 +33,7 @@ function readyTake(): TakeRecord {
       fileName: `${TAKE_ID}.wav`,
       url: `/takes/${TAKE_ID}.wav`,
       mimeType: 'audio/wav',
-      sizeBytes: wav().byteLength,
+      sizeBytes: wav(SAMPLE_RATE, SAMPLE_COUNT).byteLength,
       sampleRate: SAMPLE_RATE,
       channels: 1,
       bitsPerSample: 16,
@@ -74,7 +56,7 @@ async function recoverWithTimestampMutation(
 ) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-wall-clock-'));
   try {
-    await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav());
+    await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav(SAMPLE_RATE, SAMPLE_COUNT));
     const writer = new TakeLibrary({ directory });
     await writer.record(readyTake());
 
@@ -126,7 +108,7 @@ test('WAV-only recovery clamps a pre-epoch filesystem mtime into the persisted w
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-wall-clock-mtime-'));
   try {
     const wavPath = path.join(directory, `${TAKE_ID}.wav`);
-    await writeFile(wavPath, wav());
+    await writeFile(wavPath, wav(SAMPLE_RATE, SAMPLE_COUNT));
     await utimes(wavPath, new Date(-1_000), new Date(-1_000));
     if (!((await stat(wavPath)).mtimeMs < 0)) {
       // Node on Windows wraps -1 s to 2^32 - 1 s (the year 2106), so there is

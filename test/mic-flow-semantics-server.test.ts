@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { encodePcmFrame } from '../src/pcm-frame.js';
-import { RelayClient, sleep, startRelay, waitForNewMessage } from './helpers/harness.js';
+import { RelayClient, sleep, startRelay } from './helpers/harness.js';
 import { requestProductStatus } from './support/client-commands.js';
 
 const RATE = 48_000;

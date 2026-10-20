@@ -7,6 +7,7 @@ import test from 'node:test';
 import { TakeLibrary } from '../src/take-library.js';
 import { TakeQualityTracker } from '../src/take-quality.js';
 import type { TakeRecord } from '../src/take-session.js';
+import { wav } from './support/take-wav.js';
 
 const TAKE_ID = '88888888-8888-4888-8888-888888888888';
 const SAMPLE_RATE = 48_000;
@@ -16,25 +17,6 @@ const QUALITY = new TakeQualityTracker({
   backingExpected: false,
   timingExpected: false,
 }).assessment();
-
-function wav() {
-  const dataBytes = SAMPLE_COUNT * 2;
-  const bytes = Buffer.alloc(44 + dataBytes);
-  bytes.write('RIFF', 0, 'ascii');
-  bytes.writeUInt32LE(36 + dataBytes, 4);
-  bytes.write('WAVE', 8, 'ascii');
-  bytes.write('fmt ', 12, 'ascii');
-  bytes.writeUInt32LE(16, 16);
-  bytes.writeUInt16LE(1, 20);
-  bytes.writeUInt16LE(1, 22);
-  bytes.writeUInt32LE(SAMPLE_RATE, 24);
-  bytes.writeUInt32LE(SAMPLE_RATE * 2, 28);
-  bytes.writeUInt16LE(2, 32);
-  bytes.writeUInt16LE(16, 34);
-  bytes.write('data', 36, 'ascii');
-  bytes.writeUInt32LE(dataBytes, 40);
-  return bytes;
-}
 
 function readyTake(): TakeRecord {
   return {
@@ -56,7 +38,7 @@ function readyTake(): TakeRecord {
       fileName: `${TAKE_ID}.wav`,
       url: `/takes/${TAKE_ID}.wav`,
       mimeType: 'audio/wav',
-      sizeBytes: wav().byteLength,
+      sizeBytes: wav(SAMPLE_RATE, SAMPLE_COUNT).byteLength,
       sampleRate: SAMPLE_RATE,
       channels: 1,
       bitsPerSample: 16,
@@ -99,7 +81,7 @@ function assertRichEvidence(entry: ReturnType<TakeLibrary['get']>) {
 test('invalid derived artifact claims do not discard valid finalized rich metadata', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-derived-final-'));
   try {
-    await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav());
+    await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav(SAMPLE_RATE, SAMPLE_COUNT));
     const library = new TakeLibrary({ directory });
     await library.record(readyTake());
 
@@ -141,7 +123,7 @@ test('crash recovery promotes rich metadata partials even when only derived arti
 
     // Simulate the #273 crash window: WAV publication succeeded but the process
     // died before the staged metadata candidate could be renamed.
-    await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav());
+    await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav(SAMPLE_RATE, SAMPLE_COUNT));
 
     const restarted = new TakeLibrary({ directory });
     restarted.prepare();

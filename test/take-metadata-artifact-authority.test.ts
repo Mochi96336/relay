@@ -6,30 +6,12 @@ import test from 'node:test';
 
 import { TakeLibrary } from '../src/take-library.js';
 import type { TakeRecord } from '../src/take-session.js';
+import { wav } from './support/take-wav.js';
 
 const TAKE_ID = '77777777-7777-4777-8777-777777777777';
 const SAMPLE_RATE = 44_100;
 const SAMPLE_COUNT = 1_001;
 const EXPECTED_DURATION_MS = (SAMPLE_COUNT / SAMPLE_RATE) * 1000;
-
-function wav(sampleRate = SAMPLE_RATE, sampleCount = SAMPLE_COUNT) {
-  const dataBytes = sampleCount * 2;
-  const bytes = Buffer.alloc(44 + dataBytes);
-  bytes.write('RIFF', 0, 'ascii');
-  bytes.writeUInt32LE(36 + dataBytes, 4);
-  bytes.write('WAVE', 8, 'ascii');
-  bytes.write('fmt ', 12, 'ascii');
-  bytes.writeUInt32LE(16, 16);
-  bytes.writeUInt16LE(1, 20);
-  bytes.writeUInt16LE(1, 22);
-  bytes.writeUInt32LE(sampleRate, 24);
-  bytes.writeUInt32LE(sampleRate * 2, 28);
-  bytes.writeUInt16LE(2, 32);
-  bytes.writeUInt16LE(16, 34);
-  bytes.write('data', 36, 'ascii');
-  bytes.writeUInt32LE(dataBytes, 40);
-  return bytes;
-}
 
 function readyTake(url = `/takes/${TAKE_ID}.wav`): TakeRecord {
   return {
@@ -51,7 +33,7 @@ function readyTake(url = `/takes/${TAKE_ID}.wav`): TakeRecord {
       fileName: `${TAKE_ID}.wav`,
       url,
       mimeType: 'audio/wav',
-      sizeBytes: wav().byteLength,
+      sizeBytes: wav(SAMPLE_RATE, SAMPLE_COUNT).byteLength,
       sampleRate: SAMPLE_RATE,
       channels: 1,
       bitsPerSample: 16,
@@ -81,7 +63,7 @@ function finalizingTake(): TakeRecord {
 test('runtime history derives URL and duration from the validated WAV, not persisted sidecar claims', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-artifact-authority-'));
   try {
-    await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav());
+    await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav(SAMPLE_RATE, SAMPLE_COUNT));
     const writer = new TakeLibrary({ directory });
     await writer.record(readyTake());
 
@@ -118,7 +100,7 @@ test('runtime history derives URL and duration from the validated WAV, not persi
 test('WAV-only recovery persists the same fractional duration formula as the live writer', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-artifact-duration-'));
   try {
-    await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav());
+    await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav(SAMPLE_RATE, SAMPLE_COUNT));
     const library = new TakeLibrary({ directory });
     library.prepare();
 
@@ -145,7 +127,7 @@ test('staged byte-identity commit stays separate from runtime artifact normaliza
     });
     assert.equal(staged.artifact?.url, `/media//${TAKE_ID}.wav`);
 
-    await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav());
+    await writeFile(path.join(directory, `${TAKE_ID}.wav`), wav(SAMPLE_RATE, SAMPLE_COUNT));
     const committed = await library.commitStaged(readyTake(`/media//${TAKE_ID}.wav`));
     assert.equal(committed.artifact.url, `/media//${TAKE_ID}.wav`);
 

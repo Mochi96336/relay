@@ -1,22 +1,15 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
   functionCode,
-  parseTypeScriptSource,
+  readSourceContract,
   sourceCode,
 } from './support/source-contract.js';
 
 test('capture gaps are reported as exact sample deltas without changing the padded sample count', () => {
-  const worklet = parseTypeScriptSource(
-    new URL('../public/capture-worklet.js', import.meta.url),
-    readFileSync(new URL('../public/capture-worklet.js', import.meta.url), 'utf8'),
-  );
-  const app = parseTypeScriptSource(
-    new URL('../public/app.js', import.meta.url),
-    readFileSync(new URL('../public/app.js', import.meta.url), 'utf8'),
-  );
+  const worklet = readSourceContract('public/capture-worklet.js');
+  const app = readSourceContract('public/app.js');
   const workletCode = sourceCode(worklet);
   const appCode = sourceCode(app);
   const workletHandler = functionCode(app, 'handleCaptureWorkletMessage');
@@ -36,10 +29,7 @@ test('capture gaps are reported as exact sample deltas without changing the padd
 });
 
 test('readiness samples media connectivity rather than only the control websocket', () => {
-  const server = parseTypeScriptSource(
-    new URL('../src/server.ts', import.meta.url),
-    readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
-  );
+  const server = readSourceContract('src/server.ts');
   const readiness = functionCode(server, 'readinessPayload');
   assert.match(readiness, /micConnected: micMediaConnected\(\)/);
   assert.doesNotMatch(readiness, /micConnected: publisher\?\.readyState === WebSocket\.OPEN/);

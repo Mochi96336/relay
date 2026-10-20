@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { AudioSession } from '../src/audio-session.js';
 import {
-  parseTypeScriptSource,
+  readSourceContract,
   sourceCode,
   variableInitializerCode,
 } from './support/source-contract.js';
@@ -56,10 +55,7 @@ test('a premixed capture is mixed at unity while the room gain setting is kept',
 });
 
 test('server owns Mic gain command authorization, clamping and publication', () => {
-  const server = parseTypeScriptSource(
-    new URL('../src/server.ts', import.meta.url),
-    readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
-  );
+  const server = readSourceContract('src/server.ts');
   const serverCode = sourceCode(server);
 
   assert.doesNotMatch(serverCode, /let\s+micGainDb\s*=/);

@@ -1,26 +1,16 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
   classMethodCode,
   functionCode,
-  parseTypeScriptSource,
+  readSourceContract,
   sourceCode,
 } from './support/source-contract.js';
 
-const liveStatus = parseTypeScriptSource(
-  new URL('../public/live-status.js', import.meta.url),
-  readFileSync(new URL('../public/live-status.js', import.meta.url), 'utf8'),
-);
-const server = parseTypeScriptSource(
-  new URL('../src/server.ts', import.meta.url),
-  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
-);
-const micRuntime = parseTypeScriptSource(
-  new URL('../src/mic-runtime.ts', import.meta.url),
-  readFileSync(new URL('../src/mic-runtime.ts', import.meta.url), 'utf8'),
-);
+const liveStatus = readSourceContract('public/live-status.js');
+const server = readSourceContract('src/server.ts');
+const micRuntime = readSourceContract('src/mic-runtime.ts');
 
 test('product UI keeps Mic startup, PCM stall and transport reconnect distinct', () => {
   const statusCode = sourceCode(liveStatus);

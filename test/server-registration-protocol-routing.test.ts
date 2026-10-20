@@ -1,22 +1,15 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
   functionCode,
-  parseTypeScriptSource,
+  readSourceContract,
   sourceCode,
   variableInitializerCode,
 } from './support/source-contract.js';
 
-const server = parseTypeScriptSource(
-  new URL('../src/server.ts', import.meta.url),
-  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
-);
-const protocol = parseTypeScriptSource(
-  new URL('../src/relay-registration-protocol.ts', import.meta.url),
-  readFileSync(new URL('../src/relay-registration-protocol.ts', import.meta.url), 'utf8'),
-);
+const server = readSourceContract('src/server.ts');
+const protocol = readSourceContract('src/relay-registration-protocol.ts');
 
 test('server delegates known registration role selection through its own seam', () => {
   const serverCode = sourceCode(server);

@@ -1,11 +1,9 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 import { PublisherSession } from '../public/publisher-session.js';
-import { functionCode, parseTypeScriptSource } from './support/source-contract.js';
-const source = parseTypeScriptSource(new URL('../public/app.js', import.meta.url),
-  readFileSync(new URL('../public/app.js', import.meta.url), 'utf8'));
+import { functionCode, readSourceContract } from './support/source-contract.js';
+const source = readSourceContract('public/app.js');
 
 function harness(load: () => Promise<void> = async () => {}) {
   const events: string[] = [];

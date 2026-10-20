@@ -4,27 +4,15 @@ import test from 'node:test';
 
 import {
   functionCode,
-  parseTypeScriptSource,
+  readSourceContract,
   sourceCode,
   variableInitializerCode,
 } from './support/source-contract.js';
 
-const app = parseTypeScriptSource(
-  new URL('../public/app.js', import.meta.url),
-  readFileSync(new URL('../public/app.js', import.meta.url), 'utf8'),
-);
-const server = parseTypeScriptSource(
-  new URL('../src/server.ts', import.meta.url),
-  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
-);
-const liveStatus = parseTypeScriptSource(
-  new URL('../public/live-status.js', import.meta.url),
-  readFileSync(new URL('../public/live-status.js', import.meta.url), 'utf8'),
-);
-const presence = parseTypeScriptSource(
-  new URL('../public/mic-presence.js', import.meta.url),
-  readFileSync(new URL('../public/mic-presence.js', import.meta.url), 'utf8'),
-);
+const app = readSourceContract('public/app.js');
+const server = readSourceContract('src/server.ts');
+const liveStatus = readSourceContract('public/live-status.js');
+const presence = readSourceContract('public/mic-presence.js');
 const stateCss = readFileSync(new URL('../public/live-state.css', import.meta.url), 'utf8');
 
 const appCode = sourceCode(app);

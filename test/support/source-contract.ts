@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 type SourceContract = {
   fileName: string;
@@ -202,6 +203,12 @@ export function parseTypeScriptSource(url: URL, text: string): SourceContract {
     text,
     codeMask: maskNonCode(text),
   };
+}
+
+/** Reads and parses a repository file, named from the repository root (`src/server.ts`). */
+export function readSourceContract(file: string) {
+  const url = new URL(`../../${file}`, import.meta.url);
+  return parseTypeScriptSource(url, readFileSync(url, 'utf8'));
 }
 
 export function functionCode(source: SourceContract, name: string) {

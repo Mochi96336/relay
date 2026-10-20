@@ -1,19 +1,15 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { RobotPlayerOffsetTracker } from '../src/robot-player-offset.js';
 import {
   functionCode,
-  parseTypeScriptSource,
+  readSourceContract,
   sourceCode,
   variableInitializerCode,
 } from './support/source-contract.js';
 
-const server = parseTypeScriptSource(
-  new URL('../src/server.ts', import.meta.url),
-  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
-);
+const server = readSourceContract('src/server.ts');
 
 function tracker() {
   return new RobotPlayerOffsetTracker({ freshForMs: 2_000, windowMs: 2_000 });

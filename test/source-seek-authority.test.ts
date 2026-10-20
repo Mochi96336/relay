@@ -1,22 +1,15 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { RelayClient, sleep, startRelay } from './helpers/harness.js';
 import {
   functionCode,
-  parseTypeScriptSource,
+  readSourceContract,
   variableInitializerCode,
 } from './support/source-contract.js';
 
-const source = parseTypeScriptSource(
-  new URL('../public/source.js', import.meta.url),
-  readFileSync(new URL('../public/source.js', import.meta.url), 'utf8'),
-);
-const server = parseTypeScriptSource(
-  new URL('../src/server.ts', import.meta.url),
-  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
-);
+const source = readSourceContract('public/source.js');
+const server = readSourceContract('src/server.ts');
 
 test('an unarmed Source preview cannot announce or chase authoritative seek discontinuities', () => {
   const applyTimeline = functionCode(source, 'applyTimeline');

@@ -1,26 +1,16 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
   importSources,
-  parseTypeScriptSource,
+  readSourceContract,
   sourceCode,
   variableInitializerCode,
 } from './support/source-contract.js';
 
-const server = parseTypeScriptSource(
-  new URL('../src/server.ts', import.meta.url),
-  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
-);
-const runtime = parseTypeScriptSource(
-  new URL('../src/timing-runtime.ts', import.meta.url),
-  readFileSync(new URL('../src/timing-runtime.ts', import.meta.url), 'utf8'),
-);
-const contentCoordinator = parseTypeScriptSource(
-  new URL('../src/content-calibration-coordinator.ts', import.meta.url),
-  readFileSync(new URL('../src/content-calibration-coordinator.ts', import.meta.url), 'utf8'),
-);
+const server = readSourceContract('src/server.ts');
+const runtime = readSourceContract('src/timing-runtime.ts');
+const contentCoordinator = readSourceContract('src/content-calibration-coordinator.ts');
 const serverCode = sourceCode(server);
 
 test('TimingRuntime owns orchestration metadata without absorbing timing authorities', () => {

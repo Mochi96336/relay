@@ -1,21 +1,14 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
-  parseTypeScriptSource,
+  readSourceContract,
   sourceCode,
   variableInitializerCode,
 } from './support/source-contract.js';
 
-const runtime = parseTypeScriptSource(
-  new URL('../src/backing-runtime.ts', import.meta.url),
-  readFileSync(new URL('../src/backing-runtime.ts', import.meta.url), 'utf8'),
-);
-const server = parseTypeScriptSource(
-  new URL('../src/server.ts', import.meta.url),
-  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
-);
+const runtime = readSourceContract('src/backing-runtime.ts');
+const server = readSourceContract('src/server.ts');
 
 test('BackingRuntime owns transport lifecycle without absorbing domain authority', () => {
   const runtimeCode = sourceCode(runtime);

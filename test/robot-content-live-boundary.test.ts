@@ -4,16 +4,15 @@ import test from 'node:test';
 import {
   RelayClient,
   pulseTrain,
-  sleep,
   startRelay,
   toInt16,
 } from './helpers/harness.js';
 import {
   acknowledgeNextBackingBoundary,
   backingBoundaryRequestCount,
+  laggedBacking,
   playingTelemetry,
   robotRoom,
-  type RobotRoom,
   waitForRobotMapping,
   waitForTimingStatus,
 } from './support/robot-content-room.js';
@@ -21,6 +20,7 @@ import {
 const RATE = 48_000;
 const FRAME_SAMPLES = Math.round(RATE * 0.02);
 const PATH_LAG_MS = 250;
+const { makeBackingFrame, sendRange } = laggedBacking(PATH_LAG_MS);
 const INITIAL_DELTA_MS = 450; // Largest usable residual; larger reports are convergence.
 const REFERENCE_LAG_MS = PATH_LAG_MS + INITIAL_DELTA_MS;
 const INITIAL_CONFIRMED_END = Math.round(RATE * 7.0);
@@ -43,37 +43,6 @@ const PROBE_FAST = {
   RELAY_CALIBRATION_TIMEOUT_MS: '20000',
   RELAY_HEARTBEAT_MS: '60000',
 };
-
-function makeBackingFrame(
-  master: Float64Array,
-  startSample: number,
-  endSample: number,
-  deltaMs: number,
-) {
-  const advanceSamples = Math.round((RATE * (PATH_LAG_MS + deltaMs)) / 1_000);
-  return toInt16(
-    master.subarray(startSample + advanceSamples, endSample + advanceSamples),
-    0.9,
-  );
-}
-
-async function sendRange(
-  room: RobotRoom,
-  mic: Buffer,
-  master: Float64Array,
-  startSample: number,
-  endSample: number,
-  deltaMs: number,
-) {
-  let frames = 0;
-  for (let start = startSample; start < endSample; start += FRAME_SAMPLES) {
-    const end = Math.min(endSample, start + FRAME_SAMPLES);
-    room.backing.sendPcm(makeBackingFrame(master, start, end, deltaMs));
-    room.publisher.sendPcm(mic.subarray(start * 2, end * 2));
-    frames += 1;
-    if (frames % 25 === 0) await sleep(0);
-  }
-}
 
 async function waitForActiveLag(monitor: RelayClient, expectedMs: number, timeoutMs: number, from?: number) {
   return waitForTimingStatus(

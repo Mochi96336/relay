@@ -1,4 +1,4 @@
-import { RelayClient, sleep, type RelayServer } from '../helpers/harness.js';
+import { RelayClient, sleep, toInt16, type RelayServer } from '../helpers/harness.js';
 
 const RATE = 48_000;
 
@@ -105,4 +105,46 @@ export async function acknowledgeNextBackingBoundary(backing: RelayClient, previ
     firstSampleIndex: backing.cursor,
   });
   await sleep(20);
+}
+
+const FRAME_SAMPLES = Math.round(RATE * 0.02);
+
+/**
+ * The backing of a Robot whose path lags the Mic by `pathLagMs` (plus each
+ * call's `deltaMs`): makeBackingFrame cuts the master where the Robot is
+ * playing it, and sendRange streams it beside the Mic in 20 ms frames.
+ */
+export function laggedBacking(pathLagMs: number) {
+  function makeBackingFrame(
+    master: Float64Array,
+    startSample: number,
+    endSample: number,
+    deltaMs: number,
+  ) {
+    const advanceSamples = Math.round((RATE * (pathLagMs + deltaMs)) / 1_000);
+    return toInt16(
+      master.subarray(startSample + advanceSamples, endSample + advanceSamples),
+      0.9,
+    );
+  }
+
+  async function sendRange(
+    room: RobotRoom,
+    mic: Buffer,
+    master: Float64Array,
+    startSample: number,
+    endSample: number,
+    deltaMs: number,
+  ) {
+    let frames = 0;
+    for (let start = startSample; start < endSample; start += FRAME_SAMPLES) {
+      const end = Math.min(endSample, start + FRAME_SAMPLES);
+      room.backing.sendPcm(makeBackingFrame(master, start, end, deltaMs));
+      room.publisher.sendPcm(mic.subarray(start * 2, end * 2));
+      frames += 1;
+      if (frames % 25 === 0) await sleep(0);
+    }
+  }
+
+  return { makeBackingFrame, sendRange };
 }

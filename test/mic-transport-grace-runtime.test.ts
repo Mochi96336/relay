@@ -1,11 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import { MicTransportGraceRuntime } from '../src/mic-transport-grace-runtime.js';
-
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
 
 test('MicTransportGraceRuntime rejects invalid grace durations', () => {
   assert.throws(

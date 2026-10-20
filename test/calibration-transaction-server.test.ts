@@ -4,11 +4,10 @@ import test from 'node:test';
 import {
   RelayClient,
   laggedPair,
-  pulseTrain,
+  primeStreams,
   sendPcmInChunks,
   startCalibrationCollecting,
   startRelay,
-  toInt16,
   waitForNewMessage,
 } from './helpers/harness.js';
 import { playingRoomSong } from './support/client-commands.js';
@@ -17,23 +16,11 @@ const RATE = 48_000;
 const FAST = {
   RELAY_LIVE_PREBUFFER_MS: '200',
   RELAY_CALIBRATION_TIMEOUT_MS: '1500',
-  RELAY_HEARTBEAT_MS: '60000',
   RELAY_AUTO_CALIBRATE: '0',
   RELAY_CALIBRATION_AGREEMENT: '1',
   RELAY_CALIBRATION_PROBE: '0',
   RELAY_CALIBRATION_VALIDATION: '0',
 };
-
-function tone(seconds: number, gain = 0.6, seed = 5) {
-  return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, seed), gain);
-}
-
-async function primeStreams(backing: RelayClient, publisher: RelayClient) {
-  await Promise.all([
-    sendPcmInChunks(backing, tone(0.5, 0.8)),
-    sendPcmInChunks(publisher, tone(0.5, 0.4)),
-  ]);
-}
 
 async function completeCalibration(
   backing: RelayClient,

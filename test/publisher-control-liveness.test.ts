@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import WebSocket from 'ws';
 
@@ -92,7 +93,7 @@ test('a v2 publisher control socket is closed once nothing arrives on it', async
   const current = fakeSocket();
   bindV2(mic, current.socket, 9);
 
-  await new Promise((resolve) => setTimeout(resolve, 80));
+  await sleep(80);
 
   assert.deepEqual(current.closed, [{ code: 4000, reason: 'publisher uplink health stale' }]);
   assert.equal(current.terminated(), 0);
@@ -110,7 +111,7 @@ test('legacy v1 publisher sockets keep the existing transport heartbeat contract
     nowMs: 100,
   });
 
-  await new Promise((resolve) => setTimeout(resolve, 70));
+  await sleep(70);
 
   assert.equal(legacy.closed.length, 0);
   assert.equal(legacy.terminated(), 0);
@@ -123,9 +124,9 @@ test('replacing a publisher moves the liveness lease to the new physical socket'
   const replacement = fakeSocket();
   bindV2(mic, first.socket, 12);
 
-  await new Promise((resolve) => setTimeout(resolve, 15));
+  await sleep(15);
   bindV2(mic, replacement.socket, 12);
-  await new Promise((resolve) => setTimeout(resolve, 70));
+  await sleep(70);
 
   assert.equal(first.closed.length, 0, 'an old deadline must never close a replacement socket');
   assert.deepEqual(replacement.closed, [{ code: 4000, reason: 'publisher uplink health stale' }]);
@@ -141,7 +142,7 @@ test('a publisher socket that keeps receiving is not closed while its health is 
   const until = performance.now() + 200;
   while (performance.now() < until) {
     mic.noteInbound(current.socket);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await sleep(10);
   }
   assert.deepEqual(current.closed, [], 'five silence windows passed, but something kept arriving');
   mic.detachPublisher(current.socket);
@@ -155,7 +156,7 @@ test('a publisher socket that keeps receiving but never sends accepted health is
   const until = performance.now() + 300;
   while (performance.now() < until && current.closed.length === 0) {
     mic.noteInbound(current.socket);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await sleep(10);
   }
   assert.deepEqual(current.closed, [{ code: 4000, reason: 'publisher uplink health stale' }]);
   mic.detachPublisher(current.socket);
@@ -170,7 +171,7 @@ test('messages on another socket do not keep the publisher socket open', async (
   const until = performance.now() + 120;
   while (performance.now() < until) {
     mic.noteInbound(other.socket);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await sleep(10);
   }
   assert.deepEqual(current.closed, [{ code: 4000, reason: 'publisher uplink health stale' }]);
   mic.detachPublisher(current.socket);

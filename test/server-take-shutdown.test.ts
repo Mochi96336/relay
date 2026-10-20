@@ -30,7 +30,6 @@ for (const shutdownSignal of ['SIGTERM', 'SIGINT'] as const) {
         RELAY_TAKE_DIR: directory,
         RELAY_AUTO_CALIBRATE: '0',
         RELAY_CALIBRATION_PROBE: '0',
-        RELAY_HEARTBEAT_MS: '60000',
         RELAY_LIVE_PREBUFFER_MS: '1',
       };
       first = await startRelay(env);

@@ -3,6 +3,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import {
   WavTakeWriter,
@@ -71,7 +72,7 @@ test('WavTakeWriter streams PCM into a hidden partial file and publishes only af
     writer.append(second);
 
     // The stable artifact name must not exist until RIFF lengths are patched.
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await sleep(20);
     const during = await readdir(directory);
     assert.equal(during.includes('take-test.wav'), false);
     assert.equal(during.includes('take-test.wav.part'), true);
@@ -141,7 +142,7 @@ test('abort removes a stable WAV left by a failed publication', async () => {
       sampleRate: 48_000,
     });
     writer.append(Buffer.alloc(1_920));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await sleep(20);
 
     // Model durableRename() after rename succeeded but before the parent
     // directory sync completed: finalization will be treated as failed, yet a

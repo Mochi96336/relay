@@ -12,6 +12,7 @@ import {
   toInt16,
   type RelayServer,
 } from './helpers/harness.js';
+import { registerPlayback } from './support/client-commands.js';
 
 /**
  * A Take deliberately freezes the mixer alignment for the whole recording,
@@ -46,7 +47,6 @@ const FAST = {
   RELAY_AUTO_CALIBRATION_RETRY_MS: '100',
   RELAY_CALIBRATION_AGREEMENT: '1',
   RELAY_CALIBRATION_TIMEOUT_MS: '30000',
-  RELAY_HEARTBEAT_MS: '60000',
   // Let the smoothing median follow a sustained drift inside the test rather
   // than over the production two-second window.
   RELAY_ROBOT_OFFSET_WINDOW_MS: '300',
@@ -79,21 +79,16 @@ type Room = {
  * here would silently test a room that never reaches content authority.
  */
 async function robotRoom(server: RelayServer): Promise<Room> {
-  const backing = await RelayClient.connectInfrastructure(server);
-  backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
-  await backing.waitForType('registered');
+  const backing = await RelayClient.connectBacking(server, { robot: true });
 
   const singer = await RelayClient.connectAs(server, 'singer-1', 'Singer');
 
   const robot = await RelayClient.connectInfrastructure(server);
   robot.send({ type: 'robot-source-hello' });
 
-  const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
-  monitor.send({ type: 'register', role: 'monitor' });
-  await monitor.waitForType('registered');
+  const monitor = await RelayClient.connectMonitor(server);
 
-  singer.send({ type: 'playback-hello', playbackTransportId: 'singer-playback', playbackGeneration: 1 });
-  await singer.waitForType('playback-registered');
+  await registerPlayback(singer, 'singer-playback');
 
   singer.send({
     type: 'room-song-command',

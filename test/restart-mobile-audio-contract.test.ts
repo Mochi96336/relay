@@ -23,7 +23,7 @@ test('server process incarnation scopes Presence and room Song revisions', async
   assert.match(presenceSource, /sameIncarnation[\s\S]*Number\(message\.revision\) < Number\(latestSession\.revision\)/);
   assert.match(youtubeSyncSource, /incarnation !== roomCommandServerIncarnation[\s\S]*roomCommandRevision = revision/);
 
-  const server = await startRelay({ RELAY_HEARTBEAT_MS: '60000' });
+  const server = await startRelay();
   try {
     const presence = await RelayClient.connectAs(server, 'epoch-test', 'Epoch');
     const session = await presence.waitForType('session-status');

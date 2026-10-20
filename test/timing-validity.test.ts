@@ -5,12 +5,12 @@ import test, { describe } from 'node:test';
 import {
   RelayClient,
   laggedPair,
-  pulseTrain,
+  primeStreams,
   sendPcmInChunks,
   sleep,
   startCalibrationCollecting,
   startRelay,
-  toInt16,
+  tone,
   waitForNewMessage,
   type RelayServer,
 } from './helpers/harness.js';
@@ -20,37 +20,21 @@ const RATE = 48_000;
 const FAST = {
   RELAY_LIVE_PREBUFFER_MS: '200',
   RELAY_CALIBRATION_TIMEOUT_MS: '1500',
-  RELAY_HEARTBEAT_MS: '60000',
   RELAY_AUTO_CALIBRATE: '0',
   RELAY_CALIBRATION_AGREEMENT: '1',
   RELAY_CALIBRATION_PROBE: '0',
 };
 
-function tone(seconds: number, gain = 0.6, seed = 5) {
-  return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, seed), gain);
-}
-
 async function liveSession(server: RelayServer, robotBacking = false) {
-  const backing = await RelayClient.connectInfrastructure(server);
-  backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: robotBacking });
-  await backing.waitForType('registered');
+  const backing = await RelayClient.connectBacking(server, { robot: robotBacking });
 
   const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
   publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
   await publisher.waitForType('registered');
 
-  const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
-  monitor.send({ type: 'register', role: 'monitor' });
-  await monitor.waitForType('registered');
+  const monitor = await RelayClient.connectMonitor(server);
 
   return { backing, publisher, monitor };
-}
-
-async function primeStreams(backing: RelayClient, publisher: RelayClient) {
-  await Promise.all([
-    sendPcmInChunks(backing, tone(0.5, 0.8)),
-    sendPcmInChunks(publisher, tone(0.5, 0.4)),
-  ]);
 }
 
 async function calibrate(
@@ -272,9 +256,7 @@ describe('robot calibration ownership', () => {
   test('only the newest robot source can publish delta', async () => {
     const server = await startRelay(ROBOT_FAST);
     try {
-      const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
-      monitor.send({ type: 'register', role: 'monitor' });
-      await monitor.waitForType('registered');
+      const monitor = await RelayClient.connectMonitor(server);
 
       const first = await RelayClient.connectInfrastructure(server);
       first.send({ type: 'robot-source-hello' });

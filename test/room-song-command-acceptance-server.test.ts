@@ -2,14 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { RelayClient, sleep, startRelay, waitForNewMessage } from './helpers/harness.js';
+import { registerPlayback } from './support/client-commands.js';
 
 const VIDEO = 'dQw4w9WgXcQ';
-const FAST = { RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000' };
+const FAST = { RELAY_AUTO_CALIBRATE: '0' };
 
 async function playbackTab(server: Awaited<ReturnType<typeof startRelay>>) {
   const tab = await RelayClient.connectAs(server, 'a', 'A');
-  tab.send({ type: 'playback-hello', playbackTransportId: 'acceptance-tab', playbackGeneration: 1 });
-  await tab.waitForType('playback-registered');
+  await registerPlayback(tab, 'acceptance-tab');
   return tab;
 }
 

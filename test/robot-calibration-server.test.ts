@@ -10,37 +10,27 @@ import {
   startCalibrationCollecting,
   startRelay,
   toInt16,
+  tone,
   waitForNewMessage,
 } from './helpers/harness.js';
-import { playingRoomSong } from './support/client-commands.js';
+import { playingRoomSong, timingStatus } from './support/client-commands.js';
 
 const RATE = 48_000;
 const FAST = {
   RELAY_LIVE_PREBUFFER_MS: '200',
   // Generous: a calibration has to finish even under a loaded full run.
   RELAY_CALIBRATION_TIMEOUT_MS: '15000',
-  RELAY_HEARTBEAT_MS: '60000',
   RELAY_AUTO_CALIBRATE: '0',
   RELAY_CALIBRATION_AGREEMENT: '1',
   RELAY_CALIBRATION_PROBE: '0',
   RELAY_CALIBRATION_VALIDATION: '0',
 };
 
-function tone(seconds: number, gain: number) {
-  return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, 5), gain);
-}
-
 /** Sends real-time 20 ms frames, as a live capture would, until stopped. */
 function streamLive(client: RelayClient, gain: number) {
   const frame = toInt16(pulseTrain(960, RATE, 5), gain);
   const timer = setInterval(() => client.sendPcm(frame), 20);
   return () => clearInterval(timer);
-}
-
-async function timingStatus(monitor: RelayClient) {
-  const from = monitor.messages.length;
-  monitor.send({ type: 'timing-calibration-status-request' });
-  return waitForNewMessage(monitor, from, (message) => message.type === 'timing-calibration-status');
 }
 
 test('a content calibration from the desktop route does not survive the room becoming Robot', async () => {

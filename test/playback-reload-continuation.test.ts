@@ -6,13 +6,13 @@ import { parseRoomSongCommand } from '../src/room-song-command.js';
 import { RoomSongCommandSession } from '../src/room-song-command-session.js';
 import { SongSession } from '../src/song-session.js';
 import { participantIdFor, RelayClient, startRelay } from './helpers/harness.js';
+import { playRoomSong, registerPlayback } from './support/client-commands.js';
 import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
 const RATE = 48_000;
 const VIDEO = 'dQw4w9WgXcQ';
 const FAST = {
   RELAY_AUTO_CALIBRATE: '0',
-  RELAY_HEARTBEAT_MS: '60000',
 };
 
 const A = { participantId: participantIdFor('A'), transportId: 'playback-tab-a', generation: 10 };
@@ -50,12 +50,7 @@ async function playback(
   name: string,
 ) {
   const client = await RelayClient.connectAs(server, name);
-  client.send({
-    type: 'playback-hello',
-    playbackTransportId: identity.transportId,
-    playbackGeneration: identity.generation,
-  });
-  await client.waitForType('playback-registered');
+  await registerPlayback(client, identity.transportId, identity.generation);
   return client;
 }
 
@@ -77,27 +72,6 @@ async function publisher(
   client.send(registration);
   await client.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
   return client;
-}
-
-async function establishRoom(client: RelayClient, prefix: string) {
-  const loadId = `${prefix}-load`;
-  client.send({
-    type: 'room-song-command',
-    commandId: loadId,
-    expectedRevision: 0,
-    action: 'load',
-    videoId: VIDEO,
-    positionSeconds: 10,
-  });
-  await client.waitFor((message) => message.type === 'room-song-command-apply' && message.commandId === loadId);
-  client.send(telemetry(10, { state: 5 }));
-  await client.waitFor((message) => message.type === 'room-song-command-complete' && message.commandId === loadId);
-
-  const playId = `${prefix}-play`;
-  client.send({ type: 'room-song-command', commandId: playId, expectedRevision: 1, action: 'play' });
-  await client.waitFor((message) => message.type === 'room-song-command-apply' && message.commandId === playId);
-  client.send(telemetry(10.05));
-  await client.waitFor((message) => message.type === 'room-song-command-complete' && message.commandId === playId);
 }
 
 test('reload bootstrap waits for YouTube readiness and suppresses transient iframe telemetry', async () => {
@@ -178,7 +152,7 @@ test('Mic takeover can continue through a reload of its prepared playback tab', 
   try {
     const aPlayback = await playback(server, A, 'A');
     const aPublisher = await publisher(server, 'A');
-    await establishRoom(aPlayback, 'reload-handoff');
+    await playRoomSong(aPlayback, { prefix: 'reload-handoff' });
 
     const bPlayback = await playback(server, B, 'B');
     bPlayback.send({ type: 'playback-mic-intent' });
@@ -225,7 +199,7 @@ test('reload hello clears an old-generation command without waiting for command 
   try {
     const aPlayback = await playback(server, A, 'A');
     const aPublisher = await publisher(server, 'A');
-    await establishRoom(aPlayback, 'reload-command');
+    await playRoomSong(aPlayback, { prefix: 'reload-command' });
 
     const pendingId = 'reload-command-pause';
     aPlayback.send({ type: 'room-song-command', commandId: pendingId, expectedRevision: 2, action: 'pause' });

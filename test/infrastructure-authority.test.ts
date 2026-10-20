@@ -21,7 +21,6 @@ async function productionRelay() {
     RELAY_INFRA_KEY: INFRA_KEY,
     RELAY_AUTO_CALIBRATE: '0',
     RELAY_CALIBRATION_PROBE: '0',
-    RELAY_HEARTBEAT_MS: '60000',
   });
 }
 

@@ -23,9 +23,7 @@ function typesSince(client: RelayClient, from: number) {
 }
 
 async function playingRoom(server: Awaited<ReturnType<typeof startRelay>>) {
-  const backing = await RelayClient.connectInfrastructure(server);
-  backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
-  await backing.waitForType('registered');
+  const backing = await RelayClient.connectBacking(server);
   const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
   publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
   await publisher.waitForType('registered');

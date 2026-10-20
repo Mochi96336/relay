@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { participantIdFor, RelayClient, startRelay } from './helpers/harness.js';
+import { playRoomSong, registerPlayback } from './support/client-commands.js';
 import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
 const RATE = 48_000;
 const VIDEO = 'dQw4w9WgXcQ';
 const FAST = {
   RELAY_AUTO_CALIBRATE: '0',
-  RELAY_HEARTBEAT_MS: '60000',
 };
 
 const A_ID = participantIdFor('A');
@@ -19,8 +19,7 @@ async function playback(
   transportId: string,
 ) {
   const client = await RelayClient.connectAs(server, name);
-  client.send({ type: 'playback-hello', playbackTransportId: transportId, playbackGeneration: 1 });
-  await client.waitForType('playback-registered');
+  await registerPlayback(client, transportId);
   return client;
 }
 
@@ -45,36 +44,12 @@ function telemetry(currentTime: number, overrides: Record<string, unknown> = {})
   return { type: 'youtube-telemetry', ...youtubeTelemetry({ currentTime, ...overrides }) };
 }
 
-async function establishPlayingRoom(client: RelayClient, currentTime: number) {
-  client.send({
-    type: 'room-song-command',
-    commandId: 'watchdog-load',
-    expectedRevision: 0,
-    action: 'load',
-    videoId: VIDEO,
-    positionSeconds: currentTime,
-  });
-  await client.waitFor((message) => message.type === 'room-song-command-apply' && message.commandId === 'watchdog-load');
-  client.send(telemetry(currentTime, { state: 5 }));
-  await client.waitFor((message) => message.type === 'room-song-command-complete' && message.commandId === 'watchdog-load');
-
-  client.send({
-    type: 'room-song-command',
-    commandId: 'watchdog-play',
-    expectedRevision: 1,
-    action: 'play',
-  });
-  await client.waitFor((message) => message.type === 'room-song-command-apply' && message.commandId === 'watchdog-play');
-  client.send(telemetry(currentTime + 0.05));
-  await client.waitFor((message) => message.type === 'room-song-command-complete' && message.commandId === 'watchdog-play');
-}
-
 test('server cancels a stuck commit without depending on the target client watchdog', async () => {
   const server = await startRelay(FAST);
   try {
     const aPlayback = await playback(server, 'A', 'playback-tab-a');
     const aPublisher = await publisher(server, 'A');
-    await establishPlayingRoom(aPlayback, 10);
+    await playRoomSong(aPlayback, { positionSeconds: 10, prefix: 'watchdog' });
 
     const bPlayback = await playback(server, 'B', 'playback-tab-b');
     bPlayback.send({ type: 'playback-mic-intent' });

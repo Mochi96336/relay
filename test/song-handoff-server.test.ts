@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { participantIdFor, RelayClient, sleep, startRelay } from './helpers/harness.js';
+import { playRoomSong, registerPlayback } from './support/client-commands.js';
 import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
 const RATE = 48_000;
 const VIDEO = 'dQw4w9WgXcQ';
 const FAST = {
   RELAY_AUTO_CALIBRATE: '0',
-  RELAY_HEARTBEAT_MS: '60000',
 };
 
 const A_ID = participantIdFor('A');
@@ -21,9 +21,7 @@ async function playback(
   generation = 1,
 ) {
   const client = await RelayClient.connectAs(server, name);
-  client.send({ type: 'playback-hello', playbackTransportId: transportId, playbackGeneration: generation });
-  const registered = await client.waitForType('playback-registered');
-  assert.equal(registered.playbackTransportId, transportId);
+  await registerPlayback(client, transportId, generation);
   return client;
 }
 
@@ -57,31 +55,7 @@ async function establishPlayingRoom(
   currentTime: number,
   commandPrefix: string,
 ) {
-  const loadId = `${commandPrefix}-load`;
-  client.send({
-    type: 'room-song-command',
-    commandId: loadId,
-    expectedRevision: 0,
-    action: 'load',
-    videoId: VIDEO,
-    positionSeconds: currentTime,
-  });
-  await client.waitFor((message) => message.type === 'room-song-command-accepted' && message.commandId === loadId);
-  await client.waitFor((message) => message.type === 'room-song-command-apply' && message.commandId === loadId);
-  client.send(telemetry(currentTime, { state: 5 }));
-  await client.waitFor((message) => message.type === 'room-song-command-complete' && message.commandId === loadId);
-
-  const playId = `${commandPrefix}-play`;
-  client.send({
-    type: 'room-song-command',
-    commandId: playId,
-    expectedRevision: 1,
-    action: 'play',
-  });
-  await client.waitFor((message) => message.type === 'room-song-command-accepted' && message.commandId === playId);
-  await client.waitFor((message) => message.type === 'room-song-command-apply' && message.commandId === playId);
-  client.send(telemetry(currentTime + 0.05, { state: 1 }));
-  await client.waitFor((message) => message.type === 'room-song-command-complete' && message.commandId === playId);
+  await playRoomSong(client, { positionSeconds: currentTime, prefix: commandPrefix });
 
   client.send({ type: 'youtube-timeline-request' });
   const leader = await client.waitFor((message) => (

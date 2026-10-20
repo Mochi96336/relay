@@ -4,14 +4,7 @@ import test from 'node:test';
 // @ts-expect-error Production browser helpers intentionally ship as plain JS.
 import { IosAudioDestinationRecovery } from '../public/ios-audio-destination-recovery.js';
 import { manualTimers } from './support/manual-timers.js';
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
+import { deferred } from './support/deferred.js';
 
 const iphoneNavigator = {
   userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 Version/18.6 Mobile/15E148 Safari/604.1',

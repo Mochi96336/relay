@@ -5,52 +5,19 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { participantIdFor, RelayClient, sleep, startRelay, waitForNewMessage, type RelayServer } from './helpers/harness.js';
+import { loadRoomSong, registerPlayback } from './support/client-commands.js';
 
 const RATE = 48_000;
 const FRAME_SAMPLES = 960;
-const VIDEO = 'dQw4w9WgXcQ';
 const FAST = {
   RELAY_AUTO_CALIBRATE: '0',
   RELAY_CALIBRATION_PROBE: '0',
-  RELAY_HEARTBEAT_MS: '60000',
   RELAY_LIVE_PREBUFFER_MS: '40',
 };
 
 async function establishRoomSong(client: RelayClient, transportId: string) {
-  client.send({ type: 'playback-hello', playbackTransportId: transportId, playbackGeneration: 1 });
-  await client.waitFor((message) => (
-    message.type === 'playback-registered'
-    && message.playbackTransportId === transportId
-  ));
-  client.send({
-    type: 'room-song-command',
-    commandId: `load-${transportId}`,
-    expectedRevision: 0,
-    action: 'load',
-    videoId: VIDEO,
-    positionSeconds: 0,
-  });
-  await client.waitFor((message) => (
-    message.type === 'room-song-command-accepted'
-    && message.commandId === `load-${transportId}`
-  ));
-  await client.waitFor((message) => (
-    message.type === 'room-song-command-apply'
-    && message.commandId === `load-${transportId}`
-  ));
-  client.send({
-    type: 'youtube-telemetry',
-    videoId: VIDEO,
-    state: 5,
-    currentTime: 0,
-    duration: 200,
-    playbackRate: 1,
-    bufferedFraction: 0.8,
-  });
-  await client.waitFor((message) => (
-    message.type === 'room-song-command-complete'
-    && message.commandId === `load-${transportId}`
-  ));
+  await registerPlayback(client, transportId);
+  await loadRoomSong(client, { positionSeconds: 0, commandId: `load-${transportId}` });
 }
 
 async function startBacking(server: RelayServer) {

@@ -56,7 +56,6 @@ test('framed monitor opt-in gets positioned mix PCM while legacy monitor stays r
   const server = await startRelay({
     RELAY_LIVE_PREBUFFER_MS: '100',
     RELAY_AUTO_CALIBRATE: '0',
-    RELAY_HEARTBEAT_MS: '60000',
   });
 
   const clients: RelayClient[] = [];
@@ -116,7 +115,7 @@ test('framed monitor opt-in gets positioned mix PCM while legacy monitor stays r
 });
 
 test('monitor rejects an unsupported framed PCM version instead of silently changing wire format', async () => {
-  const server = await startRelay({ RELAY_HEARTBEAT_MS: '60000' });
+  const server = await startRelay();
   try {
     const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
     monitor.send({ type: 'register', role: 'monitor', monitorPacketVersion: 2 });

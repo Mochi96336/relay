@@ -12,7 +12,7 @@
  * retransmission requests after a configurable round trip, or never.
  */
 import { encodeAudioPacket } from '../src/audio-packet.js';
-import { RelayClient, sleep, startRelay } from './helpers/harness.js';
+import { RelayClient, sleep, startRelay, statusz } from './helpers/harness.js';
 import { uplinkHealthReport } from './support/uplink-health.js';
 
 const PACKET_SAMPLES = 480;
@@ -52,7 +52,7 @@ function random() {
 
 async function run(scenario: Scenario, seconds: number) {
   seed = 12_345;
-  const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000' });
+  const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0' });
   try {
     const generation = 21;
     const publisher = await RelayClient.connectAs(server, 'bench', 'Bench');
@@ -119,7 +119,7 @@ async function run(scenario: Scenario, seconds: number) {
     answerRequests();
     await sleep(400);
 
-    const status = await fetch(server.httpUrl('/statusz')).then((response) => response.json()) as any;
+    const status = await statusz(server);
     publisher.close();
     const audio = status.audio;
     return {

@@ -3,14 +3,15 @@ import test from 'node:test';
 
 import {
   RelayClient,
-  pulseTrain,
   sendPcmInChunks,
+  sleep,
   startCalibrationCollecting,
   startRelay,
-  toInt16,
+  statusz,
+  tone,
   waitForNewMessage,
 } from './helpers/harness.js';
-import { playingRoomSong } from './support/client-commands.js';
+import { playingRoomSong, registerPlayback } from './support/client-commands.js';
 import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
 const RATE = 48_000;
@@ -18,7 +19,6 @@ const VIDEO = 'dQw4w9WgXcQ';
 const FAST = {
   RELAY_LIVE_PREBUFFER_MS: '200',
   RELAY_CALIBRATION_TIMEOUT_MS: '5000',
-  RELAY_HEARTBEAT_MS: '60000',
   RELAY_AUTO_CALIBRATE: '0',
   RELAY_CALIBRATION_AGREEMENT: '1',
   RELAY_CALIBRATION_PROBE: '0',
@@ -26,14 +26,6 @@ const FAST = {
 };
 
 type Relay = Awaited<ReturnType<typeof startRelay>>;
-
-function tone(seconds: number, gain: number) {
-  return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, 5), gain);
-}
-
-async function statusz(server: Relay) {
-  return (await fetch(server.httpUrl('/statusz'))).json();
-}
 
 /** A Desktop Source, a singer playing the room Song and a monitor, calibrating. */
 async function calibratingDesktopRoom(server: Relay) {
@@ -83,7 +75,7 @@ test('a Desktop Source that closes during calibration fails it and leaves the mi
     const deadline = Date.now() + 3_000;
     let status = await statusz(server);
     while (status.mix.backingHeadroomMs > -200 && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await sleep(50);
       status = await statusz(server);
     }
     assert.ok(status.mix.backingHeadroomMs <= -200, 'the song\'s retained audio has run out');
@@ -152,12 +144,11 @@ function songTelemetry(currentTime: number, state = 1) {
 }
 
 test('a playback tab that closes fails the room command it owed at once, and leaves the Song', async () => {
-  const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000' });
+  const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0' });
   try {
     const observer = await RelayClient.connectAs(server, 'participant-watch', 'Watcher');
     const playback = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
-    playback.send({ type: 'playback-hello', playbackTransportId: 'playback-tab-a', playbackGeneration: 1 });
-    await playback.waitForType('playback-registered');
+    await registerPlayback(playback, 'playback-tab-a');
     const publisher = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
     await publisher.waitFor((message) => message.type === 'registered' && message.role === 'publisher');

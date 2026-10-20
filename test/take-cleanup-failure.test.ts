@@ -3,6 +3,7 @@ import { chmod, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import { WavTakeWriter } from '../src/wav-take-writer.js';
 
@@ -28,7 +29,7 @@ test('abort surfaces a stable-WAV cleanup failure instead of silently accepting 
 
   try {
     writer.append(Buffer.alloc(1_920));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await sleep(20);
     await writeFile(writer.filePath, 'ambiguous-published-wav');
     await chmod(directory, 0o500);
 

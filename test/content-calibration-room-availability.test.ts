@@ -6,14 +6,13 @@ import test from 'node:test';
 
 import {
   RelayClient,
-  pulseTrain,
-  sendPcmInChunks,
+  primeStreams,
   startCalibrationCollecting,
   startRelay,
-  toInt16,
   waitForNewMessage,
   type RelayServer,
 } from './helpers/harness.js';
+import { registerPlayback } from './support/client-commands.js';
 
 const RATE = 48_000;
 const VIDEO = 'dQw4w9WgXcQ';
@@ -26,7 +25,6 @@ const VIDEO = 'dQw4w9WgXcQ';
 const FAST = {
   RELAY_LIVE_PREBUFFER_MS: '200',
   RELAY_CALIBRATION_TIMEOUT_MS: '20000',
-  RELAY_HEARTBEAT_MS: '60000',
   RELAY_AUTO_CALIBRATE: '0',
   RELAY_CALIBRATION_PROBE: '0',
 };
@@ -48,30 +46,16 @@ function playing(startedAtMs: number) {
   };
 }
 
-function tone(seconds: number, gain = 0.6, seed = 5) {
-  return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, seed), gain);
-}
-
-async function primeStreams(backing: RelayClient, singer: RelayClient) {
-  await Promise.all([
-    sendPcmInChunks(backing, tone(0.5, 0.8)),
-    sendPcmInChunks(singer, tone(0.5, 0.4)),
-  ]);
-}
-
 /**
  * One participant that is the phone: playback leader, room-song commander, Mic
  * owner and Take commander, which is exactly the surface this behaviour is
  * about.
  */
 async function liveRoom(server: RelayServer) {
-  const backing = await RelayClient.connectInfrastructure(server);
-  backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
-  await backing.waitForType('registered');
+  const backing = await RelayClient.connectBacking(server);
 
   const singer = await RelayClient.connectAs(server, 'content-singer-123', 'Mochi');
-  singer.send({ type: 'playback-hello', playbackTransportId: 'content-playback', playbackGeneration: 1 });
-  await singer.waitFor((message) => message.type === 'playback-registered');
+  await registerPlayback(singer, 'content-playback');
 
   singer.send({
     type: 'room-song-command',
@@ -109,9 +93,7 @@ async function liveRoom(server: RelayServer) {
   singer.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
   await singer.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
 
-  const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
-  monitor.send({ type: 'register', role: 'monitor' });
-  await monitor.waitForType('registered');
+  const monitor = await RelayClient.connectMonitor(server);
 
   singer.send(playing(songStartedAtMs));
   await primeStreams(backing, singer);

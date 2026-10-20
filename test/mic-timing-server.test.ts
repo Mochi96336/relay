@@ -5,12 +5,11 @@ import {
   RelayClient,
   laggedPair,
   participantIdFor,
-  pulseTrain,
   sendPcmInChunks,
   sleep,
   startCalibrationCollecting,
   startRelay,
-  toInt16,
+  tone,
   waitForNewMessage,
 } from './helpers/harness.js';
 import { playingRoomSong } from './support/client-commands.js';
@@ -20,16 +19,11 @@ const FAST = {
   RELAY_LIVE_PREBUFFER_MS: '200',
   // Generous: these tests need a calibration to finish even under a loaded full run.
   RELAY_CALIBRATION_TIMEOUT_MS: '15000',
-  RELAY_HEARTBEAT_MS: '60000',
   RELAY_AUTO_CALIBRATE: '0',
   RELAY_CALIBRATION_AGREEMENT: '1',
   RELAY_CALIBRATION_PROBE: '0',
   RELAY_CALIBRATION_VALIDATION: '0',
 };
-
-function tone(seconds: number, gain: number) {
-  return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, 5), gain);
-}
 
 /** A legacy Mic and Desktop Source with a confirmed content calibration. */
 async function calibratedRoom(server: Awaited<ReturnType<typeof startRelay>>) {

@@ -16,9 +16,7 @@ export type RobotRoom = {
 };
 
 export async function robotRoom(server: RelayServer): Promise<RobotRoom> {
-  const backing = await RelayClient.connectInfrastructure(server);
-  backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
-  await backing.waitForType('registered');
+  const backing = await RelayClient.connectBacking(server, { robot: true });
 
   const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
   publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
@@ -27,9 +25,7 @@ export async function robotRoom(server: RelayServer): Promise<RobotRoom> {
   const robot = await RelayClient.connectInfrastructure(server);
   robot.send({ type: 'robot-source-hello' });
 
-  const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
-  monitor.send({ type: 'register', role: 'monitor' });
-  await monitor.waitForType('registered');
+  const monitor = await RelayClient.connectMonitor(server);
 
   await registerPlayback(publisher, 'robot-room-playback');
   await playRoomSong(publisher, { positionSeconds: 42 });

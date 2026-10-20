@@ -5,11 +5,11 @@ import {
   LEGACY_IDENTITY,
   participantIdFor,
   RelayClient,
-  pulseTrain,
   sendPcmInChunks,
   startCalibrationCollecting,
   startRelay,
-  toInt16,
+  statusz,
+  tone,
   waitForNewMessage,
 } from './helpers/harness.js';
 import { playingTelemetry } from './support/playing-telemetry.js';
@@ -18,7 +18,6 @@ const RATE = 48_000;
 const FAST = {
   RELAY_LIVE_PREBUFFER_MS: '200',
   RELAY_CALIBRATION_TIMEOUT_MS: '5000',
-  RELAY_HEARTBEAT_MS: '60000',
   RELAY_AUTO_CALIBRATE: '0',
   RELAY_CALIBRATION_AGREEMENT: '1',
   RELAY_CALIBRATION_PROBE: '0',
@@ -29,10 +28,6 @@ const FAST = {
 
 function registerPublisher(client: RelayClient, captureGeneration: number) {
   client.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration });
-}
-
-function tone(seconds: number, gain: number) {
-  return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, 5), gain);
 }
 
 test('a Mic without a lease that drops during calibration fails it and gives up its media at once', async () => {
@@ -73,7 +68,7 @@ test('a Mic without a lease that drops during calibration fails it and gives up 
     await waitForNewMessage(monitor, from, (message) => (
       message.type === 'source-status' && message.micConnected === false
     ));
-    const status = await (await fetch(server.httpUrl('/statusz'))).json();
+    const status = await statusz(server);
     assert.equal(status.audio.micSampleRate, null, 'no media is kept for a publisher that held no lease');
   } finally {
     await server.stop();

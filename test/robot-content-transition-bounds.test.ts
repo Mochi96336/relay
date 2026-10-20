@@ -143,7 +143,6 @@ test('server treats an unanchored follower correction as destructive bootstrap i
     RELAY_ROBOT_CONTENT_TRANSITION_LIFETIME_MS: '600',
     RELAY_ROBOT_CONTENT_TRANSITION_MAX_WINDOWS: '3',
     RELAY_ROBOT_CONTENT_TRANSITION_MAX_WORKER_FAILURES: '2',
-    RELAY_HEARTBEAT_MS: '60000',
   });
   const backing = await RelayClient.connectInfrastructure(server);
   const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');

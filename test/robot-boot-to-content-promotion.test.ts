@@ -4,11 +4,10 @@ import test from 'node:test';
 import {
   RelayClient,
   laggedPair,
-  pulseTrain,
   sendPcmInChunks,
   sleep,
   startRelay,
-  toInt16,
+  tone,
   waitForNewMessage,
   type RelayServer,
 } from './helpers/harness.js';
@@ -36,7 +35,6 @@ import { probeAudio } from './support/probe-audio.js';
 const RATE = 48_000;
 const BOOT_ROOM = {
   RELAY_LIVE_PREBUFFER_MS: '200',
-  RELAY_HEARTBEAT_MS: '60000',
   RELAY_AUTO_CALIBRATE: '1',
   // One window, so a content result is reachable inside a test run.
   RELAY_CALIBRATION_AGREEMENT: '1',
@@ -50,10 +48,6 @@ const BOOT_ROOM = {
   RELAY_CALIBRATION_PROBE_MIN_CORRELATION: '0.5',
   RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS: '5000',
 };
-
-function tone(seconds: number, gain = 0.6, seed = 5) {
-  return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, seed), gain);
-}
 
 /**
  * Asks for timing status until one matches. Relay broadcasts it when timing
@@ -87,17 +81,13 @@ async function requestTimingStatus(
  * content against an unmapped Robot route.
  */
 async function bootedRobotRoom(server: RelayServer) {
-  const backing = await RelayClient.connectInfrastructure(server);
-  backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
-  await backing.waitForType('registered');
+  const backing = await RelayClient.connectBacking(server, { robot: true });
 
   const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
   publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
   await publisher.waitForType('registered');
 
-  const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
-  monitor.send({ type: 'register', role: 'monitor' });
-  await monitor.waitForType('registered');
+  const monitor = await RelayClient.connectMonitor(server);
 
   const robot = await RelayClient.connectInfrastructure(server);
   robot.send({ type: 'robot-source-hello' });

@@ -21,7 +21,7 @@ async function participant(
 }
 
 test('shared mix and timing commands belong to the current Mic owner, not an arbitrary socket', async () => {
-  const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000' });
+  const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0' });
   try {
     const ownerPublisher = await participant(server, 'Owner', 'publisher');
     const ownerControl = await participant(server, 'Owner', 'monitor');
@@ -101,7 +101,7 @@ test('shared mix and timing commands belong to the current Mic owner, not an arb
 });
 
 test('only the server-selected anonymous publisher keeps legacy command authority', async () => {
-  const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000', ...LEGACY_IDENTITY });
+  const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0', ...LEGACY_IDENTITY });
   try {
     const publisher = await RelayClient.connect(server);
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 7 });
@@ -150,7 +150,7 @@ test('only the server-selected anonymous publisher keeps legacy command authorit
 });
 
 test('an identified participant may adjust Voice while nobody holds the mic', async () => {
-  const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000' });
+  const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0' });
   try {
     const listener = await participant(server, 'Listener', 'monitor');
 

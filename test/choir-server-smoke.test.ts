@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { startRelay, RelayClient, sleep, waitForNewMessage } from './helpers/harness.js';
+import { startRelay, RelayClient, sleep, statusz, waitForNewMessage } from './helpers/harness.js';
 import { encodePcmFrame } from '../src/pcm-frame.js';
 import { encodeAudioPacket } from '../src/audio-packet.js';
 import { participantIdForCapability } from '../src/participant-capability.js';
 import { laggedMultibandMusicPair } from './helpers/music-calibration.js';
+import { registerPlayback } from './support/client-commands.js';
 
 /**
  * With Choir off, Relay is the single-Mic Relay: no second Mic is advertised,
@@ -62,7 +63,7 @@ const CAPABILITY_B = 'd'.repeat(64);
 async function startDuet() {
   const relay = await startRelay({
     RELAY_CHOIR: '1',
-    RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000',
+    RELAY_AUTO_CALIBRATE: '0',
   });
   const clients: RelayClient[] = [];
   const close = async () => {
@@ -109,8 +110,7 @@ async function startDuet() {
       playbackRate: 1, bufferedFraction: .8, playbackTransportId: PLAYBACK_TRANSPORT_ID,
       playbackGeneration: 1, captureAnchor,
     });
-    a.send({ type: 'playback-hello', playbackTransportId: PLAYBACK_TRANSPORT_ID, playbackGeneration: 1 });
-    await a.waitForType('playback-registered');
+    await registerPlayback(a, PLAYBACK_TRANSPORT_ID);
     a.send({ type: 'room-song-command', commandId: 'duet-load-1',
       expectedRevision: 0, action: 'load', videoId: VIDEO_ID, positionSeconds: 10 });
     await a.waitFor((m) => m.type === 'room-song-command-apply' && m.commandId === 'duet-load-1');
@@ -163,7 +163,7 @@ async function startDuet() {
       }, 20);
       return () => clearInterval(timer);
     };
-    const statusAudio = async () => (await (await fetch(relay.httpUrl('/statusz'))).json()).audio;
+    const statusAudio = async () => (await statusz(relay)).audio;
     /** Polls B's track in /statusz until `done` holds or `ms` pass; returns the last. */
     const waitForSecondary = async (done: (duet: any) => boolean, ms = 2_000) => {
       let duet: any = null;

@@ -5,7 +5,6 @@ import { participantIdFor, RelayClient, type RelayServer, sleep, startRelay } fr
 
 const RATE = 48_000;
 const FAST = {
-  RELAY_HEARTBEAT_MS: '60000',
   RELAY_AUTO_CALIBRATE: '0',
 };
 

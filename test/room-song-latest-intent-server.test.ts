@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { RelayClient, startRelay } from './helpers/harness.js';
+import { registerPlayback } from './support/client-commands.js';
 import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
 const VIDEO = 'dQw4w9WgXcQ';
@@ -11,18 +12,6 @@ function telemetry(currentTime: number, state: number, transportId: string) {
     type: 'youtube-telemetry',
     ...youtubeTelemetry({ state, currentTime, bufferedFraction: 0.7, playbackTransportId: transportId, playbackGeneration: 1 }),
   };
-}
-
-async function registerPlayback(client: RelayClient, transportId: string) {
-  client.send({
-    type: 'playback-hello',
-    playbackTransportId: transportId,
-    playbackGeneration: 1,
-  });
-  await client.waitFor((message) => (
-    message.type === 'playback-registered'
-    && message.playbackTransportId === transportId
-  ));
 }
 
 async function establishRoom(client: RelayClient, transportId: string) {

@@ -3,6 +3,7 @@ import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import { WavTakeWriter } from '../src/wav-take-writer.js';
 
@@ -25,7 +26,7 @@ test('WavTakeWriter fails before writing past the per-Take disk budget', async (
     assert.equal(writer.sampleCount, 960, 'rejected PCM must not count toward the Take');
   } finally {
     await writer.abort();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await sleep(20);
     assert.deepEqual(await readdir(directory), []);
     await rm(directory, { recursive: true, force: true });
   }

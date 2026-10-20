@@ -1,14 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { captureFixture } from './support/capture-graph-fixture.js';
+import { deferred } from './support/deferred.js';
 
 const analysis = { type: 'analysis', spectrumBands: [1, 2, 3, 4, 5], f0Hz: 220, pitchConfidence: 0.9 };
-
-function deferred() {
-  let resolve!: (value: any[]) => void;
-  const promise = new Promise<any[]>(yes => { resolve = yes; });
-  return { promise, resolve };
-}
 
 test('graph installs silent output, timestamp protocol and worker configuration before admission', () => {
   const f = captureFixture();
@@ -100,7 +95,7 @@ test('confirmed input removal enters reconnect grace without releasing Mic', asy
 test('route change before or during enumeration rebuilds instead of claiming removal', async () => {
   for (const during of [false, true]) {
     const f = captureFixture(); f.install();
-    const wait = deferred();
+    const wait = deferred<any[]>();
     f.mediaDevices.enumerate = () => wait.promise;
     if (!during) f.track.deviceId = 'mic-b';
     f.mediaDevices.emit();
@@ -115,12 +110,12 @@ test('route change before or during enumeration rebuilds instead of claiming rem
 test('retired enumeration cannot stop a replacement graph or block its device checks', async () => {
   const f = captureFixture();
   const old = f.install();
-  const wait = deferred(); f.mediaDevices.enumerate = () => wait.promise;
+  const wait = deferred<any[]>(); f.mediaDevices.enumerate = () => wait.promise;
   f.mediaDevices.emit(); f.mediaDevices.emit();
   assert.equal(f.mediaDevices.enumerations, 1);
   f.dispose(old);
   const current = f.install();
-  const next = deferred(); f.mediaDevices.enumerate = () => next.promise;
+  const next = deferred<any[]>(); f.mediaDevices.enumerate = () => next.promise;
   f.mediaDevices.emit();
   wait.resolve([{ kind: 'audioinput', deviceId: 'mic-b' }]); await f.flush();
   f.mediaDevices.emit();

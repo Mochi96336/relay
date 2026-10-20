@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import { EVENT_LOOP_STALL_MS, eventLoopStall, watchEventLoopStalls } from '../src/event-loop-stall.js';
 
@@ -21,10 +22,10 @@ test('a blocked loop is logged by the watcher', async () => {
   const records: unknown[] = [];
   const stop = watchEventLoopStalls((record) => records.push(record), { windowMs: 100, thresholdMs: 80 });
   try {
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await sleep(30);
     const until = Date.now() + 150;
     while (Date.now() < until) { /* hold the event loop */ }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await sleep(250);
   } finally {
     stop();
   }

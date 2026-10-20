@@ -12,6 +12,7 @@ import {
   decodeRetransmitRequest,
   encodeRetransmitRequest,
 } from '../shared/retransmit-request.js';
+import { uplinkHealthReport } from './support/uplink-health.js';
 
 describe('retransmission request datagram codec', () => {
   it('round-trips a request', () => {
@@ -40,17 +41,10 @@ describe('retransmission request datagram codec', () => {
 });
 
 function health(generation: number): AudioUplinkHealth {
-  return {
-    version: 1,
-    captureGeneration: generation,
-    capturedSamples: 1_000,
-    inputGapSamples: 0,
+  return uplinkHealthReport(generation, 1_000, {
     inputGapActive: false,
-    inputMuted: false,
     capture: null,
     captureLevel: null,
-    droppedSamples: { total: 0, disconnected: 0, congested: 0, packetTooLarge: 0 },
-    controlReconnects: 0,
     transport: {
       path: 'webtransport',
       maxPacketBytes: 1000,
@@ -60,18 +54,9 @@ function health(generation: number): AudioUplinkHealth {
       datagramQueuePackets: 4,
       webTransportAttempts: 1,
       webTransportConnections: 1,
-      webTransportDemotions: 0,
-      webTransportPacketsSubmitted: 0,
-      webTransportCongestedRejects: 0,
-      webTransportPacketTooLargeRejects: 0,
-      webTransportSendFailures: 0,
-      webSocketPacketsSent: 0,
-      webSocketCongestedRejects: 0,
-      webSocketDisconnectedRejects: 0,
-      webSocketSendFailures: 0,
       retransmitBufferPackets: 128,
     },
-  };
+  }) as AudioUplinkHealth;
 }
 
 function capableRuntime({

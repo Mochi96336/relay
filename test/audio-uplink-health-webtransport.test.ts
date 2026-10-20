@@ -2,41 +2,24 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { parseAudioUplinkHealth } from '../src/audio-uplink-health.js';
+import { uplinkHealthReport } from './support/uplink-health.js';
 
 function healthPayload() {
   return {
     type: 'audio-uplink-health',
-    version: 1,
-    captureGeneration: 3,
-    capturedSamples: 96_000,
-    inputGapSamples: 0,
-    inputMuted: false,
-    droppedSamples: {
-      total: 0,
-      disconnected: 0,
-      congested: 0,
-      packetTooLarge: 0,
-    },
-    controlReconnects: 0,
-    transport: {
-      path: 'webtransport',
-      maxPacketBytes: 1000,
-      minWebTransportMaxPacketBytes: 65_535,
-      maxWebTransportMaxPacketBytes: 65_535,
-      datagramPacketBytesCeiling: 1000,
-      datagramQueuePackets: 4,
-      webTransportAttempts: 1,
-      webTransportConnections: 1,
-      webTransportDemotions: 0,
-      webTransportPacketsSubmitted: 100,
-      webTransportCongestedRejects: 0,
-      webTransportPacketTooLargeRejects: 0,
-      webTransportSendFailures: 0,
-      webSocketPacketsSent: 0,
-      webSocketCongestedRejects: 0,
-      webSocketDisconnectedRejects: 0,
-      webSocketSendFailures: 0,
-    },
+    ...uplinkHealthReport(3, 96_000, {
+      transport: {
+        path: 'webtransport',
+        maxPacketBytes: 1000,
+        minWebTransportMaxPacketBytes: 65_535,
+        maxWebTransportMaxPacketBytes: 65_535,
+        datagramPacketBytesCeiling: 1000,
+        datagramQueuePackets: 4,
+        webTransportAttempts: 1,
+        webTransportConnections: 1,
+        webTransportPacketsSubmitted: 100,
+      },
+    }),
   };
 }
 

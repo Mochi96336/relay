@@ -7,39 +7,15 @@ import { DEFAULT_AUDIO_TRANSPORT_CONFIG } from '../src/audio-transport-config.js
 import type { AudioUplinkHealth } from '../src/audio-uplink-health.js';
 import { MicRuntime } from '../src/mic-runtime.js';
 import type { RelaySocket } from '../src/relay-socket-server.js';
+import { uplinkHealthReport } from './support/uplink-health.js';
 
 function health(captureGeneration: number): AudioUplinkHealth {
-  return {
-    version: 1,
-    captureGeneration,
-    capturedSamples: 96_000,
-    inputGapSamples: 0,
+  return uplinkHealthReport(captureGeneration, 96_000, {
     inputGapActive: false,
-    inputMuted: false,
     capture: null,
     captureLevel: null,
-    droppedSamples: { total: 0, disconnected: 0, congested: 0, packetTooLarge: 0 },
-    controlReconnects: 0,
-    transport: {
-      path: 'websocket',
-      maxPacketBytes: null,
-      minWebTransportMaxPacketBytes: null,
-      maxWebTransportMaxPacketBytes: null,
-      datagramPacketBytesCeiling: null,
-      datagramQueuePackets: null,
-      webTransportAttempts: 0,
-      webTransportConnections: 0,
-      webTransportDemotions: 0,
-      webTransportPacketsSubmitted: 0,
-      webTransportCongestedRejects: 0,
-      webTransportPacketTooLargeRejects: 0,
-      webTransportSendFailures: 0,
-      webSocketPacketsSent: 0,
-      webSocketCongestedRejects: 0,
-      webSocketDisconnectedRejects: 0,
-      webSocketSendFailures: 0,
-    },
-  };
+    transport: { datagramPacketBytesCeiling: null, datagramQueuePackets: null },
+  }) as AudioUplinkHealth;
 }
 
 function fakeSocket(participantId = 'participant-alice') {

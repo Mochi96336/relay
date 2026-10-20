@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { RelayClient, sleep, startRelay, waitForNewMessage, type RelayServer } from './helpers/harness.js';
+import { uplinkHealthReport } from './support/uplink-health.js';
 
 const RATE = 48_000;
 const FRAME_SAMPLES = 960;
@@ -104,37 +105,11 @@ function uplinkHealth(
 ) {
   return {
     type: 'audio-uplink-health',
-    version: 1,
-    captureGeneration: generation,
-    capturedSamples,
-    inputGapSamples,
-    inputGapActive,
-    inputMuted: false,
-    droppedSamples: {
-      total: 0,
-      disconnected: 0,
-      congested: 0,
-      packetTooLarge: 0,
-      captureBacklog: 0,
-    },
-    controlReconnects: 0,
-    transport: {
-      path: 'websocket',
-      maxPacketBytes: null,
-      minWebTransportMaxPacketBytes: null,
-      maxWebTransportMaxPacketBytes: null,
-      webTransportAttempts: 0,
-      webTransportConnections: 0,
-      webTransportDemotions: 0,
-      webTransportPacketsSubmitted: 0,
-      webTransportCongestedRejects: 0,
-      webTransportPacketTooLargeRejects: 0,
-      webTransportSendFailures: 0,
-      webSocketPacketsSent: 0,
-      webSocketCongestedRejects: 0,
-      webSocketDisconnectedRejects: 0,
-      webSocketSendFailures: 0,
-    },
+    ...uplinkHealthReport(generation, capturedSamples, {
+      inputGapSamples,
+      inputGapActive,
+      droppedSamples: { captureBacklog: 0 },
+    }),
   };
 }
 

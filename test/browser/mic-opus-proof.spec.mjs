@@ -1,8 +1,10 @@
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { chromium, expect, test } from '@playwright/test';
+
+import { startRelay } from './support/relay-process.mjs';
 
 test('production Mic WASM Opus reaches the mixer and a non-silent Take', async () => {
   test.setTimeout(60000);
@@ -15,11 +17,7 @@ test('production Mic WASM Opus reaches the mixer and a non-silent Take', async (
   for (let i = 0; i < 48000 * 30; i++) wav.writeInt16LE(Math.round(500 * Math.sin(i * 2 * Math.PI * 440 / 48000)), 44 + i * 2);
   const input = path.join(directory, 'input.wav');
   await writeFile(input, wav);
-  const env = { ...process.env, PORT: '0', RELAY_MIC_OPUS_TRIAL: '1', RELAY_TAKE_DIR: directory,
-    RELAY_TAKE_MIN_FREE_GIB: '0', RELAY_AUTO_CALIBRATE: '0', RELAY_CALIBRATION_PROBE: '0',
-    RELAY_CALIBRATION_VALIDATION: '0', RELAY_HEARTBEAT_MS: '60000' };
-  for (const key of Object.keys(env)) if (key.startsWith('RELAY_WEBTRANSPORT_')) delete env[key];
-  delete env.RELAY_KEY;
+  const env = { RELAY_MIC_OPUS_TRIAL: '1', RELAY_TAKE_DIR: directory, RELAY_TAKE_MIN_FREE_GIB: '0' };
   const direct = process.env.RELAY_PRODUCTION_AUDIO_PROOF_WEBTRANSPORT === '1';
   if (direct) {
     const key = path.join(directory, 'key.pem'), cert = path.join(directory, 'cert.pem');
@@ -30,20 +28,10 @@ test('production Mic WASM Opus reaches the mixer and a non-silent Take', async (
       RELAY_WEBTRANSPORT_HOST: '127.0.0.1', RELAY_WEBTRANSPORT_PORT: '44339',
       RELAY_WEBTRANSPORT_CERT: cert, RELAY_WEBTRANSPORT_KEY: key, RELAY_WEBTRANSPORT_PIN_CERT: '1' });
   }
-  const child = spawn(process.execPath, ['--import', 'tsx', 'src/server-entry.ts'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
-  let logs = '', browser;
-  child.stderr.on('data', data => { logs += data; });
+  let relay, browser;
   try {
-    const port = await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`Server startup timeout: ${logs}`)), 20000);
-      child.stdout.on('data', data => {
-        logs += data;
-        const match = logs.match(/listening on http:\/\/localhost:(\d+)/);
-        if (match) { clearTimeout(timer); resolve(match[1]); }
-      });
-      child.once('exit', () => { clearTimeout(timer); reject(new Error(logs)); });
-    });
-    const base = `http://127.0.0.1:${port}`;
+    relay = await startRelay(env);
+    const base = `http://127.0.0.1:${relay.port}`;
     browser = await chromium.launch({ channel: 'chromium', ...(process.env.RELAY_BROWSER_EXECUTABLE
       ? { executablePath: process.env.RELAY_BROWSER_EXECUTABLE } : {}), args: ['--autoplay-policy=no-user-gesture-required',
       '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-audio-capture=${input}`] });
@@ -91,8 +79,7 @@ test('production Mic WASM Opus reaches the mixer and a non-silent Take', async (
     expect(2 * (real * real + imag * imag) / (count * energy)).toBeGreaterThan(0.8);
   } finally {
     await browser?.close();
-    child.kill();
-    await new Promise(resolve => { if (child.exitCode !== null || child.signalCode) resolve(); else child.once('exit', resolve); });
+    await relay?.stop();
     await rm(directory, { recursive: true, force: true });
   }
 });

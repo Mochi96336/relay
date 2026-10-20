@@ -40,7 +40,6 @@ import { watchEventLoopStalls } from './event-loop-stall.js';
 import { TimingRuntime } from './timing-runtime.js';
 import { authorizeMicOwnerCommand, type MicOwnerCommand } from './command-authority.js';
 import { decodePcmFrame, type PcmFrame } from './pcm-frame.js';
-import type { ProbeTarget } from './probe-lifecycle.js';
 import { buildReadiness } from './readiness.js';
 import {
   projectObservationStatusV1,

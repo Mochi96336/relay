@@ -69,6 +69,7 @@ test('a Desktop Source that closes during calibration fails it and leaves the mi
     await waitForNewMessage(monitor, from, (message) => (
       message.type === 'source-status' && message.connected === false
     ), 1_000);
+    const starvationAtDisconnect = (await statusz(server)).mix.backingStarvedFrames;
 
     // The voice carries on past the song's retained audio. A Desktop Source
     // that left is not one that is starving the mix.
@@ -81,7 +82,8 @@ test('a Desktop Source that closes during calibration fails it and leaves the mi
     }
     assert.ok(status.mix.backingHeadroomMs <= -200, 'the song\'s retained audio has run out');
     assert.equal(status.source.backingSampleRate, null);
-    assert.equal(status.mix.backingStarvedFrames, 0);
+    assert.equal(status.mix.backingStarvedFrames, starvationAtDisconnect,
+      'a disconnected Source adds no starvation to any accumulated while it was live');
   } finally {
     await server.stop();
   }

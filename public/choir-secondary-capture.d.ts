@@ -13,6 +13,7 @@ export class ChoirSecondaryCapture {
   graph: any;
   context: any;
   socket: any;
+  transport: any;
   rate: number | null;
   generation: number | null;
   cursor: number;
@@ -24,6 +25,6 @@ export class ChoirSecondaryCapture {
   prepare(): Promise<number | null>;
   attach(socket: any, sampleRate: number): boolean;
   onCapture(event: { data: unknown }, graph: any, epoch: number): void;
-  sendPacket(packet: ArrayBuffer): void;
+  sendPacket(packet: ArrayBuffer): boolean;
   stop(): void;
 }

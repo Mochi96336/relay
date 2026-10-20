@@ -34,9 +34,11 @@ test('real browser WASM Opus survives reorder/duplicate and preserves delayed so
     for (let i = 0; i < pcm.length; i++) pcm[i] = Math.round(5000 * Math.sin((sequence * 960 + i) * 2 * Math.PI * 440 / 48000));
     const encoded = encoder.encode(pcm.buffer);
     assert.ok(encoded.length <= 100, '32 kbps must materially reduce a 1920-byte PCM frame');
-    const decoded = decoder.decodeAt(sequence * 960, encoded);
-    expected.push(sequence === 0 ? decoded.subarray(encoder.delaySamples * 2) : decoded);
-    wire.push(frame(sequence, encoded, encoder.delaySamples));
+    const packet = frame(sequence, encoded, encoder.delaySamples);
+    const parsed = decodeAudioPacket(packet);
+    assert.ok(parsed.ok);
+    expected.push(decoder.decode(parsed.packet)!.pcm);
+    wire.push(packet);
   }
   const output = [0, 2, 2, 1, 3, 5, 4].flatMap((sequence, index) => receiver.receive(wire[sequence], index));
   assert.equal(output.length, 6);
@@ -86,49 +88,51 @@ test('compressed WebSocket byte budget remains 200 ms across rebinds', async () 
   assert.equal(sender.maxBufferedBytes, 19200);
 });
 
-test('browser encoder bounds queued work and fences outputs from a replaced capture', async () => {
-  const original = globalThis.Worker;
-  let active: FakeWorker;
-  class FakeWorker {
-    onmessage?: (event: { data: any }) => void;
-    messages: any[] = [];
-    terminated = false;
-    constructor() { active = this; }
-    postMessage(data: any) {
-      this.messages.push(data);
-      if (data.type === 'init') queueMicrotask(() => this.onmessage?.({ data: { type: 'ready', delaySamples: 120 } }));
+for (const replacementGeneration of [10, 11]) {
+  test(`browser encoder bounds work and fences replaced media at generation ${replacementGeneration}`, async () => {
+    const original = globalThis.Worker;
+    let active: FakeWorker;
+    class FakeWorker {
+      onmessage?: (event: { data: any }) => void;
+      messages: any[] = [];
+      terminated = false;
+      constructor() { active = this; }
+      postMessage(data: any) {
+        this.messages.push(data);
+        if (data.type === 'init') queueMicrotask(() => this.onmessage?.({ data: { type: 'ready', delaySamples: 120 } }));
+      }
+      terminate() { this.terminated = true; }
+      complete(id: number) { this.onmessage?.({ data: { type: 'encoded', id, encoded: new ArrayBuffer(80) } }); }
     }
-    terminate() { this.terminated = true; }
-    complete(id: number) { this.onmessage?.({ data: { type: 'encoded', id, encoded: new ArrayBuffer(80) } }); }
-  }
-  Object.assign(globalThis, { Worker: FakeWorker });
-  try {
-    const packets: ArrayBuffer[] = [], drops: number[] = [];
-    const encoder = await createMicOpusTrial({ onPacket: p => packets.push(p), onDrop: n => drops.push(n) });
-    assert.equal(encoder.bitrate, 32000);
-    encoder.setBitrate(128000);
-    assert.equal(encoder.bitrate, 32000, 'report only worker-confirmed bitrate');
-    active!.onmessage?.({ data: { type: 'bitrate', bitrate: 128000 } });
-    assert.equal(encoder.bitrate, 128000);
-    encoder.reset(10);
-    assert.equal(encoder.encode(new ArrayBuffer(1920), 0, 0), true);
-    assert.equal(encoder.encode(new ArrayBuffer(1920), 1, 960), true);
-    assert.equal(encoder.encode(new ArrayBuffer(1920), 2, 1920), false);
-    assert.deepEqual(drops, [960]);
-    encoder.reset(11);
-    active!.complete(0); active!.complete(1);
-    assert.equal(packets.length, 0);
-    encoder.encode(new ArrayBuffer(1920), 0, 0);
-    active!.complete(2);
-    const parsed = decodeAudioPacket(Buffer.from(packets[0]));
-    assert.ok(parsed.ok);
-    if (parsed.ok) { assert.equal(parsed.packet.generation, 11); assert.equal(parsed.packet.opusDelaySamples, 120); }
-    encoder.close();
-    assert.equal(active!.terminated, true);
-  } finally {
-    Object.assign(globalThis, { Worker: original });
-  }
-});
+    Object.assign(globalThis, { Worker: FakeWorker });
+    try {
+      const packets: ArrayBuffer[] = [], drops: number[] = [];
+      const encoder = await createMicOpusTrial({ onPacket: p => packets.push(p), onDrop: n => drops.push(n) });
+      assert.equal(encoder.bitrate, 32000);
+      encoder.setBitrate(128000);
+      assert.equal(encoder.bitrate, 32000, 'report only worker-confirmed bitrate');
+      active!.onmessage?.({ data: { type: 'bitrate', bitrate: 128000 } });
+      assert.equal(encoder.bitrate, 128000);
+      encoder.reset(10);
+      assert.equal(encoder.encode(new ArrayBuffer(1920), 0, 0), true);
+      assert.equal(encoder.encode(new ArrayBuffer(1920), 1, 960), true);
+      assert.equal(encoder.encode(new ArrayBuffer(1920), 2, 1920), false);
+      assert.deepEqual(drops, [960]);
+      encoder.reset(replacementGeneration);
+      active!.complete(0); active!.complete(1);
+      assert.equal(packets.length, 0);
+      encoder.encode(new ArrayBuffer(1920), 0, 0);
+      active!.complete(2);
+      const parsed = decodeAudioPacket(Buffer.from(packets[0]));
+      assert.ok(parsed.ok);
+      if (parsed.ok) { assert.equal(parsed.packet.generation, replacementGeneration); assert.equal(parsed.packet.opusDelaySamples, 120); }
+      encoder.close();
+      assert.equal(active!.terminated, true);
+    } finally {
+      Object.assign(globalThis, { Worker: original });
+    }
+  });
+}
 
 for (const failure of ['message', 'worker', 'postMessage', 'timeout']) {
   test(`Opus startup ${failure} failure terminates its inaccessible worker once`, async (t) => {

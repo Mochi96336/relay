@@ -216,7 +216,11 @@ function noiseContinuation(history: Int16Array, length: number, sampleRate: numb
     for (let k = 1; k <= order; k += 1) predicted += a[k] * segment[i - k];
     residualEnergy += (segment[i] - predicted) ** 2;
   }
-  for (const sample of segment) peak = Math.max(peak, Math.abs(sample));
+  let sourceEnergy = 0;
+  for (const sample of segment) {
+    peak = Math.max(peak, Math.abs(sample));
+    sourceEnergy += sample * sample;
+  }
   const excitationRms = Math.sqrt(residualEnergy / (segment.length - order));
 
   // Deterministic excitation: the same loss conceals the same way.
@@ -236,11 +240,22 @@ function noiseContinuation(history: Int16Array, length: number, sampleRate: numb
     let value = excitationRms * white();
     // state[order - k] is the sample k steps back.
     for (let k = 1; k <= order; k += 1) value += a[k] * state[order - k];
-    value = Math.max(-peak, Math.min(peak, value));
     state.copyWithin(0, 1);
+    // Keep the prediction filter linear. Feeding peak-clipped output back
+    // into a high-order filter can create a stable square-wave limit cycle
+    // from band-limited fricatives. Bound the audible output, not its state.
     state[order - 1] = value;
     output[i] = value;
   }
+  // A short, changing spectrum can overestimate the prediction residual.
+  // Match the real window's level before bounding peaks, without feeding any
+  // of that audible gain/limiting back into the linear synthesis filter.
+  const measured = Math.min(windowLength, length);
+  let outputEnergy = 0;
+  for (let i = 0; i < measured; i++) outputEnergy += output[i] ** 2;
+  const gain = outputEnergy > 0
+    ? Math.min(1, Math.sqrt((sourceEnergy / segment.length) / (outputEnergy / measured))) : 1;
+  for (let i = 0; i < length; i++) output[i] = Math.max(-peak, Math.min(peak, output[i] * gain));
   return output;
 }
 

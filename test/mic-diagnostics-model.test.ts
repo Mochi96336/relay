@@ -45,6 +45,14 @@ function rows(status: Status | null) {
 }
 
 describe('Mic diagnostics model', () => {
+  it('reports codec failure even when every transport envelope arrived', () => {
+    const status = liveStatus(s => { s.audio.receiverTransport.opus = { decodeFailures: 1 }; });
+    const repair = rows(status).repair;
+    assert.equal(repair.value, '1 Opus packet could not be decoded');
+    assert.equal(repair.tone, 'warn');
+    const translated = describeMicTransport(status, diagnosticsTranslator('zh-Hant')).find(r => r.key === 'repair')!;
+    assert.match(translated.value, /Opus.*無法解碼/);
+  });
   it('says plainly that a healthy Mic is reaching the room', () => {
     const described = rows(liveStatus());
     assert.deepEqual(

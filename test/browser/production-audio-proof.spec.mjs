@@ -4,9 +4,10 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { chromium, expect, test } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 import { startRelay } from './support/relay-process.mjs';
+import { launchChromium } from './support/chromium.mjs';
 
 const SAMPLE_RATE = 48_000;
 const DEFAULT_MIC_GAIN_DB = 24;
@@ -215,7 +216,7 @@ test(proofName, async () => {
     RELAY_LIVE_PREBUFFER_MS: '40',
     ...directMediaEnv,
   });
-  const browser = await chromium.launch({
+  const browser = await launchChromium({
     // Playwright's default headless executable is chromium-headless-shell.
     // The production proof intentionally uses full Chromium's new headless mode
     // so Web Audio/media-device behaviour matches a real browser process.

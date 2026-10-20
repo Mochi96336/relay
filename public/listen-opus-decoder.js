@@ -1,14 +1,15 @@
 /**
  * Decodes Listen's Opus monitor frames (src/monitor-opus.ts) with WebCodecs.
  *
- * Each frame is one independent Opus packet at a known mix position, so the
- * packet's position rides through the decoder as its timestamp and comes back
- * on the decoded AudioData: output needs no bookkeeping of its own. A reset
- * (a gap, a new mix generation, a new transport) retires the decoder instance
- * outright, so nothing it still had in flight can reach playback afterwards.
+ * Opus packets share prediction history. A playback gap must keep that history,
+ * even while abandoning old queued sound. WebCodecs may return continuous
+ * timestamps across input gaps, so the admitted sample spans, not AudioData's
+ * timestamp, own output placement. A new stream/transport retires the decoder
+ * outright; late callbacks can never consume its replacement's positions.
  */
 const MIX_SAMPLE_RATE = 48_000;
 const MICROSECONDS_PER_SECOND = 1_000_000;
+const MAX_PENDING_SAMPLES = MIX_SAMPLE_RATE;
 
 export const LISTEN_OPUS_DECODER_CONFIG = Object.freeze({
   codec: 'opus',
@@ -52,16 +53,33 @@ export function createListenOpusDecoder({
   EncodedAudioChunkClass = globalThis.EncodedAudioChunk,
 }) {
   let decoder = null;
+  let pending = [];
+  let pendingSamples = 0;
+  let submittedEnd = null;
+  let audibleFrom = 0;
 
   function open() {
     const instance = new AudioDecoderClass({
       output: (audioData) => {
         try {
           if (decoder !== instance) return;
-          const firstSampleIndex = Math.round(
-            (audioData.timestamp * MIX_SAMPLE_RATE) / MICROSECONDS_PER_SECOND,
-          );
-          onPcm(copyChannel(audioData), firstSampleIndex);
+          const pcm = copyChannel(audioData);
+          let offset = 0;
+          // Outputs may split or combine input packets. Consume their spans
+          // in codec order, dropping only playback before the latest gap.
+          while (offset < pcm.length && decoder === instance) {
+            const span = pending[0];
+            if (!span) throw new Error('Listen Opus output has no admitted position');
+            const count = Math.min(pcm.length - offset, span.remaining);
+            const first = span.firstSampleIndex;
+            span.firstSampleIndex += count;
+            span.remaining -= count;
+            pendingSamples -= count;
+            if (span.remaining === 0) pending.shift();
+            const skip = Math.max(0, audibleFrom - first);
+            if (skip < count) onPcm(pcm.subarray(offset + skip, offset + count), first + skip);
+            offset += count;
+          }
         } catch (error) {
           if (decoder === instance) fail(error);
         } finally {
@@ -72,14 +90,18 @@ export function createListenOpusDecoder({
         if (decoder === instance) fail(error);
       },
     });
-    instance.configure(LISTEN_OPUS_DECODER_CONFIG);
     decoder = instance;
+    instance.configure(LISTEN_OPUS_DECODER_CONFIG);
     return instance;
   }
 
   function reset() {
     const retired = decoder;
     decoder = null;
+    pending = [];
+    pendingSamples = 0;
+    submittedEnd = null;
+    audibleFrom = 0;
     if (retired && retired.state !== 'closed') {
       try { retired.close(); } catch {}
     }
@@ -92,12 +114,28 @@ export function createListenOpusDecoder({
 
   return {
     decode(frame) {
-      const instance = decoder ?? open();
-      instance.decode(new EncodedAudioChunkClass({
-        type: 'key',
-        timestamp: Math.round((frame.firstSampleIndex * MICROSECONDS_PER_SECOND) / MIX_SAMPLE_RATE),
-        data: frame.packet,
-      }));
+      try {
+        if (!Number.isSafeInteger(frame.firstSampleIndex) || frame.firstSampleIndex < 0
+          || !Number.isSafeInteger(frame.sampleCount) || frame.sampleCount <= 0
+          || !Number.isSafeInteger(frame.firstSampleIndex + frame.sampleCount)
+          || (submittedEnd !== null && frame.firstSampleIndex < submittedEnd))
+          throw new Error('Invalid Listen Opus sample span');
+        if (pendingSamples + frame.sampleCount > MAX_PENDING_SAMPLES)
+          throw new Error('Listen Opus decoder fell behind live audio');
+        const instance = decoder ?? open();
+        if (submittedEnd !== null && frame.firstSampleIndex > submittedEnd)
+          audibleFrom = frame.firstSampleIndex;
+        submittedEnd = frame.firstSampleIndex + frame.sampleCount;
+        pending.push({ firstSampleIndex: frame.firstSampleIndex, remaining: frame.sampleCount });
+        pendingSamples += frame.sampleCount;
+        instance.decode(new EncodedAudioChunkClass({
+          type: 'key',
+          timestamp: Math.round((frame.firstSampleIndex * MICROSECONDS_PER_SECOND) / MIX_SAMPLE_RATE),
+          data: frame.packet,
+        }));
+      } catch (error) {
+        fail(error);
+      }
     },
     reset,
   };

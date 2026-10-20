@@ -16,6 +16,7 @@ import { MicRuntime } from '../../src/mic-runtime.js';
 import type { PcmFrame } from '../../src/pcm-frame.js';
 import type { RelaySocket } from '../../src/relay-socket-server.js';
 import { decodeRetransmitRequest } from '../../shared/retransmit-request.js';
+import { micOpusEncoder, opusPacketBytes } from './mic-opus.js';
 
 export const PACKET_MS = 10;
 /** Relay's fixed live prebuffer: how far behind capture the mix reads. */
@@ -88,6 +89,7 @@ export type UplinkRun = {
   pageRetransmits: boolean;
   seed: number;
   sampleRate?: number;
+  opusBitrate?: number;
   /** Capture PCM for one packet. Defaults to a constant byte per packet. */
   pcm?: (index: number, firstSampleIndex: number, samples: number) => Buffer;
   /**
@@ -152,9 +154,14 @@ class PageSocket {
 export async function simulateMicUplink(run: UplinkRun): Promise<Outcome> {
   const { scenario, pageRetransmits, seed } = run;
   const sampleRate = run.sampleRate ?? 48_000;
-  const packetSamples = Math.round((sampleRate * PACKET_MS) / 1_000);
+  const opus = run.opusBitrate ? await micOpusEncoder(run.opusBitrate) : null;
+  if (opus && sampleRate !== 48_000) throw new Error('Opus capture must be 48 kHz');
+  const packetMs = opus ? 20 : PACKET_MS;
+  const packetSamples = Math.round((sampleRate * packetMs) / 1_000);
+  const warmupPackets = WARMUP_PACKETS * PACKET_MS / packetMs;
   const { PreferredAudioTransport } = await import(new URL('../../public/audio-transport.js', import.meta.url).href);
   const page = new PreferredAudioTransport({ retransmitBufferPackets: pageRetransmits ? 128 : 0 });
+  if (opus) page.fallback.setEncodedBitrate(run.opusBitrate);
   const pageSocket = new PageSocket();
   page.bind(pageSocket);
 
@@ -223,12 +230,11 @@ export async function simulateMicUplink(run: UplinkRun): Promise<Outcome> {
   assert.equal(reportHealth(0), true);
 
   const firstSequence = scenario.firstSequence ?? 0;
-  // Numbered as public/app.js numbers them: a packet spends its sequence only
-  // when the transport sent it or kept it for repair. A harness that spent one
-  // per captured packet proved repair for holes the real page never exposed.
+  // PCM spends a sequence when sent/retained; Opus spends one on every
+  // encoder call, including an encoded packet later dropped before sending.
   let nextSequence = firstSequence;
-  const total = Math.round((scenario.seconds * 1_000) / PACKET_MS);
-  const playoutAt = (index: number) => uplink.delayMs + index * PACKET_MS + PLAYOUT_DELAY_MS;
+  const total = Math.round((scenario.seconds * 1_000) / packetMs);
+  const playoutAt = (index: number) => uplink.delayMs + index * packetMs + PLAYOUT_DELAY_MS;
   const heardAt = new Map<number, number>();
   let lastEmittedIndex = -1;
   let lostOnWire = 0;
@@ -267,31 +273,35 @@ export async function simulateMicUplink(run: UplinkRun): Promise<Outcome> {
   const mixHeadroomMs = run.mixHeadroomMs
     ?? ((atMs: number) => (lastEmittedIndex < 0 ? null : playoutAt(lastEmittedIndex + 1) - atMs));
 
-  const endMs = total * PACKET_MS + PLAYOUT_DELAY_MS + 1_000;
+  const endMs = total * packetMs + PLAYOUT_DELAY_MS + 1_000;
   for (nowMs = 0; nowMs <= endMs; nowMs += 1) {
     if (nowMs > 0 && nowMs % 1_000 === 0 && paths().control) {
-      reportHealth((nowMs / PACKET_MS) * packetSamples);
+      reportHealth((nowMs / packetMs) * packetSamples);
     }
 
     pageSocket.readyState = scenario.pageSocketUp?.(nowMs) === false ? 3 : 1;
 
-    // Page: capture one packet every 10 ms.
-    if (nowMs % PACKET_MS === 0 && nowMs / PACKET_MS < total) {
-      const index = nowMs / PACKET_MS;
+    // The real page's PCM/Opus packet duration, on the capture clock.
+    if (nowMs % packetMs === 0 && nowMs / packetMs < total) {
+      const index = nowMs / packetMs;
       const sequence = nextSequence >>> 0;
       const firstSampleIndex = (firstSequence + index) * packetSamples;
-      const bytes = encodeAudioPacket({
+      const pcm = run.pcm?.(index, firstSampleIndex, packetSamples)
+        ?? Buffer.alloc(packetSamples * 2, index & 0xff);
+      const packet = {
         source: 'mic',
         generation: GENERATION,
         sequence,
         firstSampleIndex,
-        pcm: run.pcm?.(index, firstSampleIndex, packetSamples)
-          ?? Buffer.alloc(packetSamples * 2, index & 0xff),
-      });
+        pcm,
+      } as const;
+      const bytes = opus ? opusPacketBytes({ ...packet, sampleCount: packetSamples,
+        pcm: Buffer.from(opus.encode(pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength) as ArrayBuffer)),
+        opusDelaySamples: opus.delaySamples }) : encodeAudioPacket(packet);
       const packetBytes = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength).slice();
       const result = page.send(packetBytes.buffer);
-      if (result.sent || result.retained) nextSequence += 1;
-      if (index < WARMUP_PACKETS) {
+      if (opus || result.sent || result.retained) nextSequence += 1;
+      if (index < warmupPackets) {
         // The warm-up is delivered untouched so every run starts from a live mix.
         originals.add(String(sequence));
         for (const sent of pageSocket.outbox) {

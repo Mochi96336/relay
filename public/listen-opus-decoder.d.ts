@@ -11,6 +11,7 @@ export function listenOpusDecodingSupported(options?: {
 
 export type ListenOpusFrame = {
   firstSampleIndex: number;
+  sampleCount: number;
   packet: ArrayBuffer;
 };
 

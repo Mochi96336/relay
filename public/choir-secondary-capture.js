@@ -2,11 +2,9 @@ import { enforceUnprocessedCapture } from './capture-observability.js';
 import { createMicCaptureGraph } from './mic-capture-graph.js';
 import { claimMicrophoneAudio } from './audio-session-policy.js';
 import { createMicOpusTrial } from './mic-opus-trial.js';
+import { WebSocketAudioTransport } from './audio-transport.js';
 
 const HEADER_BYTES = 24;
-// This is only ~0.25s of native 48 kHz Int16 mono PCM, not seconds
-// of stale audio queued behind an unreliable WebSocket.
-const MAX_BUFFERED_BYTES = 24 * 1024;
 const CLOCK_PROOF_WINDOW_MS = 5_000;
 const MIN_CLOCK_RATE_RATIO = 0.75;
 const MAX_CLOCK_RATE_RATIO = 1.25;
@@ -63,6 +61,7 @@ export class ChoirSecondaryCapture {
     this.context = null;
     this.graph = null;
     this.socket = null;
+    this.transport = new WebSocketAudioTransport();
     this.rate = null;
     this.generation = null;
     this.cursor = 0;
@@ -141,6 +140,7 @@ export class ChoirSecondaryCapture {
         if (opus) {
           opus.reset(this.generation);
           this.opus = opus;
+          this.transport.setEncodedBitrate(opus.bitrate);
         }
       }
       const revoke = () => { if (this.epoch === epoch) this.fail('capture-route-changed'); };
@@ -194,7 +194,12 @@ export class ChoirSecondaryCapture {
       || !this.track || this.track.readyState !== 'live' || this.track.muted
       || sampleRate !== this.rate || socket.readyState !== WebSocket.OPEN)
       return false;
+    // Each newly claimed B socket owns a fresh server decoder. Keep the
+    // capture clock, but start its encoder history at the same boundary.
+    // reset also fences pending output produced for the retired socket.
+    if (socket !== this.socket) this.opus?.reset(this.generation);
     this.socket = socket;
+    this.transport.bind(socket, { sampleRate });
     return true;
   }
 
@@ -246,7 +251,6 @@ export class ChoirSecondaryCapture {
         ? this.context.currentTime - value.capturedAtContextTime : Infinity;
       const socket = this.socket;
       if (!socket || socket.readyState !== WebSocket.OPEN
-        || socket.bufferedAmount > MAX_BUFFERED_BYTES
         || !Number.isFinite(age) || age > 0.2 || age < -0.05
         || !samples || samples > Math.ceil(this.rate * .2)) return;
       if (this.opus) {
@@ -260,8 +264,7 @@ export class ChoirSecondaryCapture {
       const packet = encodeChoirMicV2(
         pcm, this.generation, this.sequence, firstSampleIndex,
       );
-      socket.send(packet);
-      this.sequence = (this.sequence + 1) >>> 0;
+      if (this.sendPacket(packet)) this.sequence = (this.sequence + 1) >>> 0;
     } finally {
       // The audio thread owns its own recycled chunk buffer; return after
       // all packet bytes have been copied, never while encoding it.
@@ -273,10 +276,8 @@ export class ChoirSecondaryCapture {
 
   /** An encoded Opus packet, sent on B's media socket if it can take it now. */
   sendPacket(packet) {
-    const socket = this.socket;
-    if (!socket || socket.readyState !== WebSocket.OPEN
-      || socket.bufferedAmount > MAX_BUFFERED_BYTES) return;
-    socket.send(packet);
+    if (!this.socket || this.transport.socket !== this.socket) return false;
+    return this.transport.send(packet).sent;
   }
 
   fail(reason) {
@@ -287,6 +288,8 @@ export class ChoirSecondaryCapture {
   stop() {
     ++this.epoch;
     this.socket = null;
+    this.transport.unbind();
+    this.transport.setEncodedBitrate(null);
     this.opus?.close();
     this.opus = null;
     this.graph?.dispose();

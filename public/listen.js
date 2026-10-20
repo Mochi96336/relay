@@ -428,7 +428,9 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       if (liveEdgeRecoveryRequired) return;
 
       if (received.reset) {
-        listenOpusDecoder.reset();
+        // A listener-specific gap resets playback, while the shared room
+        // encoder keeps going. Retire its decoder only with the mix stream.
+        if (received.reason === 'generation') listenOpusDecoder.reset();
         listenResampler.reset();
         playbackNode.port.postMessage({ type: 'reset', deClick: true, healthEpoch: playbackHealthEpoch });
       }
@@ -442,6 +444,9 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
         }
         return;
       }
+      // A server encoder failure can switch this socket to PCM. Retire any
+      // asynchronous Opus output before the first PCM frame takes its place.
+      listenOpusDecoder.reset();
       enqueuePlayback(int16ToFloat32(received.frame.pcm), received.frame.firstSampleIndex);
     });
 

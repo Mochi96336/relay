@@ -566,3 +566,13 @@ Mic Opus 試驗現在以 128 kbps 啟動，檔位 128 → 64 → 32 kbps。每�
 RTT本身不觸發降檔。舊／缺少回報保持未知，不升檔；本地持續壅塞仍可降檔。切背景、輸入靜音／中斷、採集資料過期、傳輸路徑或capture generation變更會清除觀察窗口。新generation恢復128kbps。碼率透過Opus ctl在frame之間更新，無需重建編碼器、Mic或capture generation，lookahead與樣本座標不變。Worker確認後才回報實際碼率並更新WebSocket排隊預算。
 
 `captureAndSender.transport.codecBitrateReason` 顯示啟動、持續穩定升檔、壅塞降檔或媒體積壓降檔；Mic技術細節沿用原傳輸說明顯示。128kbps payload約為原PCM的1/6，加應用標頭約139.2kbps。此策略只調Mic上行；房間收聽仍為既有96kbps設定。
+
+### Opus 連續性與雜音驗證
+
+Opus 的 `sequence` 計算實際編碼框數；`firstSampleIndex` 計算擷取時間，包含編碼前丟掉的 PCM。接收端只對遺失的編碼框執行 codec PLC，不再由擷取位置缺口推算。主／副 Mic 共用解碼、lookahead 補償與錯誤處理；副 Mic 每次綁定新媒體 socket，會同步重設兩端 codec history，保留原擷取時鐘。副 Mic 的排隊預算也依 codec 換算為約 200 ms。
+
+`/statusz` 的 `audio.receiverTransport.opus` 回報 `decodedPackets`、`concealedPackets`、`decodeFailures`；它們屬於目前 Mic decoder，不是 receiver 的外框收包計數。無效 payload 不會重建 decoder，仍以缺口計入混音／Take 證據。副 Mic 的 codec 拒收由 `audio.duetIngress.rejected["codec-error"]` 記錄。技術細節不會把「外框全到、解碼失敗」顯示成沒有遺失。
+
+Listen 跳回即時位置只清除播放佇列，保留 codec history；原始 mix position 由有界輸入區間對應，不依賴 WebCodecs 是否保留時間缺口。真正的 mix generation／傳輸替換與 PCM fallback 才退休舊 decoder。
+
+`mic-audible-loss-matrix.test.ts` 同時驗證 PCM 與 32/64/128 kbps 的正式 Opus 路徑，涵蓋丟包、連續丟包、重傳、換路、重連與強音；補音仍計為缺失，不能用補音掩蓋品質證據。實際 Chromium 的 Listen proof 另檢查低電平母音跨缺口後的音量與精確樣本位置；Pi 可用 `RELAY_BROWSER_EXECUTABLE=/usr/bin/chromium` 指定已安裝的瀏覽器。

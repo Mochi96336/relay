@@ -279,7 +279,7 @@ const productMic = new ProductMicSteadiness();
 let micCaptureFallingBehind = false;
 let reportedMicTimelineFolds = 0;
 let reportedMicTimelineUnfolds = 0;
-let micAudibilityReceiverBaseline: { [key: string]: number } | null = null;
+let micAudibilityReceiverBaseline: ReturnType<MicRuntime['receiverStats']> = null;
 
 // Read here rather than beside the other calibration constants because the
 // Take quality policy needs it too: it is the line between the mixer's own

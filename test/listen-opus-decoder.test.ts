@@ -67,8 +67,51 @@ function fakeDecoderClass() {
 }
 
 function frameAt(firstSampleIndex: number) {
-  return { firstSampleIndex, packet: new Uint8Array([1, 2, 3]).buffer };
+  return { firstSampleIndex, sampleCount: 960, packet: new Uint8Array([1, 2, 3]).buffer };
 }
+
+test('a sample gap preserves codec history and original positions despite continuous WebCodecs timestamps', () => {
+  const { FakeAudioDecoder, instances } = fakeDecoderClass();
+  const positions: number[] = [];
+  const decoder = createListenOpusDecoder({
+    onPcm: (_pcm, start) => positions.push(start), onError: assert.fail,
+    AudioDecoderClass: FakeAudioDecoder, EncodedAudioChunkClass: FakeEncodedAudioChunk,
+  });
+  decoder.decode(frameAt(0));
+  instances[0].emit(0);
+  decoder.decode(frameAt(1920));
+  // Chromium keeps output timestamps continuous across an encoded input gap.
+  instances[0].init.output(new FakeAudioData(20_000, 960, 0.5));
+  assert.equal(instances.length, 1, 'a playback gap is not an encoder restart');
+  assert.deepEqual(positions, [0, 1920]);
+});
+
+test('a live-edge jump discards pending old output while still consuming its codec history', () => {
+  const { FakeAudioDecoder, instances } = fakeDecoderClass();
+  const positions: number[] = [];
+  const decoder = createListenOpusDecoder({
+    onPcm: (_pcm, start) => positions.push(start), onError: assert.fail,
+    AudioDecoderClass: FakeAudioDecoder, EncodedAudioChunkClass: FakeEncodedAudioChunk,
+  });
+  decoder.decode(frameAt(0));
+  decoder.decode(frameAt(960));
+  decoder.decode(frameAt(9600));
+  instances[0].emit(0); instances[0].emit(1); instances[0].emit(2);
+  assert.deepEqual(positions, [9600], 'in-flight audio from before the queue reset cannot play afterwards');
+});
+
+test('split and combined decoder outputs retain each packet\'s positioned sample span', () => {
+  const { FakeAudioDecoder, instances } = fakeDecoderClass();
+  const spans: [number, number][] = [];
+  const decoder = createListenOpusDecoder({
+    onPcm: (pcm, start) => spans.push([start, pcm.length]), onError: assert.fail,
+    AudioDecoderClass: FakeAudioDecoder, EncodedAudioChunkClass: FakeEncodedAudioChunk,
+  });
+  decoder.decode(frameAt(10)); decoder.decode(frameAt(970));
+  instances[0].init.output(new FakeAudioData(0, 480, 0.5));
+  instances[0].init.output(new FakeAudioData(10_000, 1440, 0.5));
+  assert.deepEqual(spans, [[10, 480], [490, 480], [970, 960]]);
+});
 
 test('decoded Opus comes back at the mix position it was sent for', () => {
   const { FakeAudioDecoder, instances } = fakeDecoderClass();
@@ -126,6 +169,35 @@ test('a decoder error is reported once and the next frame starts over', () => {
   instances[0].init.error(new Error('bad packet'));
   instances[0].init.error(new Error('again'));
   assert.deepEqual(errors, ['bad packet']);
+  assert.equal(instances[0].state, 'closed');
+});
+
+test('a decoder that stops producing PCM has a bounded pending history and retires cleanly', () => {
+  const { FakeAudioDecoder, instances } = fakeDecoderClass();
+  const errors: string[] = [];
+  const decoder = createListenOpusDecoder({
+    onPcm: () => assert.fail('retired output'), onError: error => errors.push(error.message),
+    AudioDecoderClass: FakeAudioDecoder, EncodedAudioChunkClass: FakeEncodedAudioChunk,
+  });
+  for (let i = 0; i <= 50; i++) decoder.decode(frameAt(i * 960));
+  assert.deepEqual(errors, ['Listen Opus decoder fell behind live audio']);
+  assert.equal(instances[0].state, 'closed');
+  const stale = instances[0].emit(0);
+  assert.equal(stale.closed, true);
+});
+
+test('a synchronous configure failure closes the allocated decoder', () => {
+  const { FakeAudioDecoder, instances } = fakeDecoderClass();
+  class Unconfigurable extends FakeAudioDecoder {
+    configure() { throw new Error('configure refused'); }
+  }
+  const errors: string[] = [];
+  const decoder = createListenOpusDecoder({
+    onPcm: () => assert.fail('no PCM'), onError: error => errors.push(error.message),
+    AudioDecoderClass: Unconfigurable, EncodedAudioChunkClass: FakeEncodedAudioChunk,
+  });
+  decoder.decode(frameAt(0));
+  assert.deepEqual(errors, ['configure refused']);
   assert.equal(instances[0].state, 'closed');
 });
 

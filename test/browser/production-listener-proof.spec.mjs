@@ -5,11 +5,13 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { chromium, expect, test } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { Encoder } from '@evan/opus';
 import WebSocket from 'ws';
 
 import { startRelay } from './support/relay-process.mjs';
+import { launchChromium } from './support/chromium.mjs';
+import { quietVowelFrames } from '../helpers/mic-opus.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const RELAY_ENV = { RELAY_LIVE_PREBUFFER_MS: '40' };
@@ -154,7 +156,7 @@ test('real Chromium renders the real Relay monitor path through production Liste
   test.setTimeout(35_000);
   const relay = await startRelay(RELAY_ENV);
   const mic = await startDeterministicMic(relay);
-  const browser = await chromium.launch({
+  const browser = await launchChromium({
     channel: 'chromium',
     args: ['--autoplay-policy=no-user-gesture-required'],
   });
@@ -190,7 +192,7 @@ test('real Chromium listener recovers monitor reconnect, proven starvation and A
   test.setTimeout(45_000);
   const relay = await startRelay(RELAY_ENV);
   const mic = await startDeterministicMic(relay);
-  const browser = await chromium.launch({
+  const browser = await launchChromium({
     channel: 'chromium',
     args: ['--autoplay-policy=no-user-gesture-required'],
   });
@@ -276,7 +278,7 @@ test('real Chromium listener de-clicks the playback reset when a monitor reconne
   test.setTimeout(30_000);
   const relay = await startRelay(RELAY_ENV);
   const mic = await startDeterministicMic(relay);
-  const browser = await chromium.launch({
+  const browser = await launchChromium({
     channel: 'chromium',
     args: ['--autoplay-policy=no-user-gesture-required'],
   });
@@ -338,7 +340,7 @@ test('iOS foreground lifecycle restarts the real AudioDestination once and retur
   test.setTimeout(45_000);
   const relay = await startRelay(RELAY_ENV);
   const mic = await startDeterministicMic(relay);
-  const browser = await chromium.launch({
+  const browser = await launchChromium({
     channel: 'chromium',
     args: ['--autoplay-policy=no-user-gesture-required'],
   });
@@ -403,7 +405,7 @@ test('iOS lifecycle waits through slow foreground resume and delayed post-Mic ow
   test.setTimeout(45_000);
   const relay = await startRelay(RELAY_ENV);
   const mic = await startDeterministicMic(relay);
-  const browser = await chromium.launch({
+  const browser = await launchChromium({
     channel: 'chromium',
     args: ['--autoplay-policy=no-user-gesture-required'],
   });
@@ -555,6 +557,7 @@ test('real Chromium WebCodecs decodes Relay Listen Opus at its mix positions', a
     const firstSampleIndex = start + index * CHUNK_SAMPLES;
     packets.push({
       firstSampleIndex,
+      sampleCount: CHUNK_SAMPLES,
       base64: Buffer.from(encoder.encode(sineChunk(firstSampleIndex, 997, 12_000))).toString('base64'),
     });
   }
@@ -565,7 +568,7 @@ test('real Chromium WebCodecs decodes Relay Listen Opus at its mix positions', a
     response.end('<!doctype html><title>opus</title>');
   });
   await new Promise((resolve) => origin.listen(0, '127.0.0.1', resolve));
-  const browser = await chromium.launch({ channel: 'chromium' });
+  const browser = await launchChromium({ channel: 'chromium' });
   try {
     const page = await browser.newPage();
     await page.goto(`http://127.0.0.1:${origin.address().port}/`);
@@ -587,7 +590,7 @@ test('real Chromium WebCodecs decodes Relay Listen Opus at its mix positions', a
       });
       for (const frame of frames.packets) {
         const bytes = Uint8Array.from(atob(frame.base64), (char) => char.charCodeAt(0));
-        decoder.decode({ firstSampleIndex: frame.firstSampleIndex, packet: bytes.buffer });
+        decoder.decode({ firstSampleIndex: frame.firstSampleIndex, sampleCount: frame.sampleCount, packet: bytes.buffer });
       }
       const deadline = performance.now() + 5_000;
       while (decoded.length < frames.packets.length && errors.length === 0 && performance.now() < deadline) {
@@ -619,11 +622,70 @@ test('real Chromium WebCodecs decodes Relay Listen Opus at its mix positions', a
   }
 });
 
+test('real Chromium Opus gaps preserve voice level and exact mix positions', async () => {
+  test.setTimeout(30_000);
+  const encoder = new Encoder({ channels: 1, sample_rate: SAMPLE_RATE, application: 'audio' });
+  encoder.bitrate = 96_000;
+  encoder.signal = 'music';
+  const start = SAMPLE_RATE * 60 * 60 * 5 + 7;
+  const packets = quietVowelFrames(70).map((pcm, index) => ({
+    firstSampleIndex: start + index * CHUNK_SAMPLES,
+    sampleCount: CHUNK_SAMPLES,
+    base64: Buffer.from(encoder.encode(Buffer.from(pcm))).toString('base64'),
+  }));
+  const origin = createServer((_request, response) => response.end('<!doctype html><title>opus gap</title>'));
+  await new Promise(resolve => origin.listen(0, '127.0.0.1', resolve));
+  const browser = await launchChromium();
+  try {
+    const page = await browser.newPage();
+    await page.goto(`http://127.0.0.1:${origin.address().port}/`);
+    const result = await page.evaluate(async ({ packets, module }) => {
+      const { createListenOpusDecoder } = await import('data:text/javascript;base64,' + module);
+      const run = async (drop, resetAtGap = false) => {
+        const output = {}, errors = [];
+        const decoder = createListenOpusDecoder({
+          onPcm: (pcm, position) => {
+            let power = 0, peak = 0;
+            for (const sample of pcm) { power += sample * sample; peak = Math.max(peak, Math.abs(sample)); }
+            output[position] = { rms: Math.sqrt(power / pcm.length), peak, samples: pcm.length };
+          },
+          onError: error => errors.push(String(error)),
+        });
+        try {
+          for (let index = 0; index < packets.length; index++) {
+            if (drop && index === 40) continue;
+            if (resetAtGap && index === 41) decoder.reset();
+            const frame = packets[index];
+            decoder.decode({ ...frame, packet: Uint8Array.from(atob(frame.base64), c => c.charCodeAt(0)).buffer });
+            const deadline = performance.now() + 2_000;
+            while (!output[frame.firstSampleIndex] && errors.length === 0 && performance.now() < deadline)
+              await new Promise(resolve => setTimeout(resolve, 5));
+            if (!output[frame.firstSampleIndex]) throw new Error(`No output at ${frame.firstSampleIndex}: ${errors}`);
+          }
+          return { output, errors };
+        } finally { decoder.reset(); }
+      };
+      return { clean: await run(false), gap: await run(true), oldReset: await run(true, true) };
+    }, { packets, module: fs.readFileSync(path.join(root, 'public/listen-opus-decoder.js')).toString('base64') });
+    assert.deepEqual(result.clean.errors, []);
+    assert.deepEqual(result.gap.errors, []);
+    assert.deepEqual(Object.keys(result.gap.output).map(Number),
+      packets.filter((_, i) => i !== 40).map(p => p.firstSampleIndex), 'a hole never compresses the mix timeline');
+    const after = packets.slice(41, 46).map(p => p.firstSampleIndex);
+    const overshoot = run => Math.max(...after.map(at => run.output[at].rms / result.clean.output[at].rms));
+    assert.ok(overshoot(result.oldReset) > 1.25, 'the signal must expose the original reset pop');
+    assert.ok(overshoot(result.gap) <= 1.1, `gap amplified the voice by ${overshoot(result.gap)}`);
+  } finally {
+    await browser.close();
+    await new Promise(resolve => origin.close(resolve));
+  }
+});
+
 test('real Chromium Listen negotiates Opus with a Relay that offers it and keeps playing', async () => {
   test.setTimeout(35_000);
   const relay = await startRelay({ ...RELAY_ENV, RELAY_LISTEN_OPUS: '1' });
   const mic = await startDeterministicMic(relay);
-  const browser = await chromium.launch({
+  const browser = await launchChromium({
     channel: 'chromium',
     args: ['--autoplay-policy=no-user-gesture-required'],
   });

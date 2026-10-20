@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  QUICK_PROBE,
   RelayClient,
   laggedPair,
   pulseTrain,
@@ -87,15 +88,7 @@ test('a content calibration from the desktop route does not survive the room bec
   }
 });
 
-const ROBOT = {
-  ...FAST,
-  RELAY_CALIBRATION_PROBE: '1',
-  RELAY_CALIBRATION_PROBE_RETRY_MS: '100',
-  RELAY_CALIBRATION_PROBE_LEAD_MS: '20',
-  RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS: '200',
-  RELAY_CALIBRATION_PROBE_MIN_CORRELATION: '0',
-  RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS: '3000',
-};
+const ROBOT = { ...FAST, ...QUICK_PROBE };
 
 test('a manual recalibration on the Robot route starts a fresh probe run after one ran out', async () => {
   const server = await startRelay(ROBOT);

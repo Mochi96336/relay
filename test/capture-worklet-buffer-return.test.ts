@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
+import { loadWorkletProcessor } from './support/audio-worklet.js';
 import { captureFixture } from './support/capture-graph-fixture.js';
 
 type CapturedProcessor = {
@@ -16,30 +15,11 @@ type CapturedProcessor = {
 type PcmMessage = { type: 'pcm'; buffer: ArrayBuffer };
 
 async function loadCaptureProcessor() {
-  const source = await readFile(path.resolve('public/capture-worklet.js'), 'utf8');
-  let RegisteredProcessor: (new () => CapturedProcessor) | null = null;
-
-  class FakeAudioWorkletProcessor {
-    port = {
-      messages: [] as unknown[],
-      onmessage: null as ((event: { data: unknown }) => void) | null,
-      postMessage: (message: unknown) => {
-        this.port.messages.push(message);
-      },
-    };
-  }
-
-  const context = vm.createContext({
-    AudioWorkletProcessor: FakeAudioWorkletProcessor,
-    sampleRate: 48_000,
-    currentTime: 1,
-    registerProcessor: (_name: string, processor: new () => CapturedProcessor) => {
-      RegisteredProcessor = processor;
-    },
-  });
-  vm.runInContext(source, context);
-  if (!RegisteredProcessor) throw new Error('capture-processor was not registered');
-  const processor = new (RegisteredProcessor as new () => CapturedProcessor)();
+  const { processor, context } = await loadWorkletProcessor<CapturedProcessor>(
+    'public/capture-worklet.js',
+    'capture-processor',
+    { currentTime: 1 },
+  );
   processor.port.onmessage?.({ data: { type: 'capture-protocol', pcmEnvelope: true } });
   // A transferred buffer arrives in the worklet's own realm.
   const workletArrayBuffer = (byteLength: number) => (

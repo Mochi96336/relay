@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
-import vm from 'node:vm';
 
+import { loadWorkletProcessor } from './support/audio-worklet.js';
 type CapturedProcessor = {
   process(inputs: unknown[]): boolean;
   port: {
@@ -43,35 +43,13 @@ async function captureWorkletSource() {
   return readFile(path.resolve('public/capture-worklet.js'), 'utf8');
 }
 
-function loadCaptureProcessor(workletSampleRate = 48_000) {
-  let registeredName: string | null = null;
-  let RegisteredProcessor: (new () => CapturedProcessor) | null = null;
-
-  class FakeAudioWorkletProcessor {
-    port = {
-      messages: [] as unknown[],
-      onmessage: null as ((event: { data: unknown }) => void) | null,
-      postMessage: (message: unknown) => {
-        this.port.messages.push(message);
-      },
-    };
-  }
-
-  return captureWorkletSource().then((source) => {
-    vm.runInNewContext(source, {
-      AudioWorkletProcessor: FakeAudioWorkletProcessor,
-      sampleRate: workletSampleRate,
-      currentTime: 12.5,
-      registerProcessor: (name: string, processor: new () => CapturedProcessor) => {
-        registeredName = name;
-        RegisteredProcessor = processor;
-      },
-    });
-
-    assert.equal(registeredName, 'capture-processor');
-    if (!RegisteredProcessor) throw new Error('capture-processor was not registered');
-    return new RegisteredProcessor();
-  });
+async function loadCaptureProcessor(workletSampleRate = 48_000) {
+  const { processor } = await loadWorkletProcessor<CapturedProcessor>(
+    'public/capture-worklet.js',
+    'capture-processor',
+    { sampleRate: workletSampleRate },
+  );
+  return processor;
 }
 
 function latestLevel(processor: CapturedProcessor) {

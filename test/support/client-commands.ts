@@ -1,4 +1,21 @@
-import { type RelayClient, waitForNewMessage } from '../helpers/harness.js';
+import { RelayClient, type RelayServer, waitForNewMessage } from '../helpers/harness.js';
+
+/**
+ * `name`'s Mic page, registered as the 48 kHz publisher. `takeoverExpectedOwnerId`
+ * names the owner it takes the Mic over from, as the takeover button does.
+ */
+export async function micPublisher(server: RelayServer, name: string, takeoverExpectedOwnerId?: string) {
+  const client = await RelayClient.connectAs(server, name);
+  client.send({
+    type: 'register',
+    role: 'publisher',
+    sampleRate: 48_000,
+    captureGeneration: 1,
+    ...(takeoverExpectedOwnerId !== undefined ? { takeoverExpectedOwnerId } : {}),
+  });
+  await client.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
+  return client;
+}
 
 /** Registers `client` as a playback tab and waits until Relay confirms it. */
 export async function registerPlayback(client: RelayClient, transportId: string, generation = 1) {

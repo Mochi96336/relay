@@ -2,10 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { participantIdFor, RelayClient, startRelay } from './helpers/harness.js';
-import { playRoomSong, registerPlayback } from './support/client-commands.js';
+import { micPublisher, playRoomSong, registerPlayback } from './support/client-commands.js';
 import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
-const RATE = 48_000;
 const VIDEO = 'dQw4w9WgXcQ';
 const FAST = {
   RELAY_AUTO_CALIBRATE: '0',
@@ -21,26 +20,6 @@ async function playback(
 ) {
   const client = await RelayClient.connectAs(server, name);
   await registerPlayback(client, transportId);
-  return client;
-}
-
-async function publisher(
-  server: Awaited<ReturnType<typeof startRelay>>,
-  name: string,
-  takeoverExpectedOwnerId?: string,
-) {
-  const client = await RelayClient.connectAs(server, name);
-  const registration: Record<string, unknown> = {
-    type: 'register',
-    role: 'publisher',
-    sampleRate: RATE,
-    captureGeneration: 1,
-  };
-  if (takeoverExpectedOwnerId !== undefined) {
-    registration.takeoverExpectedOwnerId = takeoverExpectedOwnerId;
-  }
-  client.send(registration);
-  await client.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
   return client;
 }
 
@@ -71,14 +50,14 @@ test('Mic takeover terminates the prior owner intent before prepared playback ha
   const server = await startRelay(FAST);
   try {
     const aPlayback = await playback(server, 'A', 'playback-epoch-a');
-    const aPublisher = await publisher(server, 'A');
+    const aPublisher = await micPublisher(server, 'A');
     await playRoomSong(aPlayback, { prefix: 'epoch-base' });
     await leavePendingSeek(aPlayback);
 
     const bPlayback = await playback(server, 'B', 'playback-epoch-b');
     bPlayback.send({ type: 'playback-mic-intent' });
     await bPlayback.waitForType('playback-mic-intent-registered');
-    const bPublisher = await publisher(server, 'B', A_ID);
+    const bPublisher = await micPublisher(server, 'B', A_ID);
 
     const cancelled = await aPlayback.waitFor((message) => (
       message.type === 'room-song-command-failed-ack'
@@ -128,7 +107,7 @@ test('explicit Mic release terminates pending intent and late proof cannot resur
   const server = await startRelay(FAST);
   try {
     const aPlayback = await playback(server, 'A', 'playback-release-a');
-    const aPublisher = await publisher(server, 'A');
+    const aPublisher = await micPublisher(server, 'A');
     await playRoomSong(aPlayback, { prefix: 'epoch-base' });
     await leavePendingSeek(aPlayback);
 

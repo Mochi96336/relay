@@ -1,11 +1,9 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
-import { functionCode, parseTypeScriptSource } from './support/source-contract.js';
+import { functionCode, readSourceContract } from './support/source-contract.js';
 
-const source = parseTypeScriptSource(new URL('../public/app.js', import.meta.url),
-  readFileSync(new URL('../public/app.js', import.meta.url), 'utf8'));
+const source = readSourceContract('public/app.js');
 
 function publisher() {
   const calls: unknown[][] = [];

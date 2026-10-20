@@ -2,10 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { participantIdFor, RelayClient, startRelay } from './helpers/harness.js';
-import { playRoomSong, registerPlayback } from './support/client-commands.js';
+import { micPublisher, playRoomSong, registerPlayback } from './support/client-commands.js';
 import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
-const RATE = 48_000;
 const VIDEO = 'dQw4w9WgXcQ';
 const FAST = {
   RELAY_AUTO_CALIBRATE: '0',
@@ -23,23 +22,6 @@ async function playback(
   return client;
 }
 
-async function publisher(
-  server: Awaited<ReturnType<typeof startRelay>>,
-  name: string,
-  takeoverExpectedOwnerId?: string,
-) {
-  const client = await RelayClient.connectAs(server, name);
-  client.send({
-    type: 'register',
-    role: 'publisher',
-    sampleRate: RATE,
-    captureGeneration: 1,
-    ...(takeoverExpectedOwnerId !== undefined ? { takeoverExpectedOwnerId } : {}),
-  });
-  await client.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
-  return client;
-}
-
 function telemetry(currentTime: number, overrides: Record<string, unknown> = {}) {
   return { type: 'youtube-telemetry', ...youtubeTelemetry({ currentTime, ...overrides }) };
 }
@@ -48,13 +30,13 @@ test('server cancels a stuck commit without depending on the target client watch
   const server = await startRelay(FAST);
   try {
     const aPlayback = await playback(server, 'A', 'playback-tab-a');
-    const aPublisher = await publisher(server, 'A');
+    const aPublisher = await micPublisher(server, 'A');
     await playRoomSong(aPlayback, { positionSeconds: 10, prefix: 'watchdog' });
 
     const bPlayback = await playback(server, 'B', 'playback-tab-b');
     bPlayback.send({ type: 'playback-mic-intent' });
     await bPlayback.waitForType('playback-mic-intent-registered');
-    const bPublisher = await publisher(server, 'B', A_ID);
+    const bPublisher = await micPublisher(server, 'B', A_ID);
 
     const prepare = await bPlayback.waitForType('song-handoff-prepare');
     bPlayback.send({ type: 'song-handoff-ready', handoffId: prepare.handoffId });

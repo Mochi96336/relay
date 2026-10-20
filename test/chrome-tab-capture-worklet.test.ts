@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
 import test from 'node:test';
-import vm from 'node:vm';
 
+import { loadWorkletProcessor } from './support/audio-worklet.js';
 type CapturedProcessor = {
   process(inputs: unknown[], outputs: unknown[]): boolean;
   port: {
@@ -19,37 +17,12 @@ type PcmMessage = {
 };
 
 async function loadProcessor(workletSampleRate = 48_000) {
-  let registeredName: string | null = null;
-  let RegisteredProcessor: (new () => CapturedProcessor) | null = null;
-
-  class FakeAudioWorkletProcessor {
-    port = {
-      messages: [] as unknown[],
-      onmessage: null as ((event: { data: unknown }) => void) | null,
-      postMessage: (message: unknown) => {
-        this.port.messages.push(message);
-      },
-    };
-  }
-
-  const source = await readFile(
-    path.resolve('chrome-tab-audio-probe/capture-worklet.js'),
-    'utf8',
+  const { processor } = await loadWorkletProcessor<CapturedProcessor>(
+    'chrome-tab-audio-probe/capture-worklet.js',
+    'relay-tab-capture',
+    { sampleRate: workletSampleRate },
   );
-  vm.runInNewContext(source, {
-    AudioWorkletProcessor: FakeAudioWorkletProcessor,
-    sampleRate: workletSampleRate,
-    currentTime: 12.5,
-    registerProcessor: (name: string, processor: new () => CapturedProcessor) => {
-      registeredName = name;
-      RegisteredProcessor = processor;
-    },
-  });
-
-  assert.equal(registeredName, 'relay-tab-capture');
-  if (!RegisteredProcessor) throw new Error('relay-tab-capture was not registered');
-  const Processor = RegisteredProcessor as unknown as new () => CapturedProcessor;
-  return new Processor();
+  return processor;
 }
 
 function enableEnvelope(processor: CapturedProcessor) {

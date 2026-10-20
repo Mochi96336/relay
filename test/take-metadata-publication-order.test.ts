@@ -1,16 +1,12 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
   classMethodCode,
-  parseTypeScriptSource,
+  readSourceContract,
 } from './support/source-contract.js';
 
-const controller = parseTypeScriptSource(
-  new URL('../src/take-controller.ts', import.meta.url),
-  readFileSync(new URL('../src/take-controller.ts', import.meta.url), 'utf8'),
-);
+const controller = readSourceContract('src/take-controller.ts');
 
 test('Take finalization stages rich metadata before publishing the WAV', () => {
   const finalize = classMethodCode(controller, 'TakeController', 'finalizeWriter');

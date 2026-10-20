@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  QUICK_PROBE,
   RelayClient,
   pulseTrain,
   sendPcmInChunks,
@@ -23,15 +24,7 @@ const FAST = {
   RELAY_CALIBRATION_PROBE: '0',
   RELAY_CALIBRATION_VALIDATION: '0',
 };
-const ROBOT = {
-  ...FAST,
-  RELAY_CALIBRATION_PROBE: '1',
-  RELAY_CALIBRATION_PROBE_RETRY_MS: '100',
-  RELAY_CALIBRATION_PROBE_LEAD_MS: '20',
-  RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS: '200',
-  RELAY_CALIBRATION_PROBE_MIN_CORRELATION: '0',
-  RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS: '3000',
-};
+const ROBOT = { ...FAST, ...QUICK_PROBE };
 
 /** Sends real-time 20 ms frames, as a live capture would, until stopped. */
 function streamLive(client: RelayClient, gain: number) {

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  QUICK_PROBE,
   RelayClient,
   sendPcmInChunks,
   sleep,
@@ -86,15 +87,7 @@ test('a Desktop Source that closes during calibration fails it and leaves the mi
   }
 });
 
-const ROBOT = {
-  ...FAST,
-  RELAY_CALIBRATION_PROBE: '1',
-  RELAY_CALIBRATION_PROBE_RETRY_MS: '100',
-  RELAY_CALIBRATION_PROBE_LEAD_MS: '20',
-  RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS: '200',
-  RELAY_CALIBRATION_PROBE_MIN_CORRELATION: '0',
-  RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS: '3000',
-};
+const ROBOT = { ...FAST, ...QUICK_PROBE };
 
 test('a Robot source that closes mid probe abandons the probe and says it is gone', async () => {
   const server = await startRelay(ROBOT);

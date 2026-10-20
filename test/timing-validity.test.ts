@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test, { describe } from 'node:test';
 
 import {
+  QUICK_PROBE,
   RelayClient,
   laggedPair,
   primeStreams,
@@ -163,15 +164,7 @@ describe('timing validity boundary', () => {
 });
 
 describe('robot calibration ownership', () => {
-  const ROBOT_FAST = {
-    ...FAST,
-    RELAY_CALIBRATION_PROBE: '1',
-    RELAY_CALIBRATION_PROBE_RETRY_MS: '100',
-    RELAY_CALIBRATION_PROBE_LEAD_MS: '20',
-    RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS: '200',
-    RELAY_CALIBRATION_PROBE_MIN_CORRELATION: '0',
-    RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS: '3000',
-  };
+  const ROBOT_FAST = { ...FAST, ...QUICK_PROBE };
 
   test('robot backing suppresses legacy auto-calibration before Chromium says hello', async () => {
     const server = await startRelay({ ...ROBOT_FAST, RELAY_AUTO_CALIBRATE: '1' });

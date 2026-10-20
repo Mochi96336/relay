@@ -1,22 +1,15 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
   functionCode,
-  parseTypeScriptSource,
+  readSourceContract,
   sourceCode,
   variableInitializerCode,
 } from './support/source-contract.js';
 
-const server = parseTypeScriptSource(
-  new URL('../src/server.ts', import.meta.url),
-  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
-);
-const protocol = parseTypeScriptSource(
-  new URL('../src/relay-infrastructure-event-protocol.ts', import.meta.url),
-  readFileSync(new URL('../src/relay-infrastructure-event-protocol.ts', import.meta.url), 'utf8'),
-);
+const server = readSourceContract('src/server.ts');
+const protocol = readSourceContract('src/relay-infrastructure-event-protocol.ts');
 
 test('server delegates low-risk infrastructure observations through their own routing seam', () => {
   const serverCode = sourceCode(server);

@@ -1,10 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
-import { functionCode, parseTypeScriptSource } from './support/source-contract.js';
-const source = parseTypeScriptSource(new URL('../public/source.js', import.meta.url),
-  readFileSync(new URL('../public/source.js', import.meta.url), 'utf8'));
+import { functionCode, readSourceContract } from './support/source-contract.js';
+const source = readSourceContract('public/source.js');
 
 function follower(current: number) {
   const seeks: number[] = [];

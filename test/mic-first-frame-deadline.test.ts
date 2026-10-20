@@ -1,23 +1,16 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
   classMethodCode,
   functionCode,
-  parseTypeScriptSource,
+  readSourceContract,
   sourceCode,
   variableInitializerCode,
 } from './support/source-contract.js';
 
-const server = parseTypeScriptSource(
-  new URL('../src/server.ts', import.meta.url),
-  readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
-);
-const micRuntime = parseTypeScriptSource(
-  new URL('../src/mic-runtime.ts', import.meta.url),
-  readFileSync(new URL('../src/mic-runtime.ts', import.meta.url), 'utf8'),
-);
+const server = readSourceContract('src/server.ts');
+const micRuntime = readSourceContract('src/mic-runtime.ts');
 const serverCode = sourceCode(server);
 const micRuntimeCode = sourceCode(micRuntime);
 

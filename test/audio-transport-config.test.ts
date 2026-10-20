@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
 import {
@@ -10,7 +9,7 @@ import { AudioPacketReceiver } from '../src/audio-packet-receiver.js';
 import { startRelay } from './helpers/harness.js';
 import {
   classMethodCode,
-  parseTypeScriptSource,
+  readSourceContract,
   sourceCode,
   variableInitializerCode,
 } from './support/source-contract.js';
@@ -117,14 +116,8 @@ describe('audio transport configuration', () => {
   });
 
   it('keeps the receiver on the validated config boundary after Mic runtime extraction', () => {
-    const server = parseTypeScriptSource(
-      new URL('../src/server.ts', import.meta.url),
-      readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
-    );
-    const micRuntime = parseTypeScriptSource(
-      new URL('../src/mic-runtime.ts', import.meta.url),
-      readFileSync(new URL('../src/mic-runtime.ts', import.meta.url), 'utf8'),
-    );
+    const server = readSourceContract('src/server.ts');
+    const micRuntime = readSourceContract('src/mic-runtime.ts');
     const serverCode = sourceCode(server);
     const micRuntimeCode = sourceCode(micRuntime);
     const transportBoundary = `${serverCode}\n${micRuntimeCode}`;

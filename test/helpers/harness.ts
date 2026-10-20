@@ -27,6 +27,19 @@ export type RelayServer = {
   infrastructureKey: string;
 };
 
+/**
+ * A boot probe that starts at once and settles fast: any correlation counts and
+ * analysis may take up to 3 s. Spread over a test's own env for a Robot room.
+ */
+export const QUICK_PROBE = {
+  RELAY_CALIBRATION_PROBE: '1',
+  RELAY_CALIBRATION_PROBE_RETRY_MS: '100',
+  RELAY_CALIBRATION_PROBE_LEAD_MS: '20',
+  RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS: '200',
+  RELAY_CALIBRATION_PROBE_MIN_CORRELATION: '0',
+  RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS: '3000',
+};
+
 /** The infrastructure capability every spawned server accepts unless a test sets its own. */
 const HARNESS_INFRA_KEY = 'c0'.repeat(32);
 

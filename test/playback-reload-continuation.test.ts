@@ -6,10 +6,9 @@ import { parseRoomSongCommand } from '../src/room-song-command.js';
 import { RoomSongCommandSession } from '../src/room-song-command-session.js';
 import { SongSession } from '../src/song-session.js';
 import { participantIdFor, RelayClient, startRelay } from './helpers/harness.js';
-import { playRoomSong, registerPlayback } from './support/client-commands.js';
+import { micPublisher, playRoomSong, registerPlayback } from './support/client-commands.js';
 import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
-const RATE = 48_000;
 const VIDEO = 'dQw4w9WgXcQ';
 const FAST = {
   RELAY_AUTO_CALIBRATE: '0',
@@ -51,26 +50,6 @@ async function playback(
 ) {
   const client = await RelayClient.connectAs(server, name);
   await registerPlayback(client, identity.transportId, identity.generation);
-  return client;
-}
-
-async function publisher(
-  server: Awaited<ReturnType<typeof startRelay>>,
-  name: string,
-  takeoverExpectedOwnerId?: string,
-) {
-  const client = await RelayClient.connectAs(server, name);
-  const registration: Record<string, unknown> = {
-    type: 'register',
-    role: 'publisher',
-    sampleRate: RATE,
-    captureGeneration: 1,
-  };
-  if (takeoverExpectedOwnerId !== undefined) {
-    registration.takeoverExpectedOwnerId = takeoverExpectedOwnerId;
-  }
-  client.send(registration);
-  await client.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
   return client;
 }
 
@@ -151,13 +130,13 @@ test('Mic takeover can continue through a reload of its prepared playback tab', 
   const server = await startRelay(FAST);
   try {
     const aPlayback = await playback(server, A, 'A');
-    const aPublisher = await publisher(server, 'A');
+    const aPublisher = await micPublisher(server, 'A');
     await playRoomSong(aPlayback, { prefix: 'reload-handoff' });
 
     const bPlayback = await playback(server, B, 'B');
     bPlayback.send({ type: 'playback-mic-intent' });
     await bPlayback.waitForType('playback-mic-intent-registered');
-    const bPublisher = await publisher(server, 'B', A.participantId);
+    const bPublisher = await micPublisher(server, 'B', A.participantId);
 
     const firstPrepare = await bPlayback.waitForType('song-handoff-prepare');
     assert.equal(firstPrepare.videoId, VIDEO);
@@ -198,7 +177,7 @@ test('reload hello clears an old-generation command without waiting for command 
   const server = await startRelay(FAST);
   try {
     const aPlayback = await playback(server, A, 'A');
-    const aPublisher = await publisher(server, 'A');
+    const aPublisher = await micPublisher(server, 'A');
     await playRoomSong(aPlayback, { prefix: 'reload-command' });
 
     const pendingId = 'reload-command-pause';

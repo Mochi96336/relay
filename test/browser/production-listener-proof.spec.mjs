@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { createServer } from 'node:http';
@@ -10,78 +9,16 @@ import { chromium, expect, test } from '@playwright/test';
 import { Encoder } from '@evan/opus';
 import WebSocket from 'ws';
 
+import { startRelay } from './support/relay-process.mjs';
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const STARTUP_TIMEOUT_MS = 20_000;
+const RELAY_ENV = { RELAY_LIVE_PREBUFFER_MS: '40' };
 const SAMPLE_RATE = 48_000;
 const CHUNK_MS = 20;
 const CHUNK_SAMPLES = Math.round((SAMPLE_RATE * CHUNK_MS) / 1000);
 const CAPTURE_GENERATION = 7;
 const STARVATION_FAULT_MS = 1_200;
 const IOS_USER_AGENT = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 Version/18.6 Mobile/15E148 Safari/604.1';
-
-function startRelay(extraEnv = {}) {
-  const child = spawn(
-    process.execPath,
-    ['--import', 'tsx', path.join(root, 'src', 'server-entry.ts')],
-    {
-      cwd: root,
-      env: {
-        ...process.env,
-        PORT: '0',
-        NODE_ENV: 'test',
-        RELAY_AUTO_CALIBRATE: '0',
-        RELAY_CALIBRATION_VALIDATION: '0',
-        RELAY_CALIBRATION_PROBE: '0',
-        RELAY_HEARTBEAT_MS: '60000',
-        RELAY_LIVE_PREBUFFER_MS: '40',
-        ...extraEnv,
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    },
-  );
-
-  let stdout = '';
-  let stderr = '';
-  child.stdout.setEncoding('utf8');
-  child.stderr.setEncoding('utf8');
-  child.stderr.on('data', (chunk) => { stderr += chunk; });
-
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error(`Relay did not start within ${STARTUP_TIMEOUT_MS} ms.\n${stdout}\n${stderr}`));
-    }, STARTUP_TIMEOUT_MS);
-
-    const stop = () => new Promise((done) => {
-      if (child.exitCode !== null || child.signalCode !== null) {
-        done();
-        return;
-      }
-      child.once('exit', () => done());
-      child.kill();
-    });
-
-    const onEarlyExit = (code) => {
-      clearTimeout(timer);
-      reject(new Error(`Relay exited early with code ${code}.\n${stdout}\n${stderr}`));
-    };
-    child.once('exit', onEarlyExit);
-
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk;
-      const match = stdout.match(/listening on http:\/\/localhost:(\d+)/);
-      if (!match) return;
-      clearTimeout(timer);
-      child.off('exit', onEarlyExit);
-      const port = Number(match[1]);
-      resolve({
-        httpUrl: (pathname = '/') => `http://127.0.0.1:${port}${pathname}`,
-        wsUrl: (query = '') => `ws://127.0.0.1:${port}/ws${query}`,
-        stop,
-      });
-    });
-  });
-}
 
 function encodeMicPacket(pcm, sequence, firstSampleIndex) {
   const packet = Buffer.alloc(24 + pcm.byteLength);
@@ -215,7 +152,7 @@ async function openListener(page, relay, { debug = false } = {}) {
 
 test('real Chromium renders the real Relay monitor path through production Listen', async () => {
   test.setTimeout(35_000);
-  const relay = await startRelay();
+  const relay = await startRelay(RELAY_ENV);
   const mic = await startDeterministicMic(relay);
   const browser = await chromium.launch({
     channel: 'chromium',
@@ -251,7 +188,7 @@ test('real Chromium renders the real Relay monitor path through production Liste
 
 test('real Chromium listener recovers monitor reconnect, proven starvation and AudioContext interruption', async () => {
   test.setTimeout(45_000);
-  const relay = await startRelay();
+  const relay = await startRelay(RELAY_ENV);
   const mic = await startDeterministicMic(relay);
   const browser = await chromium.launch({
     channel: 'chromium',
@@ -337,7 +274,7 @@ test('real Chromium listener recovers monitor reconnect, proven starvation and A
 
 test('real Chromium listener de-clicks the playback reset when a monitor reconnect lands', async () => {
   test.setTimeout(30_000);
-  const relay = await startRelay();
+  const relay = await startRelay(RELAY_ENV);
   const mic = await startDeterministicMic(relay);
   const browser = await chromium.launch({
     channel: 'chromium',
@@ -399,7 +336,7 @@ test('real Chromium listener de-clicks the playback reset when a monitor reconne
 
 test('iOS foreground lifecycle restarts the real AudioDestination once and returns to healthy playback', async () => {
   test.setTimeout(45_000);
-  const relay = await startRelay();
+  const relay = await startRelay(RELAY_ENV);
   const mic = await startDeterministicMic(relay);
   const browser = await chromium.launch({
     channel: 'chromium',
@@ -464,7 +401,7 @@ test('iOS foreground lifecycle restarts the real AudioDestination once and retur
 
 test('iOS lifecycle waits through slow foreground resume and delayed post-Mic ownership', async () => {
   test.setTimeout(45_000);
-  const relay = await startRelay();
+  const relay = await startRelay(RELAY_ENV);
   const mic = await startDeterministicMic(relay);
   const browser = await chromium.launch({
     channel: 'chromium',
@@ -684,7 +621,7 @@ test('real Chromium WebCodecs decodes Relay Listen Opus at its mix positions', a
 
 test('real Chromium Listen negotiates Opus with a Relay that offers it and keeps playing', async () => {
   test.setTimeout(35_000);
-  const relay = await startRelay({ RELAY_LISTEN_OPUS: '1' });
+  const relay = await startRelay({ ...RELAY_ENV, RELAY_LISTEN_OPUS: '1' });
   const mic = await startDeterministicMic(relay);
   const browser = await chromium.launch({
     channel: 'chromium',

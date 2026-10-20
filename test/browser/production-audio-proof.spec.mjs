@@ -1,14 +1,13 @@
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { chromium, expect, test } from '@playwright/test';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const STARTUP_TIMEOUT_MS = 20_000;
+import { startRelay } from './support/relay-process.mjs';
+
 const SAMPLE_RATE = 48_000;
 const DEFAULT_MIC_GAIN_DB = 24;
 const INPUT_LEVELS = [-256, -512, -768];
@@ -19,14 +18,6 @@ const MIN_PLATEAU_SAMPLES = 256;
 const MIXED_SAMPLE_TOLERANCE = Math.ceil(10 ** (DEFAULT_MIC_GAIN_DB / 20)) + 2;
 const REQUIRE_WEBTRANSPORT = process.env.RELAY_PRODUCTION_AUDIO_PROOF_WEBTRANSPORT === '1';
 const WEBTRANSPORT_PORT = 44_338;
-const WEBTRANSPORT_ENV_NAMES = [
-  'RELAY_WEBTRANSPORT_PUBLIC_URL',
-  'RELAY_WEBTRANSPORT_HOST',
-  'RELAY_WEBTRANSPORT_PORT',
-  'RELAY_WEBTRANSPORT_CERT',
-  'RELAY_WEBTRANSPORT_KEY',
-  'RELAY_WEBTRANSPORT_PIN_CERT',
-];
 
 function pinnedWebTransportEnv(directory) {
   const keyPath = path.join(directory, 'webtransport-key.pem');
@@ -48,75 +39,6 @@ function pinnedWebTransportEnv(directory) {
     RELAY_WEBTRANSPORT_KEY: keyPath,
     RELAY_WEBTRANSPORT_PIN_CERT: '1',
   };
-}
-
-function startRelay(takeDir, directMediaEnv = {}) {
-  const env = {
-    ...process.env,
-    PORT: '0',
-    NODE_ENV: 'test',
-    RELAY_TAKE_DIR: takeDir,
-    RELAY_TAKE_MIN_FREE_GIB: '0',
-    RELAY_AUTO_CALIBRATE: '0',
-    RELAY_CALIBRATION_VALIDATION: '0',
-    RELAY_CALIBRATION_PROBE: '0',
-    RELAY_HEARTBEAT_MS: '60000',
-    RELAY_LIVE_PREBUFFER_MS: '40',
-  };
-  for (const name of WEBTRANSPORT_ENV_NAMES) delete env[name];
-  Object.assign(env, directMediaEnv);
-
-  const child = spawn(
-    process.execPath,
-    ['--import', 'tsx', path.join(root, 'src', 'server-entry.ts')],
-    {
-      cwd: root,
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    },
-  );
-
-  let stdout = '';
-  let stderr = '';
-  child.stdout.setEncoding('utf8');
-  child.stderr.setEncoding('utf8');
-  child.stderr.on('data', (chunk) => { stderr += chunk; });
-
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error(`Relay did not start within ${STARTUP_TIMEOUT_MS} ms.\n${stdout}\n${stderr}`));
-    }, STARTUP_TIMEOUT_MS);
-
-    const stop = () => new Promise((done) => {
-      if (child.exitCode !== null || child.signalCode !== null) {
-        done();
-        return;
-      }
-      child.once('exit', () => done());
-      child.kill();
-    });
-
-    const onEarlyExit = (code) => {
-      clearTimeout(timer);
-      reject(new Error(`Relay exited early with code ${code}.\n${stdout}\n${stderr}`));
-    };
-    child.once('exit', onEarlyExit);
-
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk;
-      const match = stdout.match(/listening on http:\/\/localhost:(\d+)/i);
-      if (!match) return;
-
-      clearTimeout(timer);
-      child.off('exit', onEarlyExit);
-      const port = Number(match[1]);
-      resolve({
-        httpUrl: (pathname = '/') => `http://127.0.0.1:${port}${pathname}`,
-        stop,
-      });
-    });
-  });
 }
 
 function pcm16Wav(segments) {
@@ -287,7 +209,12 @@ test(proofName, async () => {
   const capturePath = path.join(takeDir, 'deterministic-browser-mic.wav');
   await writeFile(capturePath, deterministicCaptureWav());
   const directMediaEnv = REQUIRE_WEBTRANSPORT ? pinnedWebTransportEnv(takeDir) : {};
-  const relay = await startRelay(takeDir, directMediaEnv);
+  const relay = await startRelay({
+    RELAY_TAKE_DIR: takeDir,
+    RELAY_TAKE_MIN_FREE_GIB: '0',
+    RELAY_LIVE_PREBUFFER_MS: '40',
+    ...directMediaEnv,
+  });
   const browser = await chromium.launch({
     // Playwright's default headless executable is chromium-headless-shell.
     // The production proof intentionally uses full Chromium's new headless mode

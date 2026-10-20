@@ -5,7 +5,7 @@ import test from 'node:test';
 import { parseRoomSongCommand } from '../src/room-song-command.js';
 import { RoomSongCommandSession } from '../src/room-song-command-session.js';
 import { SongSession } from '../src/song-session.js';
-import { RelayClient, startRelay } from './helpers/harness.js';
+import { participantIdFor, RelayClient, startRelay } from './helpers/harness.js';
 import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
 const RATE = 48_000;
@@ -15,10 +15,10 @@ const FAST = {
   RELAY_HEARTBEAT_MS: '60000',
 };
 
-const A = { participantId: 'participant-a', transportId: 'playback-tab-a', generation: 10 };
+const A = { participantId: participantIdFor('A'), transportId: 'playback-tab-a', generation: 10 };
 const A_RELOAD = { ...A, generation: 11 };
 const A_OTHER_TAB = { participantId: A.participantId, transportId: 'playback-tab-other', generation: 99 };
-const B = { participantId: 'participant-b', transportId: 'playback-tab-b', generation: 20 };
+const B = { participantId: participantIdFor('B'), transportId: 'playback-tab-b', generation: 20 };
 const B_RELOAD = { ...B, generation: 21 };
 
 function room(overrides: Record<string, unknown> = {}) {
@@ -44,16 +44,12 @@ function telemetry(currentTime = 12, overrides: Record<string, unknown> = {}) {
   return { type: 'youtube-telemetry', ...youtubeTelemetry({ currentTime, ...overrides }) };
 }
 
-function query(participantId: string, name: string) {
-  return `?participant=${participantId}&name=${encodeURIComponent(name)}`;
-}
-
 async function playback(
   server: Awaited<ReturnType<typeof startRelay>>,
   identity: { participantId: string; transportId: string; generation: number },
   name: string,
 ) {
-  const client = await RelayClient.connect(server, query(identity.participantId, name));
+  const client = await RelayClient.connectAs(server, name);
   client.send({
     type: 'playback-hello',
     playbackTransportId: identity.transportId,
@@ -65,11 +61,10 @@ async function playback(
 
 async function publisher(
   server: Awaited<ReturnType<typeof startRelay>>,
-  participantId: string,
   name: string,
   takeoverExpectedOwnerId?: string,
 ) {
-  const client = await RelayClient.connect(server, query(participantId, name));
+  const client = await RelayClient.connectAs(server, name);
   const registration: Record<string, unknown> = {
     type: 'register',
     role: 'publisher',
@@ -182,13 +177,13 @@ test('Mic takeover can continue through a reload of its prepared playback tab', 
   const server = await startRelay(FAST);
   try {
     const aPlayback = await playback(server, A, 'A');
-    const aPublisher = await publisher(server, A.participantId, 'A');
+    const aPublisher = await publisher(server, 'A');
     await establishRoom(aPlayback, 'reload-handoff');
 
     const bPlayback = await playback(server, B, 'B');
     bPlayback.send({ type: 'playback-mic-intent' });
     await bPlayback.waitForType('playback-mic-intent-registered');
-    const bPublisher = await publisher(server, B.participantId, 'B', A.participantId);
+    const bPublisher = await publisher(server, 'B', A.participantId);
 
     const firstPrepare = await bPlayback.waitForType('song-handoff-prepare');
     assert.equal(firstPrepare.videoId, VIDEO);
@@ -229,7 +224,7 @@ test('reload hello clears an old-generation command without waiting for command 
   const server = await startRelay(FAST);
   try {
     const aPlayback = await playback(server, A, 'A');
-    const aPublisher = await publisher(server, A.participantId, 'A');
+    const aPublisher = await publisher(server, 'A');
     await establishRoom(aPlayback, 'reload-command');
 
     const pendingId = 'reload-command-pause';

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 import test from 'node:test';
 
-import { RelayClient, startRelay } from './helpers/harness.js';
+import { participantIdFor, RelayClient, startRelay } from './helpers/harness.js';
 
 const RATE = 48_000;
 const FAST = {
@@ -60,21 +60,15 @@ test('recording presentation keeps hidden controls authoritative and Stop on the
 test('silent first Mic PCM arms authoritative Record state within the P0 latency budget', async (t) => {
   const server = await startRelay(FAST);
   try {
-    const singer = await RelayClient.connect(
-      server,
-      '?participant=p0-singer-123&name=P0%20Singer',
-    );
+    const singer = await RelayClient.connectAs(server, 'p0-singer', 'P0 Singer');
     singer.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await singer.waitForType('registered');
 
-    const recorder = await RelayClient.connect(
-      server,
-      '?participant=p0-recorder-123&name=P0%20Recorder',
-    );
+    const recorder = await RelayClient.connectAs(server, 'p0-recorder', 'P0 Recorder');
     recorder.send({ type: 'product-status-request' });
     const starting = await recorder.waitFor(
       (message) => message.type === 'product-status'
-        && message.room?.mic?.ownerId === 'p0-singer-123'
+        && message.room?.mic?.ownerId === participantIdFor('p0-singer')
         && message.room?.mic?.state === 'starting',
     );
     assert.equal(starting.actions.canStartTake, false);
@@ -86,7 +80,7 @@ test('silent first Mic PCM arms authoritative Record state within the P0 latency
 
     const armed = await recorder.waitFor(
       (message) => message.type === 'product-status'
-        && message.room?.mic?.ownerId === 'p0-singer-123'
+        && message.room?.mic?.ownerId === participantIdFor('p0-singer')
         && message.room?.mic?.state === 'live'
         && message.actions?.canStartTake === true,
       1_000,

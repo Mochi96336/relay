@@ -13,7 +13,7 @@ import {
   waitForNewMessage,
   type RelayServer,
 } from './helpers/harness.js';
-import { playingTelemetry } from './support/playing-telemetry.js';
+import { playingRoomSong } from './support/client-commands.js';
 
 const RATE = 48_000;
 const FAST = {
@@ -34,20 +34,23 @@ function tone(seconds: number, gain = 0.6, seed = 5) {
 }
 
 async function liveSession(server: RelayServer) {
-  const backing = await RelayClient.connect(server);
+  const backing = await RelayClient.connectInfrastructure(server);
   backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
   await backing.waitForType('registered');
 
-  const publisher = await RelayClient.connect(server);
+  const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
   publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
   await publisher.waitForType('registered');
 
-  const monitor = await RelayClient.connect(server);
+  const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
   monitor.send({ type: 'register', role: 'monitor' });
   await monitor.waitForType('registered');
 
-  return { backing, publisher, monitor };
+  const songTelemetry = await playingRoomSong(publisher);
+  return { backing, publisher, monitor, songTelemetry };
 }
+
+type LiveSession = Awaited<ReturnType<typeof liveSession>>;
 
 async function primeStreams(backing: RelayClient, publisher: RelayClient) {
   await Promise.all([
@@ -56,23 +59,21 @@ async function primeStreams(backing: RelayClient, publisher: RelayClient) {
   ]);
 }
 
-function refreshLivePath(backing: RelayClient, publisher: RelayClient) {
-  publisher.send(playingTelemetry());
+function refreshLivePath({ backing, publisher, songTelemetry }: LiveSession) {
+  publisher.send(songTelemetry());
   const silence = Buffer.alloc(960 * 2);
   backing.sendPcm(silence);
   publisher.sendPcm(silence);
 }
 
 async function establishBaseline(
-  backing: RelayClient,
-  publisher: RelayClient,
-  monitor: RelayClient,
+  { backing, publisher, monitor, songTelemetry }: LiveSession,
   lagMs = 260,
 ) {
-  publisher.send(playingTelemetry());
+  publisher.send(songTelemetry());
   await primeStreams(backing, publisher);
   await startCalibrationCollecting(publisher, monitor, async () => {
-    publisher.send(playingTelemetry());
+    publisher.send(songTelemetry());
     await primeStreams(backing, publisher);
   });
 
@@ -97,16 +98,15 @@ async function establishBaseline(
  * running when they do; under CPU load that analysis outlasts the second.
  * Stop it before the next window so its frames never enter that window.
  */
-function keepLivePathFresh(backing: RelayClient, publisher: RelayClient) {
-  const timer = setInterval(() => refreshLivePath(backing, publisher), 100);
+function keepLivePathFresh(session: LiveSession) {
+  const timer = setInterval(() => refreshLivePath(session), 100);
   return () => clearInterval(timer);
 }
 
 async function waitForValidationCollection(
   monitor: RelayClient,
   fromIndex: number,
-  backing: RelayClient,
-  publisher: RelayClient,
+  session: LiveSession,
   timeoutMs = 8_000,
 ) {
   const deadline = Date.now() + timeoutMs;
@@ -120,7 +120,7 @@ async function waitForValidationCollection(
     // Keep the same production readiness signals fresh while CI is
     // CPU-bound, and request canonical status so the test cannot miss
     // the collecting transition merely because a scheduler tick slipped.
-    refreshLivePath(backing, publisher);
+    refreshLivePath(session);
     monitor.send({ type: 'timing-calibration-status-request' });
     await sleep(100);
   }
@@ -137,8 +137,9 @@ describe('continuous content calibration validation server policy', () => {
     const server = await startRelay(FAST);
     let stopStreaming = () => {};
     try {
-      const { backing, publisher, monitor } = await liveSession(server);
-      const baseline = await establishBaseline(backing, publisher, monitor);
+      const session = await liveSession(server);
+      const { backing, publisher, monitor } = session;
+      const baseline = await establishBaseline(session);
       const baselineLag = Number(baseline.micLagMs);
       const afterCalibration = monitor.messages.length;
 
@@ -153,15 +154,15 @@ describe('continuous content calibration validation server policy', () => {
       assert.ok(Math.abs(Number(seeded.validation.baselineLagMs) - baselineLag) < 1);
 
       const collectingFrom = monitor.messages.length;
-      refreshLivePath(backing, publisher);
-      await waitForValidationCollection(monitor, collectingFrom, backing, publisher);
+      refreshLivePath(session);
+      await waitForValidationCollection(monitor, collectingFrom, session);
       const stableFrom = monitor.messages.length;
       const stablePair = laggedPair(8, RATE, baselineLag, 17);
       await Promise.all([
         sendPcmInChunks(backing, stablePair.backing),
         sendPcmInChunks(publisher, stablePair.mic),
       ]);
-      stopStreaming = keepLivePathFresh(backing, publisher);
+      stopStreaming = keepLivePathFresh(session);
 
       const stable = await waitForNewMessage(
         monitor,
@@ -186,12 +187,13 @@ describe('continuous content calibration validation server policy', () => {
     const server = await startRelay(FAST);
     let stopStreaming = () => {};
     try {
-      const { backing, publisher, monitor } = await liveSession(server);
-      const baseline = await establishBaseline(backing, publisher, monitor);
+      const session = await liveSession(server);
+      const { backing, publisher, monitor } = session;
+      const baseline = await establishBaseline(session);
       const baselineLag = Number(baseline.micLagMs);
       const collectingFrom = monitor.messages.length;
-      refreshLivePath(backing, publisher);
-      await waitForValidationCollection(monitor, collectingFrom, backing, publisher);
+      refreshLivePath(session);
+      await waitForValidationCollection(monitor, collectingFrom, session);
 
       const invalidFrom = monitor.messages.length;
       const silence = Buffer.alloc(RATE * 7 * 2);
@@ -199,7 +201,7 @@ describe('continuous content calibration validation server policy', () => {
         sendPcmInChunks(backing, silence),
         sendPcmInChunks(publisher, silence),
       ]);
-      stopStreaming = keepLivePathFresh(backing, publisher);
+      stopStreaming = keepLivePathFresh(session);
 
       const invalid = await waitForNewMessage(
         monitor,
@@ -224,12 +226,13 @@ describe('continuous content calibration validation server policy', () => {
     const server = await startRelay(FAST);
     let stopStreaming = () => {};
     try {
-      const { backing, publisher, monitor } = await liveSession(server);
-      const baseline = await establishBaseline(backing, publisher, monitor);
+      const session = await liveSession(server);
+      const { backing, publisher, monitor } = session;
+      const baseline = await establishBaseline(session);
       const baselineLag = Number(baseline.micLagMs);
       const firstStart = monitor.messages.length;
-      refreshLivePath(backing, publisher);
-      await waitForValidationCollection(monitor, firstStart, backing, publisher);
+      refreshLivePath(session);
+      await waitForValidationCollection(monitor, firstStart, session);
 
       const firstDrift = laggedPair(8, RATE, 360, 61);
       const suspectFrom = monitor.messages.length;
@@ -237,7 +240,7 @@ describe('continuous content calibration validation server policy', () => {
         sendPcmInChunks(backing, firstDrift.backing),
         sendPcmInChunks(publisher, firstDrift.mic),
       ]);
-      stopStreaming = keepLivePathFresh(backing, publisher);
+      stopStreaming = keepLivePathFresh(session);
       await waitForNewMessage(
         monitor,
         suspectFrom,
@@ -251,15 +254,15 @@ describe('continuous content calibration validation server policy', () => {
       // retry scheduler decides whether a second validation window may start.
       stopStreaming();
       const confirmStart = monitor.messages.length;
-      refreshLivePath(backing, publisher);
-      await waitForValidationCollection(monitor, confirmStart, backing, publisher);
+      refreshLivePath(session);
+      await waitForValidationCollection(monitor, confirmStart, session);
       const secondDrift = laggedPair(8, RATE, 420, 79);
       const inconclusiveFrom = monitor.messages.length;
       await Promise.all([
         sendPcmInChunks(backing, secondDrift.backing),
         sendPcmInChunks(publisher, secondDrift.mic),
       ]);
-      stopStreaming = keepLivePathFresh(backing, publisher);
+      stopStreaming = keepLivePathFresh(session);
       const inconclusive = await waitForNewMessage(
         monitor,
         inconclusiveFrom,
@@ -284,14 +287,15 @@ describe('continuous content calibration validation server policy', () => {
     const server = await startRelay(FAST);
     let stopStreaming = () => {};
     try {
-      const { backing, publisher, monitor } = await liveSession(server);
-      const baseline = await establishBaseline(backing, publisher, monitor);
+      const session = await liveSession(server);
+      const { backing, publisher, monitor } = session;
+      const baseline = await establishBaseline(session);
       const baselineLag = Number(baseline.micLagMs);
       assert.ok(Number.isFinite(baselineLag));
 
       const firstStart = monitor.messages.length;
-      refreshLivePath(backing, publisher);
-      await waitForValidationCollection(monitor, firstStart, backing, publisher);
+      refreshLivePath(session);
+      await waitForValidationCollection(monitor, firstStart, session);
 
       const firstDrift = laggedPair(8, RATE, 360, 31);
       const suspectFrom = monitor.messages.length;
@@ -299,7 +303,7 @@ describe('continuous content calibration validation server policy', () => {
         sendPcmInChunks(backing, firstDrift.backing),
         sendPcmInChunks(publisher, firstDrift.mic),
       ]);
-      stopStreaming = keepLivePathFresh(backing, publisher);
+      stopStreaming = keepLivePathFresh(session);
 
       const suspect = await waitForNewMessage(
         monitor,
@@ -324,15 +328,15 @@ describe('continuous content calibration validation server policy', () => {
 
       stopStreaming();
       const confirmFrom = monitor.messages.length;
-      refreshLivePath(backing, publisher);
-      await waitForValidationCollection(monitor, confirmFrom, backing, publisher);
+      refreshLivePath(session);
+      await waitForValidationCollection(monitor, confirmFrom, session);
 
       const secondDrift = laggedPair(8, RATE, 355, 47);
       await Promise.all([
         sendPcmInChunks(backing, secondDrift.backing),
         sendPcmInChunks(publisher, secondDrift.mic),
       ]);
-      stopStreaming = keepLivePathFresh(backing, publisher);
+      stopStreaming = keepLivePathFresh(session);
 
       // On a timeout, say what the second window concluded instead: the
       // message types alone cannot tell a rejected window from a slow one.

@@ -11,27 +11,16 @@ import {
 } from './helpers/harness.js';
 
 const RATE = 48_000;
-const INFRA_KEY = 'ab'.repeat(32);
+const FAST = { RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000' };
 
 function tone(seconds: number, gain = 0.6, seed = 5) {
   return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, seed), gain);
 }
 
-async function authenticateInfrastructure(client: RelayClient) {
-  client.send({ type: 'infrastructure-authenticate', key: INFRA_KEY });
-  await client.waitForType('infrastructure-authenticated');
-}
-
 test('a backing WebSocket cannot morph into a monitor and split readiness from PCM ingest', async () => {
-  const server = await startRelay({
-    RELAY_AUTO_CALIBRATE: '0',
-    RELAY_HEARTBEAT_MS: '60000',
-    RELAY_INFRA_KEY: INFRA_KEY,
-    RELAY_TEST_LEGACY_INFRASTRUCTURE: '0',
-  });
+  const server = await startRelay(FAST);
   try {
-    const backing = await RelayClient.connect(server);
-    await authenticateInfrastructure(backing);
+    const backing = await RelayClient.connectInfrastructure(server);
     backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
     await backing.waitFor((message) => message.type === 'registered' && message.role === 'backing');
 
@@ -60,12 +49,9 @@ test('a backing WebSocket cannot morph into a monitor and split readiness from P
 });
 
 test('a publisher WebSocket cannot become a monitor while the Mic pointer still references it', async () => {
-  const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000' });
+  const server = await startRelay(FAST);
   try {
-    const publisher = await RelayClient.connect(
-      server,
-      '?participant=participant-role-owner&name=RoleOwner',
-    );
+    const publisher = await RelayClient.connectAs(server, 'participant-role-owner', 'RoleOwner');
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await publisher.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
 
@@ -90,12 +76,9 @@ test('a publisher WebSocket cannot become a monitor while the Mic pointer still 
 });
 
 test('playback identity remains orthogonal to the immutable publisher role', async () => {
-  const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000' });
+  const server = await startRelay(FAST);
   try {
-    const client = await RelayClient.connect(
-      server,
-      '?participant=participant-playback-role&name=Playback',
-    );
+    const client = await RelayClient.connectAs(server, 'participant-playback-role', 'Playback');
     client.send({
       type: 'playback-hello',
       playbackTransportId: 'playback-role-test',
@@ -122,12 +105,9 @@ test('playback identity remains orthogonal to the immutable publisher role', asy
 });
 
 test('a rejected publisher attempt does not pin an otherwise reusable socket role', async () => {
-  const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000' });
+  const server = await startRelay(FAST);
   try {
-    const participant = await RelayClient.connect(
-      server,
-      '?participant=participant-invalid-role&name=Retry',
-    );
+    const participant = await RelayClient.connectAs(server, 'participant-invalid-role', 'Retry');
     participant.send({ type: 'register', role: 'publisher', sampleRate: 3 });
     await participant.waitForType('error');
 

@@ -7,7 +7,7 @@ test('real protocol selects sample/song fallback and withdraws it when both repo
     RELAY_AUTO_CALIBRATE: '0', RELAY_CALIBRATION_PROBE: '0', RELAY_CALIBRATION_VALIDATION: '0' });
   const clients: RelayClient[] = [];
   try {
-    const phone = await RelayClient.connect(server, '?participant=sample-song-phone&name=Phone'); clients.push(phone);
+    const phone = await RelayClient.connectAs(server, 'sample-song-phone', 'Phone'); clients.push(phone);
     phone.send({ type: 'register', role: 'publisher', sampleRate: 48000, captureGeneration: 1 });
     await phone.waitForType('registered');
     phone.send({ type: 'playback-hello', playbackTransportId: 'sample-song-player', playbackGeneration: 1 });
@@ -24,10 +24,10 @@ test('real protocol selects sample/song fallback and withdraws it when both repo
     await phone.waitFor(m => m.type === 'room-song-command-apply' && m.commandId === 'sample-play');
     telemetry(1, 0);
     await phone.waitFor(m => m.type === 'room-song-command-complete' && m.commandId === 'sample-play');
-    const backing = await RelayClient.connect(server); clients.push(backing);
+    const backing = await RelayClient.connectInfrastructure(server); clients.push(backing);
     backing.send({ type: 'register', role: 'backing', sampleRate: 48000, robot: true });
     await backing.waitForType('registered');
-    const robot = await RelayClient.connect(server); clients.push(robot);
+    const robot = await RelayClient.connectInfrastructure(server); clients.push(robot);
     robot.send({ type: 'robot-source-hello' });
     for (let i = 0; i < 5; i++) {
       const pcm = Buffer.alloc(12000 * 2);

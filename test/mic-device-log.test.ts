@@ -20,7 +20,7 @@ async function micDeviceLine(server: Awaited<ReturnType<typeof startRelay>>) {
 test('[mic-device] names the page build and codec behind a capture', async () => {
   const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000' });
   try {
-    const publisher = await RelayClient.connect(server, '?participant=device-log&name=Device');
+    const publisher = await RelayClient.connectAs(server, 'device-log', 'Device');
     publisher.send({
       type: 'register',
       role: 'publisher',

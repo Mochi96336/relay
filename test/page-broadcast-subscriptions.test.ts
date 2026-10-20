@@ -3,17 +3,10 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { RelayClient, sleep, startRelay } from './helpers/harness.js';
+import { playRoomSong, registerPlayback } from './support/client-commands.js';
 import { functionCode, parseTypeScriptSource } from './support/source-contract.js';
 
 const RATE = 48_000;
-const PLAYING_TELEMETRY = {
-  type: 'youtube-telemetry',
-  videoId: 'dQw4w9WgXcQ',
-  state: 1,
-  currentTime: 42,
-  duration: 200,
-  playbackRate: 1,
-};
 
 /** Waits until Relay has handled everything this client sent so far. */
 async function settled(client: RelayClient) {
@@ -30,13 +23,14 @@ function typesSince(client: RelayClient, from: number) {
 }
 
 async function playingRoom(server: Awaited<ReturnType<typeof startRelay>>) {
-  const backing = await RelayClient.connect(server);
+  const backing = await RelayClient.connectInfrastructure(server);
   backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
   await backing.waitForType('registered');
-  const publisher = await RelayClient.connect(server);
+  const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
   publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
   await publisher.waitForType('registered');
-  publisher.send(PLAYING_TELEMETRY);
+  await registerPlayback(publisher, 'page-playback');
+  await playRoomSong(publisher);
   const silence = Buffer.alloc(1_920);
   for (let frame = 0; frame < 25; frame += 1) {
     backing.sendPcm(silence);

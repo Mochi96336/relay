@@ -4,11 +4,6 @@ import test from 'node:test';
 import { RelayClient, sleep, startRelay } from './helpers/harness.js';
 import { uplinkHealthReport } from './support/uplink-health.js';
 
-function participantQuery(id: string, nickname: string) {
-  const params = new URLSearchParams({ participant: id, name: nickname });
-  return `?${params.toString()}`;
-}
-
 function uplinkHealth(generation: number) {
   return {
     type: 'audio-uplink-health',
@@ -88,10 +83,7 @@ test('statusz separates browser uplink, receiver transport and timeline evidence
   });
 
   try {
-    const publisher = await RelayClient.connect(
-      server,
-      participantQuery('participant-audio-health', 'Audio Health'),
-    );
+    const publisher = await RelayClient.connectAs(server, 'participant-audio-health', 'Audio Health');
     publisher.send({
       type: 'register',
       role: 'publisher',
@@ -196,10 +188,7 @@ test('statusz reports captured Mic audio that has not reached Relay yet', async 
   });
 
   try {
-    const publisher = await RelayClient.connect(
-      server,
-      participantQuery('participant-uplink-backlog', 'Uplink Backlog'),
-    );
+    const publisher = await RelayClient.connectAs(server, 'participant-uplink-backlog', 'Uplink Backlog');
     publisher.send({
       type: 'register',
       role: 'publisher',
@@ -249,10 +238,7 @@ test('statusz names an old page instead of calling its arriving audio silent (#4
   });
 
   try {
-    const publisher = await RelayClient.connect(
-      server,
-      participantQuery('participant-old-page', 'Old Page'),
-    );
+    const publisher = await RelayClient.connectAs(server, 'participant-old-page', 'Old Page');
     publisher.send({
       type: 'register',
       role: 'publisher',

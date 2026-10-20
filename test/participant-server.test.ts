@@ -4,7 +4,7 @@ import { describe, test } from 'node:test';
 import WebSocket from 'ws';
 
 import { participantIdForCapability } from '../src/participant-capability.js';
-import { RelayClient, sleep, startRelay, waitForNewMessage } from './helpers/harness.js';
+import { RelayClient, participantIdFor, sleep, startRelay, waitForNewMessage } from './helpers/harness.js';
 
 const RATE = 48_000;
 const FAST = {
@@ -16,15 +16,6 @@ const FAST = {
   RELAY_PARTICIPANT_GRACE_MS: '250',
   RELAY_MIC_TRANSPORT_GRACE_MS: '250',
 };
-
-function participantQuery(id: string, nickname: string) {
-  const params = new URLSearchParams({ participant: id, name: nickname });
-  return `?${params.toString()}`;
-}
-
-async function connectParticipant(server: Awaited<ReturnType<typeof startRelay>>, id: string, nickname: string) {
-  return RelayClient.connect(server, participantQuery(id, nickname));
-}
 
 function registerPublisher(
   client: RelayClient,
@@ -44,26 +35,26 @@ describe('participant presence and microphone ownership', () => {
   test('commits a confirmed takeover together with a ready publisher transport', async () => {
     const server = await startRelay(FAST);
     try {
-      const alicePresence = await connectParticipant(server, 'participant-alice', 'Alice');
-      const bobPresence = await connectParticipant(server, 'participant-bobby', 'Bob');
-      const alicePublisher = await connectParticipant(server, 'participant-alice', 'Alice');
+      const alicePresence = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
+      const bobPresence = await RelayClient.connectAs(server, 'participant-bobby', 'Bob');
+      const alicePublisher = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
 
       registerPublisher(alicePublisher, 1);
       await alicePublisher.waitForType('registered');
       await bobPresence.waitFor((message) => (
         message.type === 'session-status'
-        && message.micOwnerId === 'participant-alice'
+        && message.micOwnerId === participantIdFor('participant-alice')
         && message.micConnected === true
       ));
 
-      const bobPublisher = await connectParticipant(server, 'participant-bobby', 'Bob');
+      const bobPublisher = await RelayClient.connectAs(server, 'participant-bobby', 'Bob');
       registerPublisher(bobPublisher, 2);
       const busy = await bobPublisher.waitForType('mic-busy');
-      assert.equal(busy.owner.id, 'participant-alice');
+      assert.equal(busy.owner.id, participantIdFor('participant-alice'));
       assert.equal(busy.owner.nickname, 'Alice');
       assert.equal(alicePublisher.messages.some((message) => message.type === 'mic-revoked'), false);
 
-      registerPublisher(bobPublisher, 2, 'participant-alice');
+      registerPublisher(bobPublisher, 2, participantIdFor('participant-alice'));
       const registered = await bobPublisher.waitFor((message) => (
         message.type === 'registered' && message.role === 'publisher' && message.takeover === true
       ));
@@ -74,14 +65,14 @@ describe('participant presence and microphone ownership', () => {
 
       const ownedByBob = await bobPresence.waitFor((message) => (
         message.type === 'session-status'
-        && message.micOwnerId === 'participant-bobby'
+        && message.micOwnerId === participantIdFor('participant-bobby')
         && message.micConnected === true
       ));
       assert.equal(ownedByBob.micConnected, true);
       assert.equal(
         bobPresence.messages.some((message) => (
           message.type === 'session-status'
-          && message.micOwnerId === 'participant-bobby'
+          && message.micOwnerId === participantIdFor('participant-bobby')
           && message.micConnected === false
         )),
         false,
@@ -99,38 +90,38 @@ describe('participant presence and microphone ownership', () => {
   test('rejects a stale takeover registration after a third participant changes ownership', async () => {
     const server = await startRelay(FAST);
     try {
-      const alicePresence = await connectParticipant(server, 'participant-alice', 'Alice');
-      const bobPresence = await connectParticipant(server, 'participant-bobby', 'Bob');
-      const carolPresence = await connectParticipant(server, 'participant-carol', 'Carol');
-      const alicePublisher = await connectParticipant(server, 'participant-alice', 'Alice');
+      const alicePresence = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
+      const bobPresence = await RelayClient.connectAs(server, 'participant-bobby', 'Bob');
+      const carolPresence = await RelayClient.connectAs(server, 'participant-carol', 'Carol');
+      const alicePublisher = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
 
       registerPublisher(alicePublisher, 1);
       await alicePublisher.waitForType('registered');
 
-      const carolPublisher = await connectParticipant(server, 'participant-carol', 'Carol');
-      registerPublisher(carolPublisher, 3, 'participant-alice');
+      const carolPublisher = await RelayClient.connectAs(server, 'participant-carol', 'Carol');
+      registerPublisher(carolPublisher, 3, participantIdFor('participant-alice'));
       await carolPublisher.waitForType('registered');
       await carolPresence.waitFor((message) => (
         message.type === 'session-status'
-        && message.micOwnerId === 'participant-carol'
+        && message.micOwnerId === participantIdFor('participant-carol')
         && message.micConnected === true
       ));
 
-      const bobPublisher = await connectParticipant(server, 'participant-bobby', 'Bob');
-      registerPublisher(bobPublisher, 2, 'participant-alice');
+      const bobPublisher = await RelayClient.connectAs(server, 'participant-bobby', 'Bob');
+      registerPublisher(bobPublisher, 2, participantIdFor('participant-alice'));
       const rejected = await bobPublisher.waitForType('mic-takeover-rejected');
       assert.equal(rejected.reason, 'owner-changed');
-      assert.equal(rejected.owner.id, 'participant-carol');
+      assert.equal(rejected.owner.id, participantIdFor('participant-carol'));
       assert.equal(carolPublisher.messages.some((message) => message.type === 'mic-revoked'), false);
 
       const statusStart = bobPublisher.messages.length;
       bobPublisher.send({ type: 'session-status-request' });
       const status = await waitForNewMessage(bobPublisher, statusStart, (message) => (
         message.type === 'session-status'
-        && message.micOwnerId === 'participant-carol'
+        && message.micOwnerId === participantIdFor('participant-carol')
         && message.micConnected === true
       ));
-      assert.equal(status.micOwnerId, 'participant-carol');
+      assert.equal(status.micOwnerId, participantIdFor('participant-carol'));
 
       alicePresence.close();
       bobPresence.close();
@@ -145,14 +136,14 @@ describe('participant presence and microphone ownership', () => {
   test('expires a missing publisher independently while the participant presence stays online', async () => {
     const server = await startRelay(FAST);
     try {
-      const observer = await connectParticipant(server, 'participant-watch', 'Watcher');
-      const alicePresence = await connectParticipant(server, 'participant-alice', 'Alice');
-      const alicePublisher = await connectParticipant(server, 'participant-alice', 'Alice');
+      const observer = await RelayClient.connectAs(server, 'participant-watch', 'Watcher');
+      const alicePresence = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
+      const alicePublisher = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
       registerPublisher(alicePublisher, 7);
       await alicePublisher.waitForType('registered');
       await observer.waitFor((message) => (
         message.type === 'session-status'
-        && message.micOwnerId === 'participant-alice'
+        && message.micOwnerId === participantIdFor('participant-alice')
         && message.micConnected === true
       ));
 
@@ -160,22 +151,22 @@ describe('participant presence and microphone ownership', () => {
       alicePublisher.close();
       const transportMissing = await waitForNewMessage(observer, missingStart, (message) => (
         message.type === 'session-status'
-        && message.micOwnerId === 'participant-alice'
+        && message.micOwnerId === participantIdFor('participant-alice')
         && message.micConnected === false
         && message.participants.some((participant: any) => (
-          participant.id === 'participant-alice' && participant.connected === true
+          participant.id === participantIdFor('participant-alice') && participant.connected === true
         ))
       ));
-      assert.equal(transportMissing.micOwnerId, 'participant-alice');
+      assert.equal(transportMissing.micOwnerId, participantIdFor('participant-alice'));
 
       await sleep(100);
-      const reconnectedPublisher = await connectParticipant(server, 'participant-alice', 'Alice');
+      const reconnectedPublisher = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
       const reconnectedStart = observer.messages.length;
       registerPublisher(reconnectedPublisher, 7);
       await reconnectedPublisher.waitForType('registered');
       await waitForNewMessage(observer, reconnectedStart, (message) => (
         message.type === 'session-status'
-        && message.micOwnerId === 'participant-alice'
+        && message.micOwnerId === participantIdFor('participant-alice')
         && message.micConnected === true
       ));
 
@@ -185,7 +176,7 @@ describe('participant presence and microphone ownership', () => {
         message.type === 'session-status'
         && message.micOwnerId === null
         && message.participants.some((participant: any) => (
-          participant.id === 'participant-alice' && participant.connected === true
+          participant.id === participantIdFor('participant-alice') && participant.connected === true
         ))
       ), 3_000);
       assert.equal(released.micOwnerId, null);
@@ -200,14 +191,14 @@ describe('participant presence and microphone ownership', () => {
   test('release-mic frees the lease even when the participant presence remains connected', async () => {
     const server = await startRelay(FAST);
     try {
-      const observer = await connectParticipant(server, 'participant-watch', 'Watcher');
-      const alicePresence = await connectParticipant(server, 'participant-alice', 'Alice');
-      const alicePublisher = await connectParticipant(server, 'participant-alice', 'Alice');
+      const observer = await RelayClient.connectAs(server, 'participant-watch', 'Watcher');
+      const alicePresence = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
+      const alicePublisher = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
       registerPublisher(alicePublisher, 11);
       await alicePublisher.waitForType('registered');
       await observer.waitFor((message) => (
         message.type === 'session-status'
-        && message.micOwnerId === 'participant-alice'
+        && message.micOwnerId === participantIdFor('participant-alice')
         && message.micConnected === true
       ));
 
@@ -218,7 +209,7 @@ describe('participant presence and microphone ownership', () => {
         message.type === 'session-status'
         && message.micOwnerId === null
         && message.participants.some((participant: any) => (
-          participant.id === 'participant-alice' && participant.connected === true
+          participant.id === participantIdFor('participant-alice') && participant.connected === true
         ))
       ));
       assert.equal(released.micOwnerId, null);
@@ -233,19 +224,19 @@ describe('participant presence and microphone ownership', () => {
   test('supersedes a second tab semantically without a generic reconnecting error', async () => {
     const server = await startRelay(FAST);
     try {
-      const observer = await connectParticipant(server, 'participant-watch', 'Watcher');
-      const alicePresence = await connectParticipant(server, 'participant-alice', 'Alice');
-      const firstPublisher = await connectParticipant(server, 'participant-alice', 'Alice');
+      const observer = await RelayClient.connectAs(server, 'participant-watch', 'Watcher');
+      const alicePresence = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
+      const firstPublisher = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
       registerPublisher(firstPublisher, 21);
       await firstPublisher.waitForType('registered');
       await observer.waitFor((message) => (
         message.type === 'session-status'
-        && message.micOwnerId === 'participant-alice'
+        && message.micOwnerId === participantIdFor('participant-alice')
         && message.micConnected === true
       ));
 
       const replacementStart = observer.messages.length;
-      const secondPublisher = await connectParticipant(server, 'participant-alice', 'Alice');
+      const secondPublisher = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
       registerPublisher(secondPublisher, 22);
       await secondPublisher.waitForType('registered');
       const superseded = await firstPublisher.waitForType('publisher-superseded');
@@ -254,10 +245,10 @@ describe('participant presence and microphone ownership', () => {
 
       const stillOwned = await waitForNewMessage(observer, replacementStart, (message) => (
         message.type === 'session-status'
-        && message.micOwnerId === 'participant-alice'
+        && message.micOwnerId === participantIdFor('participant-alice')
         && message.micConnected === true
       ));
-      assert.equal(stillOwned.micOwnerId, 'participant-alice');
+      assert.equal(stillOwned.micOwnerId, participantIdFor('participant-alice'));
 
       alicePresence.close();
       secondPublisher.close();
@@ -270,10 +261,10 @@ describe('participant presence and microphone ownership', () => {
   test('does not turn ambient cookies or anonymous infrastructure sockets into participants', async () => {
     const server = await startRelay(FAST);
     try {
-      const alice = await connectParticipant(server, 'participant-alice', 'Alice');
+      const alice = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
       await alice.waitFor((message) => (
         message.type === 'session-status'
-        && message.participants.some((participant: any) => participant.id === 'participant-alice')
+        && message.participants.some((participant: any) => participant.id === participantIdFor('participant-alice'))
       ));
 
       const anonymousStatus = await new Promise<Record<string, any>>((resolve, reject) => {
@@ -309,7 +300,7 @@ describe('participant presence and microphone ownership', () => {
   test('does not allow a presence socket to reserve mic ownership before publisher registration', async () => {
     const server = await startRelay(FAST);
     try {
-      const alice = await connectParticipant(server, 'participant-alice', 'Alice');
+      const alice = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
       const statusStart = alice.messages.length;
       alice.send({ type: 'acquire-mic' });
       const error = await alice.waitForType('error');
@@ -374,10 +365,7 @@ describe('participant presence and microphone ownership', () => {
       RELAY_TEST_LEGACY_PARTICIPANTS: '1',
     });
     try {
-      const legacy = await RelayClient.connect(
-        server,
-        participantQuery('participant-alice', 'Alice'),
-      );
+      const legacy = await RelayClient.connect(server, '?participant=participant-alice&name=Alice');
       const rejected = await legacy.waitForType('participant-auth-rejected');
       assert.match(rejected.message, /capability/i);
       legacy.close();

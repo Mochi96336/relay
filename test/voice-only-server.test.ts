@@ -29,7 +29,7 @@ function feedMic(client: RelayClient, frames: number, value = 4_000) {
 test('real server records a voice-only Take without Song, backing or timing calibration', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-voice-only-'));
   const server = await startRelay({ ...FAST, RELAY_TAKE_DIR: directory });
-  const mic = await RelayClient.connect(server, '?participant=participant-a&name=A');
+  const mic = await RelayClient.connectAs(server, 'a', 'A');
   try {
     mic.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
     await mic.waitFor((message) => message.type === 'registered' && message.role === 'publisher');

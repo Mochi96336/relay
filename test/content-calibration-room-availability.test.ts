@@ -65,14 +65,11 @@ async function primeStreams(backing: RelayClient, singer: RelayClient) {
  * about.
  */
 async function liveRoom(server: RelayServer) {
-  const backing = await RelayClient.connect(server);
+  const backing = await RelayClient.connectInfrastructure(server);
   backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
   await backing.waitForType('registered');
 
-  const singer = await RelayClient.connect(
-    server,
-    '?participant=content-singer-123&name=Mochi',
-  );
+  const singer = await RelayClient.connectAs(server, 'content-singer-123', 'Mochi');
   singer.send({ type: 'playback-hello', playbackTransportId: 'content-playback', playbackGeneration: 1 });
   await singer.waitFor((message) => message.type === 'playback-registered');
 
@@ -112,7 +109,7 @@ async function liveRoom(server: RelayServer) {
   singer.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
   await singer.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
 
-  const monitor = await RelayClient.connect(server);
+  const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
   monitor.send({ type: 'register', role: 'monitor' });
   await monitor.waitForType('registered');
 

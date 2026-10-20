@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { encodePcmFrame } from '../src/pcm-frame.js';
-import { RelayClient, sleep, startRelay } from './helpers/harness.js';
-import { requestProductStatus } from './support/client-commands.js';
+import { participantIdFor, RelayClient, sleep, startRelay } from './helpers/harness.js';
+import { registerPlayback, requestProductStatus } from './support/client-commands.js';
 
 const RATE = 48_000;
 const FAST = {
@@ -20,14 +20,14 @@ function pcm(ms = 40) {
 test('Mic state distinguishes starting, flowing, stalled and reconnecting', async () => {
   const server = await startRelay(FAST);
   try {
-    const observer = await RelayClient.connect(server, '?participant=observer-state&name=Observer');
-    const singer = await RelayClient.connect(server, '?participant=singer-state&name=Singer');
+    const observer = await RelayClient.connectAs(server, 'observer-state', 'Observer');
+    const singer = await RelayClient.connectAs(server, 'singer-state', 'Singer');
     singer.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await singer.waitForType('registered');
 
     const starting = await requestProductStatus(
       observer,
-      (message) => message.room?.mic?.ownerId === 'singer-state',
+      (message) => message.room?.mic?.ownerId === participantIdFor('singer-state'),
     );
     assert.equal(starting.room.mic.state, 'starting');
     assert.equal(starting.health, 'healthy');
@@ -65,8 +65,8 @@ test('Mic state distinguishes starting, flowing, stalled and reconnecting', asyn
 test('replayed legacy Mic PCM cannot keep streaming freshness alive', async () => {
   const server = await startRelay(FAST);
   try {
-    const observer = await RelayClient.connect(server, '?participant=observer-replay&name=Observer');
-    const singer = await RelayClient.connect(server, '?participant=singer-replay&name=Singer');
+    const observer = await RelayClient.connectAs(server, 'observer-replay', 'Observer');
+    const singer = await RelayClient.connectAs(server, 'singer-replay', 'Singer');
     singer.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await singer.waitForType('registered');
 
@@ -99,26 +99,26 @@ test('replayed legacy Mic PCM cannot keep streaming freshness alive', async () =
 test('a new Mic owner cannot inherit the previous capture freshness', async () => {
   const server = await startRelay(FAST);
   try {
-    const observer = await RelayClient.connect(server, '?participant=observer-takeover&name=Observer');
-    const alice = await RelayClient.connect(server, '?participant=participant-alice&name=Alice');
+    const observer = await RelayClient.connectAs(server, 'observer-takeover', 'Observer');
+    const alice = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
     alice.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await alice.waitForType('registered');
     alice.sendPcm(pcm());
     await sleep(40);
     await requestProductStatus(observer, (message) => message.room?.mic?.state === 'live');
 
-    const bob = await RelayClient.connect(server, '?participant=participant-bobby&name=Bob');
+    const bob = await RelayClient.connectAs(server, 'participant-bobby', 'Bob');
     bob.send({
       type: 'register',
       role: 'publisher',
       sampleRate: RATE,
-      takeoverExpectedOwnerId: 'participant-alice',
+      takeoverExpectedOwnerId: participantIdFor('participant-alice'),
     });
     await bob.waitFor((message) => message.type === 'registered' && message.takeover === true);
 
     const beforeBobAudio = await requestProductStatus(
       observer,
-      (message) => message.room?.mic?.ownerId === 'participant-bobby',
+      (message) => message.room?.mic?.ownerId === participantIdFor('participant-bobby'),
     );
     assert.equal(beforeBobAudio.room.mic.state, 'starting');
 
@@ -127,7 +127,7 @@ test('a new Mic owner cannot inherit the previous capture freshness', async () =
     const afterBobAudio = await requestProductStatus(
       observer,
       (message) => (
-        message.room?.mic?.ownerId === 'participant-bobby'
+        message.room?.mic?.ownerId === participantIdFor('participant-bobby')
         && message.room?.mic?.state === 'live'
       ),
     );
@@ -143,18 +143,30 @@ test('a new Mic owner cannot inherit the previous capture freshness', async () =
 test('a room Song makes backing expected instead of silently becoming voice-only', async () => {
   const server = await startRelay(FAST);
   try {
-    const playback = await RelayClient.connect(server);
-    const observer = await RelayClient.connect(server, '?participant=song-observer&name=Observer');
+    const playback = await RelayClient.connectAs(server, 'song-singer', 'Singer');
+    const observer = await RelayClient.connectAs(server, 'song-observer', 'Observer');
     playback.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await playback.waitForType('registered');
+    await registerPlayback(playback, 'song-playback');
+    playback.send({
+      type: 'room-song-command',
+      commandId: 'song-load',
+      expectedRevision: 0,
+      action: 'load',
+      videoId: 'dQw4w9WgXcQ',
+      positionSeconds: 12,
+    });
+    await playback.waitFor((message) => message.type === 'room-song-command-apply' && message.commandId === 'song-load');
     playback.send({
       type: 'youtube-telemetry',
       videoId: 'dQw4w9WgXcQ',
-      state: 1,
+      state: 5,
       currentTime: 12,
       duration: 200,
       playbackRate: 1,
       bufferedFraction: 0.5,
+      playbackTransportId: 'song-playback',
+      playbackGeneration: 1,
     });
     await observer.waitFor(
       (message) => message.type === 'youtube-timeline-status' && message.videoId === 'dQw4w9WgXcQ',

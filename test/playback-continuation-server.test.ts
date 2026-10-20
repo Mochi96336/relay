@@ -12,16 +12,16 @@ const FAST = {
 };
 
 type Relay = Awaited<ReturnType<typeof startRelay>>;
-type Identity = { participantId: string; transportId: string; generation: number };
+type Identity = { transportId: string; generation: number };
 
-const A: Identity = { participantId: 'participant-a', transportId: 'playback-tab-a', generation: 10 };
+const A: Identity = { transportId: 'playback-tab-a', generation: 10 };
 
 function telemetry(currentTime: number, state = 1) {
   return { type: 'youtube-telemetry', ...youtubeTelemetry({ state, currentTime }) };
 }
 
 async function playback(server: Relay, identity: Identity) {
-  const client = await RelayClient.connect(server, `?participant=${identity.participantId}&name=A`);
+  const client = await RelayClient.connectAs(server, 'A');
   client.send({
     type: 'playback-hello',
     playbackTransportId: identity.transportId,
@@ -31,8 +31,8 @@ async function playback(server: Relay, identity: Identity) {
   return client;
 }
 
-async function publisher(server: Relay, participantId: string) {
-  const client = await RelayClient.connect(server, `?participant=${participantId}&name=A`);
+async function publisher(server: Relay) {
+  const client = await RelayClient.connectAs(server, 'A');
   client.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
   await client.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
   return client;
@@ -56,14 +56,14 @@ test('a playback tab that comes back on a new socket is asked again for the comm
   const server = await startRelay(FAST);
   try {
     const first = await playback(server, A);
-    const mic = await publisher(server, A.participantId);
+    const mic = await publisher(server);
     await playingRoom(first);
 
     first.send({ type: 'room-song-command', commandId: 'continuation-pause', expectedRevision: 2, action: 'pause' });
     await first.waitFor((message) => message.type === 'room-song-command-apply' && message.commandId === 'continuation-pause');
 
     // Same tab, same generation, new socket: what a WebSocket reconnect looks like.
-    const again = await RelayClient.connect(server, `?participant=${A.participantId}&name=A`);
+    const again = await RelayClient.connectAs(server, 'A');
     again.send({
       type: 'playback-hello',
       playbackTransportId: A.transportId,

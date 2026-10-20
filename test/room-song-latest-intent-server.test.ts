@@ -53,7 +53,7 @@ async function establishRoom(client: RelayClient, transportId: string) {
 test('rapid play -> seek -> pause converges to the latest complete desired state', async () => {
   const server = await startRelay();
   try {
-    const a = await RelayClient.connect(server, '?participant=participant-a&name=A');
+    const a = await RelayClient.connectAs(server, 'A');
     const transport = 'playback-latest-a';
     await registerPlayback(a, transport);
     await establishRoom(a, transport);

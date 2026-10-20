@@ -55,7 +55,7 @@ async function run(scenario: Scenario, seconds: number) {
   const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000' });
   try {
     const generation = 21;
-    const publisher = await RelayClient.connect(server, `?participant=bench-${Date.now()}&name=Bench`);
+    const publisher = await RelayClient.connectAs(server, 'bench', 'Bench');
     publisher.send({
       type: 'register',
       role: 'publisher',

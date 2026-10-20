@@ -61,24 +61,24 @@ test('framed monitor opt-in gets positioned mix PCM while legacy monitor stays r
 
   const clients: RelayClient[] = [];
   try {
-    const legacy = await RelayClient.connect(server);
+    const legacy = await RelayClient.connectAs(server, 'listener', 'Listener');
     clients.push(legacy);
     legacy.send({ type: 'register', role: 'monitor' });
     const legacyRegistered = await legacy.waitForType('registered');
     assert.equal(legacyRegistered.monitorPacketVersion, undefined);
 
-    const framed = await RelayClient.connect(server);
+    const framed = await RelayClient.connectAs(server, 'listener', 'Listener');
     clients.push(framed);
     framed.send({ type: 'register', role: 'monitor', monitorPacketVersion: 1 });
     const framedRegistered = await framed.waitForType('registered');
     assert.equal(framedRegistered.monitorPacketVersion, 1);
 
-    const backing = await RelayClient.connect(server);
+    const backing = await RelayClient.connectInfrastructure(server);
     clients.push(backing);
     backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
     await backing.waitForType('registered');
 
-    const publisher = await RelayClient.connect(server);
+    const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
     clients.push(publisher);
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await publisher.waitForType('registered');
@@ -118,7 +118,7 @@ test('framed monitor opt-in gets positioned mix PCM while legacy monitor stays r
 test('monitor rejects an unsupported framed PCM version instead of silently changing wire format', async () => {
   const server = await startRelay({ RELAY_HEARTBEAT_MS: '60000' });
   try {
-    const monitor = await RelayClient.connect(server);
+    const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
     monitor.send({ type: 'register', role: 'monitor', monitorPacketVersion: 2 });
     assert.match((await monitor.waitForType('error')).message, /monitor packet version/i);
     monitor.close();

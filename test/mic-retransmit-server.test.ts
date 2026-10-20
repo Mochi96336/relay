@@ -7,11 +7,6 @@ import { uplinkHealthReport } from './support/uplink-health.js';
 
 const CHUNK = 960;
 
-function participantQuery(id: string, nickname: string) {
-  const params = new URLSearchParams({ participant: id, name: nickname });
-  return `?${params.toString()}`;
-}
-
 function uplinkHealth(generation: number, capturedSamples: number, retransmitBufferPackets?: number) {
   return {
     type: 'audio-uplink-health',
@@ -50,10 +45,7 @@ async function runLoss(retransmitBufferPackets: number | undefined, tailPackets 
   });
   try {
     const generation = 11;
-    const publisher = await RelayClient.connect(
-      server,
-      participantQuery(`participant-retransmit-${retransmitBufferPackets ?? 'none'}`, 'Retransmit'),
-    );
+    const publisher = await RelayClient.connectAs(server, `participant-retransmit-${retransmitBufferPackets ?? 'none'}`, 'Retransmit');
     publisher.send({
       type: 'register',
       role: 'publisher',

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { RelayClient, startRelay } from './helpers/harness.js';
+import { participantIdFor, RelayClient, startRelay } from './helpers/harness.js';
 import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
 const RATE = 48_000;
@@ -11,17 +11,15 @@ const FAST = {
   RELAY_HEARTBEAT_MS: '60000',
 };
 
-function query(participantId: string, name: string) {
-  return `?participant=${participantId}&name=${encodeURIComponent(name)}`;
-}
+const A_ID = participantIdFor('A');
+const B_ID = participantIdFor('B');
 
 async function playback(
   server: Awaited<ReturnType<typeof startRelay>>,
-  participantId: string,
   name: string,
   transportId: string,
 ) {
-  const client = await RelayClient.connect(server, query(participantId, name));
+  const client = await RelayClient.connectAs(server, name);
   client.send({ type: 'playback-hello', playbackTransportId: transportId, playbackGeneration: 1 });
   await client.waitFor((message) => (
     message.type === 'playback-registered'
@@ -32,11 +30,10 @@ async function playback(
 
 async function publisher(
   server: Awaited<ReturnType<typeof startRelay>>,
-  participantId: string,
   name: string,
   takeoverExpectedOwnerId?: string,
 ) {
-  const client = await RelayClient.connect(server, query(participantId, name));
+  const client = await RelayClient.connectAs(server, name);
   const registration: Record<string, unknown> = {
     type: 'register',
     role: 'publisher',
@@ -113,15 +110,15 @@ async function leavePendingSeek(client: RelayClient) {
 test('Mic takeover terminates the prior owner intent before prepared playback handoff', async () => {
   const server = await startRelay(FAST);
   try {
-    const aPlayback = await playback(server, 'participant-a', 'A', 'playback-epoch-a');
-    const aPublisher = await publisher(server, 'participant-a', 'A');
+    const aPlayback = await playback(server, 'A', 'playback-epoch-a');
+    const aPublisher = await publisher(server, 'A');
     await establishPlayingRoom(aPlayback);
     await leavePendingSeek(aPlayback);
 
-    const bPlayback = await playback(server, 'participant-b', 'B', 'playback-epoch-b');
+    const bPlayback = await playback(server, 'B', 'playback-epoch-b');
     bPlayback.send({ type: 'playback-mic-intent' });
     await bPlayback.waitForType('playback-mic-intent-registered');
-    const bPublisher = await publisher(server, 'participant-b', 'B', 'participant-a');
+    const bPublisher = await publisher(server, 'B', A_ID);
 
     const cancelled = await aPlayback.waitFor((message) => (
       message.type === 'room-song-command-failed-ack'
@@ -137,7 +134,7 @@ test('Mic takeover terminates the prior owner intent before prepared playback ha
     bPlayback.send(telemetry(Number(commit.serverTime) + 0.05, Number(commit.state)));
     const switched = await bPlayback.waitFor((message) => (
       message.type === 'youtube-timeline-status'
-      && message.playbackLeaderParticipantId === 'participant-b'
+      && message.playbackLeaderParticipantId === B_ID
       && message.handoffState === 'idle'
     ));
     assert.equal(switched.playbackTransportId, 'playback-epoch-b');
@@ -170,8 +167,8 @@ test('Mic takeover terminates the prior owner intent before prepared playback ha
 test('explicit Mic release terminates pending intent and late proof cannot resurrect it', async () => {
   const server = await startRelay(FAST);
   try {
-    const aPlayback = await playback(server, 'participant-a', 'A', 'playback-release-a');
-    const aPublisher = await publisher(server, 'participant-a', 'A');
+    const aPlayback = await playback(server, 'A', 'playback-release-a');
+    const aPublisher = await publisher(server, 'A');
     await establishPlayingRoom(aPlayback);
     await leavePendingSeek(aPlayback);
 

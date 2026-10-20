@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test, { after, before, describe } from 'node:test';
 
 import {
+  LEGACY_IDENTITY,
   RelayClient,
   laggedPair,
   sendPcmInChunks,
@@ -13,6 +14,7 @@ import {
   waitForNewMessage,
   type RelayServer,
 } from './helpers/harness.js';
+import { playingRoomSong } from './support/client-commands.js';
 
 const RATE = 48_000;
 const FAST = {
@@ -25,16 +27,6 @@ const FAST = {
   // One window unless a test is specifically about agreement, so the rest do
   // not have to synthesise three windows of audio to say anything.
   RELAY_CALIBRATION_AGREEMENT: '1',
-};
-
-const playingTelemetry = {
-  type: 'youtube-telemetry',
-  videoId: 'dQw4w9WgXcQ',
-  state: 1,
-  currentTime: 42,
-  duration: 200,
-  playbackRate: 1,
-  networkRttMs: 40,
 };
 
 function silence(seconds: number) {
@@ -75,15 +67,15 @@ async function anchorTogether(backing: RelayClient, publisher: RelayClient, moni
 }
 
 async function liveSession(server: RelayServer) {
-  const backing = await RelayClient.connect(server);
+  const backing = await RelayClient.connectInfrastructure(server);
   backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
   await backing.waitForType('registered');
 
-  const publisher = await RelayClient.connect(server);
+  const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
   publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
   await publisher.waitForType('registered');
 
-  const monitor = await RelayClient.connect(server);
+  const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
   monitor.send({ type: 'register', role: 'monitor' });
   await monitor.waitForType('registered');
   await monitor.waitForType('source-status');
@@ -161,7 +153,7 @@ describe('remote status', () => {
    * or a collapsed capture looks like from the server.
    */
   test('faults when a connected source stops sending audio', async () => {
-    const backing = await RelayClient.connect(server);
+    const backing = await RelayClient.connectInfrastructure(server);
     backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
     await backing.waitForType('registered');
     await sendPcmInChunks(backing, tone(0.3));
@@ -188,7 +180,7 @@ describe('remote status', () => {
    * still resolving permission and filling its first buffers.
    */
   test('calls a microphone that has not sent its first frame starting, not broken', async () => {
-    const publisher = await RelayClient.connect(server);
+    const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await publisher.waitForType('registered');
 
@@ -224,7 +216,7 @@ describe('shared-key auth', () => {
   });
 
   test('accepts a websocket with the key', async () => {
-    const client = await RelayClient.connect(server, '?key=sekrit');
+    const client = await RelayClient.connectAs(server, 'listener', 'Listener', '?key=sekrit');
     client.send({ type: 'register', role: 'monitor' });
     assert.equal((await client.waitForType('registered')).role, 'monitor');
     client.close();
@@ -237,18 +229,18 @@ describe('microphone transport', () => {
   after(async () => { await server.stop(); });
 
   test('rejects an implausible sample rate', async () => {
-    const client = await RelayClient.connect(server);
+    const client = await RelayClient.connectAs(server, 'singer', 'Singer');
     client.send({ type: 'register', role: 'publisher', sampleRate: 3 });
     assert.match((await client.waitForType('error')).message, /sample rate/i);
     client.close();
   });
 
   test('forwards the authoritative voice-only mix to monitors when no source is connected', async () => {
-    const monitor = await RelayClient.connect(server);
+    const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
     monitor.send({ type: 'register', role: 'monitor' });
     await monitor.waitForType('registered');
 
-    const publisher = await RelayClient.connect(server);
+    const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await publisher.waitForType('registered');
 
@@ -390,10 +382,29 @@ describe('framed pcm', () => {
 
   test('rejoins the existing timeline after a transport outage', async () => {
     const server = await startRelay(FAST);
+    // A phone resumes its capture by naming it: same generation, AudioPacket v2.
+    const registerCapture = (client: RelayClient) => client.send({
+      type: 'register', role: 'publisher', sampleRate: RATE,
+      captureGeneration: client.generationId, audioPacketVersion: 2,
+    });
+    const sendPackets = async (client: RelayClient, pcm: Buffer) => {
+      for (let offset = 0; offset < pcm.byteLength; offset += 960) {
+        client.sendAudioPacket(pcm.subarray(offset, offset + 960));
+        if (offset % 48_000 === 0) await sleep(0);
+      }
+    };
     try {
-      const { backing, publisher, monitor } = await liveSession(server);
+      const backing = await RelayClient.connectInfrastructure(server);
+      backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
+      await backing.waitForType('registered');
+      const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
+      monitor.send({ type: 'register', role: 'monitor' });
+      await monitor.waitForType('registered');
+      const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
+      registerCapture(publisher);
+      await publisher.waitFor((m) => m.type === 'registered' && m.role === 'publisher');
       await sendPcmInChunks(backing, tone(4, 0.8));
-      await sendPcmInChunks(publisher, tone(1, 0.4));
+      await sendPackets(publisher, tone(1, 0.4));
       await sleep(300);
 
       const cursor = publisher.cursor;
@@ -401,11 +412,15 @@ describe('framed pcm', () => {
       publisher.close();
       await sleep(400);
 
-      const rejoined = await RelayClient.connect(server);
-      rejoined.resumeCaptureSession(publisher.generationId, cursor + Math.round(RATE * 0.4));
-      rejoined.send({ type: 'register', role: 'publisher', sampleRate: RATE });
-      await rejoined.waitForType('registered');
-      await sendPcmInChunks(rejoined, tone(1, 0.4));
+      const rejoined = await RelayClient.connectAs(server, 'singer', 'Singer');
+      rejoined.resumeCaptureSession(
+        publisher.generationId,
+        cursor + Math.round(RATE * 0.4),
+        publisher.packetSequenceId + 40,
+      );
+      registerCapture(rejoined);
+      await rejoined.waitFor((m) => m.type === 'registered' && m.role === 'publisher');
+      await sendPackets(rejoined, tone(1, 0.4));
 
       await sleep(600);
       assert.ok(
@@ -445,7 +460,7 @@ describe('framed pcm', () => {
 
 describe('publisher takeover', () => {
   let server: RelayServer;
-  before(async () => { server = await startRelay(FAST); });
+  before(async () => { server = await startRelay({ ...FAST, ...LEGACY_IDENTITY }); });
   after(async () => { await server.stop(); });
 
   test('retires the old anonymous publisher with a terminal semantic message', async () => {
@@ -473,11 +488,11 @@ describe('mix settings', () => {
   after(async () => { await server.stop(); });
 
   test('keeps Song at the server-owned 100% reference while Voice changes', async () => {
-    const phone = await RelayClient.connect(server);
+    const phone = await RelayClient.connectAs(server, 'singer', 'Singer');
     phone.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await phone.waitForType('registered');
 
-    const desktop = await RelayClient.connect(server);
+    const desktop = await RelayClient.connectAs(server, 'listener', 'Listener');
     desktop.send({ type: 'register', role: 'monitor' });
     await desktop.waitForType('registered');
 
@@ -496,7 +511,7 @@ describe('mix settings', () => {
   });
 
   test('ignores legacy Song mutations and clamps Voice to +40 dB', async () => {
-    const phone = await RelayClient.connect(server);
+    const phone = await RelayClient.connectAs(server, 'singer', 'Singer');
     phone.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await phone.waitForType('registered');
 
@@ -517,11 +532,11 @@ describe('timing calibration', () => {
   test('refuses to start without both sources', async () => {
     const server = await startRelay(FAST);
     try {
-      const publisher = await RelayClient.connect(server);
+      const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
       publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
       await publisher.waitForType('registered');
 
-      const monitor = await RelayClient.connect(server);
+      const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
       monitor.send({ type: 'register', role: 'monitor' });
       await monitor.waitForType('registered');
 
@@ -560,7 +575,7 @@ describe('timing calibration', () => {
     const server = await startRelay(FAST);
     try {
       const { backing, publisher, monitor } = await liveSession(server);
-      publisher.send(playingTelemetry);
+      await playingRoomSong(publisher);
       await sendPcmInChunks(publisher, tone(0.5, 0.4));
 
       publisher.send({ type: 'start-timing-calibration' });
@@ -583,11 +598,11 @@ describe('timing calibration', () => {
     const server = await startRelay({ ...FAST, RELAY_CALIBRATION_TIMEOUT_MS: '20000' });
     try {
       const { backing, publisher, monitor } = await liveSession(server);
-      publisher.send(playingTelemetry);
+      const songTelemetry = await playingRoomSong(publisher);
       await primeStreams(backing, publisher);
 
       const collecting = await startCalibrationCollecting(publisher, monitor, async () => {
-        publisher.send(playingTelemetry);
+        publisher.send(songTelemetry());
         await primeStreams(backing, publisher);
       });
 
@@ -615,11 +630,11 @@ describe('timing calibration', () => {
     const server = await startRelay(FAST);
     try {
       const { backing, publisher, monitor } = await liveSession(server);
-      publisher.send(playingTelemetry);
+      const songTelemetry = await playingRoomSong(publisher);
       await primeStreams(backing, publisher);
 
       await startCalibrationCollecting(publisher, monitor, async () => {
-        publisher.send(playingTelemetry);
+        publisher.send(songTelemetry());
         await primeStreams(backing, publisher);
       });
 
@@ -650,7 +665,7 @@ describe('timing calibration', () => {
       publisher.close();
       await sleep(300);
 
-      const rejoined = await RelayClient.connect(server);
+      const rejoined = await RelayClient.connectAs(server, 'singer', 'Singer');
       rejoined.resumeCaptureSession(publisher.generationId, cursor + Math.round(RATE * 0.3));
       rejoined.send({ type: 'register', role: 'publisher', sampleRate: RATE });
       await rejoined.waitForType('registered');
@@ -673,11 +688,11 @@ describe('timing calibration', () => {
     const server = await startRelay(FAST);
     try {
       const { backing, publisher, monitor } = await liveSession(server);
-      publisher.send(playingTelemetry);
+      const songTelemetry = await playingRoomSong(publisher);
       await primeStreams(backing, publisher);
 
       await startCalibrationCollecting(publisher, monitor, async () => {
-        publisher.send(playingTelemetry);
+        publisher.send(songTelemetry());
         await primeStreams(backing, publisher);
       });
 
@@ -689,7 +704,7 @@ describe('timing calibration', () => {
         10_000,
       );
 
-      const restarted = await RelayClient.connect(server);
+      const restarted = await RelayClient.connectAs(server, 'singer', 'Singer');
       restarted.newCaptureSession();
       restarted.send({ type: 'register', role: 'publisher', sampleRate: RATE });
       await restarted.waitForType('registered');
@@ -714,11 +729,11 @@ describe('timing calibration', () => {
     const server = await startRelay(FAST);
     try {
       const { backing, publisher, monitor } = await liveSession(server);
-      publisher.send(playingTelemetry);
+      const songTelemetry = await playingRoomSong(publisher);
       await primeStreams(backing, publisher);
 
       await startCalibrationCollecting(publisher, monitor, async () => {
-        publisher.send(playingTelemetry);
+        publisher.send(songTelemetry());
         await primeStreams(backing, publisher);
       });
 
@@ -730,7 +745,7 @@ describe('timing calibration', () => {
         10_000,
       );
 
-      const restarted = await RelayClient.connect(server);
+      const restarted = await RelayClient.connectInfrastructure(server);
       restarted.newCaptureSession();
       restarted.send({ type: 'register', role: 'backing', sampleRate: RATE });
       await restarted.waitForType('registered');
@@ -755,7 +770,7 @@ describe('timing calibration', () => {
     const server = await startRelay({ ...FAST, RELAY_AUTO_CALIBRATE: '1' });
     try {
       const { backing, publisher, monitor } = await liveSession(server);
-      publisher.send(playingTelemetry);
+      await playingRoomSong(publisher);
 
       await Promise.all([
         sendPcmInChunks(backing, tone(1, 0.8)),
@@ -798,12 +813,12 @@ describe('timing calibration', () => {
     const server = await startRelay({ ...FAST, RELAY_CALIBRATION_AGREEMENT: '2' });
     try {
       const { backing, publisher, monitor } = await liveSession(server);
-      publisher.send(playingTelemetry);
+      const songTelemetry = await playingRoomSong(publisher);
       await anchorTogether(backing, publisher, monitor);
       await primeStreams(backing, publisher);
 
       await startCalibrationCollecting(publisher, monitor, async () => {
-        publisher.send(playingTelemetry);
+        publisher.send(songTelemetry());
         await primeStreams(backing, publisher);
       });
 
@@ -817,7 +832,7 @@ describe('timing calibration', () => {
       // for 2.5 s, and under CPU load the analysis takes longer than that.
       const silence = Buffer.alloc(960 * 2);
       const keepStreaming = setInterval(() => {
-        publisher.send(playingTelemetry);
+        publisher.send(songTelemetry());
         backing.sendPcm(silence);
         publisher.sendPcm(silence);
       }, 100);
@@ -848,7 +863,7 @@ describe('timing calibration', () => {
     const server = await startRelay({ ...FAST, RELAY_AUTO_CALIBRATE: '1' });
     try {
       const { backing, publisher, monitor } = await liveSession(server);
-      publisher.send(playingTelemetry);
+      await playingRoomSong(publisher);
 
       await sendPcmInChunks(backing, tone(2, 0.8));
       await sleep(800);
@@ -875,7 +890,7 @@ describe('timing calibration', () => {
     });
     try {
       const { backing, publisher, monitor } = await liveSession(server);
-      publisher.send(playingTelemetry);
+      await playingRoomSong(publisher);
 
       await Promise.all([
         sendPcmInChunks(backing, tone(1, 0.8)),
@@ -908,11 +923,11 @@ describe('timing calibration', () => {
     const server = await startRelay(FAST);
     try {
       const { backing, publisher, monitor } = await liveSession(server);
-      publisher.send(playingTelemetry);
+      const songTelemetry = await playingRoomSong(publisher);
       await primeStreams(backing, publisher);
 
       await startCalibrationCollecting(publisher, monitor, async () => {
-        publisher.send(playingTelemetry);
+        publisher.send(songTelemetry());
         await primeStreams(backing, publisher);
       });
 
@@ -947,11 +962,11 @@ describe('timing calibration', () => {
     const server = await startRelay({ ...FAST, RELAY_BACKING_GRACE_MS: '300' });
     try {
       const { backing, publisher, monitor } = await liveSession(server);
-      publisher.send(playingTelemetry);
+      const songTelemetry = await playingRoomSong(publisher);
       await primeStreams(backing, publisher);
 
       await startCalibrationCollecting(publisher, monitor, async () => {
-        publisher.send(playingTelemetry);
+        publisher.send(songTelemetry());
         await primeStreams(backing, publisher);
       });
 
@@ -991,7 +1006,7 @@ describe('timing calibration', () => {
       backing.close();
       await sleep(200);
 
-      const rejoined = await RelayClient.connect(server);
+      const rejoined = await RelayClient.connectInfrastructure(server);
       rejoined.newCaptureSession();
       rejoined.send({ type: 'register', role: 'backing', sampleRate: RATE });
       await rejoined.waitForType('registered');
@@ -1016,11 +1031,11 @@ describe('timing calibration', () => {
     const server = await startRelay({ ...FAST, RELAY_BACKING_GRACE_MS: '5000' });
     try {
       const { backing, publisher, monitor } = await liveSession(server);
-      publisher.send(playingTelemetry);
+      const songTelemetry = await playingRoomSong(publisher);
       await primeStreams(backing, publisher);
 
       await startCalibrationCollecting(publisher, monitor, async () => {
-        publisher.send(playingTelemetry);
+        publisher.send(songTelemetry());
         await primeStreams(backing, publisher);
       });
 
@@ -1039,7 +1054,7 @@ describe('timing calibration', () => {
       backing.close();
       await sleep(300);
 
-      const rejoined = await RelayClient.connect(server);
+      const rejoined = await RelayClient.connectInfrastructure(server);
       rejoined.resumeCaptureSession(generation, cursor + Math.round(RATE * 0.3));
       rejoined.send({ type: 'register', role: 'backing', sampleRate: RATE });
       await rejoined.waitForType('registered');

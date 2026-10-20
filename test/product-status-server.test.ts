@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { RelayClient, sleep, startRelay } from './helpers/harness.js';
+import { RelayClient, participantIdFor, sleep, startRelay } from './helpers/harness.js';
 
 const RATE = 48_000;
 const FAST = {
@@ -29,10 +29,7 @@ test('/statusz, /readyz and product-status agree that a completely unarmed room 
     assert.equal(readiness.components.route.mode, 'idle');
     assert.ok(readiness.sessionReasons.includes('mic-not-connected'));
 
-    const client = await RelayClient.connect(
-      server,
-      '?participant=product-user-123&name=Mochi',
-    );
+    const client = await RelayClient.connectAs(server, 'product-user-123', 'Mochi');
     client.send({ type: 'product-status-request' });
     const product = await client.waitForType('product-status');
 
@@ -54,7 +51,7 @@ test('/statusz, /readyz and product-status agree that a completely unarmed room 
 test('arming the Robot source makes missing Robot audio a blocker everywhere', async () => {
   const server = await startRelay(FAST);
   try {
-    const robot = await RelayClient.connect(server);
+    const robot = await RelayClient.connectInfrastructure(server);
     robot.send({ type: 'robot-source-hello' });
     await sleep(30);
 
@@ -70,10 +67,7 @@ test('arming the Robot source makes missing Robot audio a blocker everywhere', a
     assert.equal(readiness.components.route.mode, 'robot');
     assert.ok(readiness.reasons.includes('backing-not-connected'));
 
-    const observer = await RelayClient.connect(
-      server,
-      '?participant=observer-user-123&name=Quiet%20Cat',
-    );
+    const observer = await RelayClient.connectAs(server, 'observer-user-123', 'Quiet Cat');
     observer.send({ type: 'product-status-request' });
     const product = await observer.waitForType('product-status');
     assert.equal(product.lifecycle, 'idle');
@@ -97,7 +91,7 @@ test('arming the Robot source makes missing Robot audio a blocker everywhere', a
 test('a legacy backing route stays healthy without Robot identity or player delta', async () => {
   const server = await startRelay(FAST);
   try {
-    const backing = await RelayClient.connect(server);
+    const backing = await RelayClient.connectInfrastructure(server);
     backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
     await backing.waitForType('registered');
     backing.sendPcm(pcm(40));
@@ -125,7 +119,7 @@ test('a legacy backing route stays healthy without Robot identity or player delt
 test('stale Backing catch-up stays transport-streaming but is not product-playable', async () => {
   const server = await startRelay(FAST);
   try {
-    const backing = await RelayClient.connect(server);
+    const backing = await RelayClient.connectInfrastructure(server);
     backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
     await backing.waitForType('registered');
 
@@ -140,10 +134,7 @@ test('stale Backing catch-up stays transport-streaming but is not product-playab
     backing.sendPcm(pcm(20));
     await sleep(30);
 
-    const observer = await RelayClient.connect(
-      server,
-      '?participant=stale-backing-observer&name=Observer',
-    );
+    const observer = await RelayClient.connectAs(server, 'stale-backing-observer', 'Observer');
 
     observer.send({ type: 'source-status-request' });
     const source = await observer.waitForType('source-status');
@@ -174,7 +165,7 @@ test('legacy route expectation survives backing grace instead of collapsing to i
     RELAY_BACKING_GRACE_MS: '250',
   });
   try {
-    const backing = await RelayClient.connect(server);
+    const backing = await RelayClient.connectInfrastructure(server);
     backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
     await backing.waitForType('registered');
     backing.sendPcm(pcm(40));
@@ -194,10 +185,7 @@ test('legacy route expectation survives backing grace instead of collapsing to i
     assert.equal(remote.state, 'fault');
     assert.equal(remote.robot.route, false);
 
-    const observer = await RelayClient.connect(
-      server,
-      '?participant=legacy-observer-123&name=Quiet%20Cat',
-    );
+    const observer = await RelayClient.connectAs(server, 'legacy-observer-123', 'Quiet Cat');
     observer.send({ type: 'product-status-request' });
     const product = await observer.waitForType('product-status');
     assert.equal(product.health, 'blocked');
@@ -222,10 +210,10 @@ test('Robot route expectation survives simultaneous source loss during backing g
     RELAY_BACKING_GRACE_MS: '250',
   });
   try {
-    const robot = await RelayClient.connect(server);
+    const robot = await RelayClient.connectInfrastructure(server);
     robot.send({ type: 'robot-source-hello' });
 
-    const backing = await RelayClient.connect(server);
+    const backing = await RelayClient.connectInfrastructure(server);
     backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
     await backing.waitForType('registered');
     backing.sendPcm(pcm(40));
@@ -254,21 +242,15 @@ test('Robot route expectation survives simultaneous source loss during backing g
 test('product-status carries person-facing Mic ownership instead of exposing transport identity', async () => {
   const server = await startRelay(FAST);
   try {
-    const singer = await RelayClient.connect(
-      server,
-      '?participant=singer-user-123&name=Blue%20Fox',
-    );
+    const singer = await RelayClient.connectAs(server, 'singer-user-123', 'Blue Fox');
     singer.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await singer.waitForType('registered');
 
-    const observer = await RelayClient.connect(
-      server,
-      '?participant=observer-user-123&name=Quiet%20Cat',
-    );
+    const observer = await RelayClient.connectAs(server, 'observer-user-123', 'Quiet Cat');
     observer.send({ type: 'product-status-request' });
     const product = await observer.waitFor(
       (message) => message.type === 'product-status'
-        && message.room?.mic?.ownerId === 'singer-user-123',
+        && message.room?.mic?.ownerId === participantIdFor('singer-user-123'),
     );
 
     assert.equal(product.room.mic.ownerNickname, 'Blue Fox');

@@ -25,12 +25,12 @@ test('server process incarnation scopes Presence and room Song revisions', async
 
   const server = await startRelay({ RELAY_HEARTBEAT_MS: '60000' });
   try {
-    const presence = await RelayClient.connect(server, '?participant=epoch-test&name=Epoch');
+    const presence = await RelayClient.connectAs(server, 'epoch-test', 'Epoch');
     const session = await presence.waitForType('session-status');
     assert.equal(typeof session.serverIncarnation, 'string');
     assert.ok(session.serverIncarnation.length > 0);
 
-    const playback = await RelayClient.connect(server, '?participant=epoch-test&name=Epoch');
+    const playback = await RelayClient.connectAs(server, 'epoch-test', 'Epoch');
     playback.send({ type: 'room-song-command-status-request' });
     const commandStatus = await playback.waitForType('room-song-command-status');
     assert.equal(commandStatus.serverIncarnation, session.serverIncarnation);

@@ -13,7 +13,6 @@ import {
   acknowledgeNextBackingBoundary,
   backingBoundaryRequestCount,
   laggedBacking,
-  playingTelemetry,
   robotRoom,
   waitForRobotMapping,
   waitForTimingStatus,
@@ -133,8 +132,6 @@ test('repeated 700 ms corrections stay quarantined and recover after the first f
   const room = await robotRoom(server);
   let keepMappingFresh: NodeJS.Timeout | null = null;
   try {
-    room.publisher.send(playingTelemetry);
-
     const maxAdvanceSamples = Math.round((RATE * REFERENCE_LAG_MS) / 1_000);
     // Keep every transition proof window classifiable by the production music
     // matcher. Seed 131 leaves these deterministic 650 ms windows with only two

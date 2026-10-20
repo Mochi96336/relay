@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { after, before, describe } from 'node:test';
 
-import { RelayClient, sleep, startRelay, type RelayServer } from './helpers/harness.js';
+import { participantIdFor, RelayClient, type RelayServer, sleep, startRelay } from './helpers/harness.js';
 
 const RATE = 48_000;
 const FAST = {
@@ -30,12 +30,9 @@ describe('observation status v1', () => {
   });
 
   test('publishes anonymous aggregate presence and lease state only', async () => {
-    const participantId = 'participant01';
+    const participantId = participantIdFor('observation-publisher');
     const nickname = 'Visible Name';
-    const publisher = await RelayClient.connect(
-      server,
-      `?participant=${participantId}&name=${encodeURIComponent(nickname)}`,
-    );
+    const publisher = await RelayClient.connectAs(server, 'observation-publisher', nickname);
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await publisher.waitForType('registered');
 

@@ -26,15 +26,15 @@ const ROBOT_FAST = {
 test('Robot manual realignment starts boot-probe from fresh silent capture without YouTube telemetry', async () => {
   const server = await startRelay(ROBOT_FAST);
   try {
-    const backing = await RelayClient.connect(server);
+    const backing = await RelayClient.connectInfrastructure(server);
     backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
     await backing.waitForType('registered');
 
-    const publisher = await RelayClient.connect(server);
+    const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await publisher.waitForType('registered');
 
-    const robot = await RelayClient.connect(server);
+    const robot = await RelayClient.connectInfrastructure(server);
     robot.send({ type: 'robot-source-hello' });
 
     // Silence is intentional. "Streaming" here means both PCM sample timelines

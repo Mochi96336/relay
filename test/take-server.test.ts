@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { RelayClient, sleep, startRelay, waitForNewMessage, type RelayServer } from './helpers/harness.js';
+import { participantIdFor, RelayClient, sleep, startRelay, waitForNewMessage, type RelayServer } from './helpers/harness.js';
 import { uplinkHealthReport } from './support/uplink-health.js';
 import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
@@ -18,15 +18,7 @@ const FAST = {
   RELAY_LIVE_PREBUFFER_MS: '40',
 };
 
-function participantQuery(participantId: string, name: string, key?: string) {
-  const params = new URLSearchParams();
-  if (key) params.set('key', key);
-  params.set('participant', participantId);
-  params.set('name', name);
-  return `?${params.toString()}`;
-}
-
-function backingQuery(key?: string) {
+function keyQuery(key?: string) {
   return key ? `?key=${encodeURIComponent(key)}` : '';
 }
 
@@ -74,7 +66,7 @@ async function establishRoomSong(client: RelayClient, transportId: string) {
 }
 
 async function startBacking(server: RelayServer, key?: string) {
-  const backing = await RelayClient.connect(server, backingQuery(key));
+  const backing = await RelayClient.connectInfrastructure(server, keyQuery(key));
   backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
   await backing.waitFor((message) => message.type === 'registered' && message.role === 'backing');
   return backing;
@@ -142,7 +134,7 @@ test('Relay records the authoritative mixed PCM directly into an authenticated W
   const key = 'take-secret';
   const server = await startRelay({ ...FAST, RELAY_KEY: key, RELAY_TAKE_DIR: directory });
   try {
-    const control = await RelayClient.connect(server, participantQuery('participant-a', 'A', key));
+    const control = await RelayClient.connectAs(server, 'participant-a', 'A', keyQuery(key));
     await establishRoomSong(control, 'take-playback-a');
     control.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
     await control.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
@@ -161,7 +153,7 @@ test('Relay records the authoritative mixed PCM directly into an authenticated W
       && message.lifecycle === 'recording'
       && message.take?.takeId === takeId
     ));
-    assert.equal(recording.take.startedByParticipantId, 'participant-a');
+    assert.equal(recording.take.startedByParticipantId, participantIdFor('participant-a'));
     assert.equal(recording.take.song.videoId, VIDEO);
     assert.equal(recording.take.quality, null, 'quality is sealed when the recording stops');
 
@@ -177,8 +169,8 @@ test('Relay records the authoritative mixed PCM directly into an authenticated W
     ));
     const ready = await waitReady(control, takeId);
     assert.equal(ready.take.stopReason, 'user');
-    assert.equal(ready.take.startedByParticipantId, 'participant-a');
-    assert.equal(ready.take.stoppedByParticipantId, 'participant-a');
+    assert.equal(ready.take.startedByParticipantId, participantIdFor('participant-a'));
+    assert.equal(ready.take.stoppedByParticipantId, participantIdFor('participant-a'));
     assert.equal(ready.take.artifact.mimeType, 'audio/wav');
     assert.equal(ready.take.artifact.sampleRate, RATE);
     assert.equal(ready.take.artifact.channels, 1);
@@ -220,7 +212,7 @@ test('a Mic input gap completed before Start does not contaminate the later Take
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-prestart-input-gap-'));
   const server = await startRelay({ ...FAST, RELAY_TAKE_DIR: directory });
   try {
-    const control = await RelayClient.connect(server, participantQuery('participant-pre-gap', 'PreGap'));
+    const control = await RelayClient.connectAs(server, 'participant-pre-gap', 'PreGap');
     await establishRoomSong(control, 'pre-gap-playback');
     const backing = await startBacking(server);
 
@@ -300,7 +292,7 @@ test('a short worklet input gap prevents a padded-silence Take from assessing cl
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-input-gap-'));
   const server = await startRelay({ ...FAST, RELAY_TAKE_DIR: directory });
   try {
-    const control = await RelayClient.connect(server, participantQuery('participant-gap', 'Gap'));
+    const control = await RelayClient.connectAs(server, 'participant-gap', 'Gap');
     await establishRoomSong(control, 'input-gap-playback');
     const backing = await startBacking(server);
     feedBacking(backing, 16);
@@ -386,7 +378,7 @@ test('a Take survives Mic takeover and can be stopped by the new participant wit
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-takeover-'));
   const server = await startRelay({ ...FAST, RELAY_TAKE_DIR: directory });
   try {
-    const a = await RelayClient.connect(server, participantQuery('participant-a', 'A'));
+    const a = await RelayClient.connectAs(server, 'participant-a', 'A');
     await playback(a, 'takeover-playback-a');
     a.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
     await a.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
@@ -414,13 +406,13 @@ test('a Take survives Mic takeover and can be stopped by the new participant wit
     await a.waitFor((message) => message.type === 'take-status' && message.lifecycle === 'recording' && message.take?.takeId === takeId);
     feedBacking(backing, 20, 8_000);
 
-    const b = await RelayClient.connect(server, participantQuery('participant-b', 'B'));
+    const b = await RelayClient.connectAs(server, 'participant-b', 'B');
     b.send({
       type: 'register',
       role: 'publisher',
       sampleRate: RATE,
       captureGeneration: 1,
-      takeoverExpectedOwnerId: 'participant-a',
+      takeoverExpectedOwnerId: participantIdFor('participant-a'),
     });
     await b.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
 
@@ -430,15 +422,15 @@ test('a Take survives Mic takeover and can be stopped by the new participant wit
       && message.lifecycle === 'recording'
       && message.take?.takeId === takeId
     ));
-    assert.equal(afterTakeover.take.startedByParticipantId, 'participant-a');
+    assert.equal(afterTakeover.take.startedByParticipantId, participantIdFor('participant-a'));
     assert.equal(afterTakeover.take.endedAtMs, null);
 
     feedBacking(backing, 20, 12_000);
     await sleep(220);
     b.send({ type: 'stop-take', takeId });
     const ready = await waitReady(b, takeId);
-    assert.equal(ready.take.startedByParticipantId, 'participant-a');
-    assert.equal(ready.take.stoppedByParticipantId, 'participant-b');
+    assert.equal(ready.take.startedByParticipantId, participantIdFor('participant-a'));
+    assert.equal(ready.take.stoppedByParticipantId, participantIdFor('participant-b'));
     assert.equal(ready.take.takeId, takeId);
     assert.equal(ready.take.quality.evidence.events['mic-owner-changed'], 1);
 
@@ -454,7 +446,7 @@ test('Take keeps recording after the controller socket disconnects and another p
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-controller-'));
   const server = await startRelay({ ...FAST, RELAY_TAKE_DIR: directory });
   try {
-    const a = await RelayClient.connect(server, participantQuery('participant-a', 'A'));
+    const a = await RelayClient.connectAs(server, 'participant-a', 'A');
     await establishRoomSong(a, 'controller-playback-a');
     a.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
     await a.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
@@ -472,12 +464,12 @@ test('Take keeps recording after the controller socket disconnects and another p
     feedBacking(backing, 30, 9_000);
     await sleep(220);
 
-    const b = await RelayClient.connect(server, participantQuery('participant-b', 'B'));
+    const b = await RelayClient.connectAs(server, 'participant-b', 'B');
     b.send({ type: 'take-status-request' });
     await b.waitFor((message) => message.type === 'take-status' && message.lifecycle === 'recording' && message.take?.takeId === takeId);
     b.send({ type: 'stop-take', takeId });
     const ready = await waitReady(b, takeId);
-    assert.equal(ready.take.stoppedByParticipantId, 'participant-b');
+    assert.equal(ready.take.stoppedByParticipantId, participantIdFor('participant-b'));
 
     b.close();
     backing.close();
@@ -495,7 +487,7 @@ test('a sustained backing outage is attached to the Take and degrades the final 
     RELAY_BACKING_GRACE_MS: '1200',
   });
   try {
-    const control = await RelayClient.connect(server, participantQuery('participant-a', 'A'));
+    const control = await RelayClient.connectAs(server, 'participant-a', 'A');
     await playback(control, 'quality-playback-a');
     control.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
     await control.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
@@ -564,7 +556,7 @@ test('a Robot source that closes during a Take is recorded on the Take', async (
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-robot-close-'));
   const server = await startRelay({ ...FAST, RELAY_TAKE_DIR: directory });
   try {
-    const control = await RelayClient.connect(server, participantQuery('participant-a', 'A'));
+    const control = await RelayClient.connectAs(server, 'participant-a', 'A');
     control.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
     await control.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
     await establishRoomSong(control, 'robot-close-playback-a');
@@ -579,7 +571,7 @@ test('a Robot source that closes during a Take is recorded on the Take', async (
     const takeId = String(start.takeId);
     await control.waitFor((message) => message.type === 'take-status' && message.lifecycle === 'recording' && message.take?.takeId === takeId);
 
-    const robot = await RelayClient.connect(server);
+    const robot = await RelayClient.connectInfrastructure(server);
     robot.send({ type: 'robot-source-hello' });
     await sleep(100);
     robot.close();
@@ -603,7 +595,7 @@ test('a Mic or Desktop Source that restarts its capture during a Take is recorde
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-capture-restart-'));
   const server = await startRelay({ ...FAST, RELAY_TAKE_DIR: directory });
   try {
-    const control = await RelayClient.connect(server, participantQuery('participant-a', 'A'));
+    const control = await RelayClient.connectAs(server, 'participant-a', 'A');
     control.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
     await control.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
     await establishRoomSong(control, 'capture-restart-playback-a');
@@ -641,7 +633,7 @@ test('a Desktop Source or Robot that is replaced during a Take is recorded on th
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-source-replaced-'));
   const server = await startRelay({ ...FAST, RELAY_TAKE_DIR: directory });
   try {
-    const control = await RelayClient.connect(server, participantQuery('participant-a', 'A'));
+    const control = await RelayClient.connectAs(server, 'participant-a', 'A');
     control.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
     await control.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
     await establishRoomSong(control, 'source-replaced-playback-a');
@@ -657,10 +649,10 @@ test('a Desktop Source or Robot that is replaced during a Take is recorded on th
     await control.waitFor((message) => message.type === 'take-status' && message.lifecycle === 'recording' && message.take?.takeId === takeId);
 
     const newerTab = await startBacking(server);
-    const firstRobot = await RelayClient.connect(server);
+    const firstRobot = await RelayClient.connectInfrastructure(server);
     firstRobot.send({ type: 'robot-source-hello' });
     await sleep(100);
-    const secondRobot = await RelayClient.connect(server);
+    const secondRobot = await RelayClient.connectInfrastructure(server);
     secondRobot.send({ type: 'robot-source-hello' });
     await firstRobot.waitForType('robot-source-replaced');
     feedMic(control, 20);
@@ -696,9 +688,9 @@ test('a Mic that drops and comes back with a new capture during a Take is record
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-mic-return-'));
   const server = await startRelay({ ...FAST, RELAY_TAKE_DIR: directory, RELAY_MIC_TRANSPORT_GRACE_MS: '5000' });
   try {
-    const control = await RelayClient.connect(server, participantQuery('participant-a', 'A'));
+    const control = await RelayClient.connectAs(server, 'participant-a', 'A');
     await establishRoomSong(control, 'mic-return-playback-a');
-    const mic = await RelayClient.connect(server, participantQuery('participant-a', 'A'));
+    const mic = await RelayClient.connectAs(server, 'participant-a', 'A');
     mic.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
     await mic.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
 
@@ -715,7 +707,7 @@ test('a Mic that drops and comes back with a new capture during a Take is record
     // The phone's socket drops; it comes back within the grace with a fresh capture.
     mic.close();
     await sleep(100);
-    const returned = await RelayClient.connect(server, participantQuery('participant-a', 'A'));
+    const returned = await RelayClient.connectAs(server, 'participant-a', 'A');
     returned.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 2 });
     await returned.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
     feedMic(returned, 20);
@@ -746,7 +738,7 @@ test('ending the authoritative live mix auto-finalizes the active Take instead o
     RELAY_BACKING_GRACE_MS: '100',
   });
   try {
-    const control = await RelayClient.connect(server, participantQuery('participant-a', 'A'));
+    const control = await RelayClient.connectAs(server, 'participant-a', 'A');
     await establishRoomSong(control, 'mix-end-playback-a');
     control.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
     await control.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
@@ -780,7 +772,7 @@ test('Start Take follows blocked product health while a Song route has no audio 
   const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-health-gate-'));
   const server = await startRelay({ ...FAST, RELAY_TAKE_DIR: directory });
   try {
-    const control = await RelayClient.connect(server, participantQuery('participant-a', 'A'));
+    const control = await RelayClient.connectAs(server, 'participant-a', 'A');
     await establishRoomSong(control, 'health-gate-playback-a');
     const backing = await startBacking(server);
 
@@ -817,7 +809,7 @@ test('Take commands require participant identity, recordable room audio, and the
     anonymous.send({ type: 'start-take' });
     assert.equal((await anonymous.waitForType('take-command-rejected')).reason, 'participant-required');
 
-    const control = await RelayClient.connect(server, participantQuery('participant-a', 'A'));
+    const control = await RelayClient.connectAs(server, 'participant-a', 'A');
     control.send({ type: 'start-take' });
     assert.equal((await control.waitForType('take-command-rejected')).reason, 'mic-required');
 

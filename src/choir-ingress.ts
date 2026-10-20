@@ -1,4 +1,4 @@
-import { OpusMicDecoder } from './opus-mic-decoder.js';
+import { OpusMicDecoder, opusMicSampleSpan } from './opus-mic-decoder.js';
 import { FRAME_MAGIC } from './pcm-frame.js';
 import {
   AUDIO_PACKET_HEADER_BYTES, AUDIO_PACKET_VERSION, decodeAudioPacket,
@@ -37,7 +37,7 @@ type BoundSecondary = {
   /** v2 committed sequence identity, bounded to the recent reorder horizon. */
   latestSequence: number | null;
   seenSequences: Map<number, { start: number; end: number }>;
-  /** Opus v3 sockets only: the decoder (null until the first packet, or after corrupt data). */
+  /** Opus v3 sockets only: one decoder for this capture, including codec holes. */
   opus: { decoder: OpusMicDecoder | null } | null;
 };
 
@@ -46,7 +46,7 @@ export type ChoirIngressResult =
   | { intercepted: true; accepted: boolean; reason:
       'accepted' | 'malformed-frame' | 'too-large' | 'rate-limited'
       | 'stale-authority' | 'socket-identity-changed' | 'capture-restarted'
-      | 'duplicate-packet' | 'sequence-out-of-window' | 'sample-overlap' };
+      | 'duplicate-packet' | 'sequence-out-of-window' | 'sample-overlap' | 'codec-error' };
 
 export class ChoirIngress {
   private readonly sockets = new WeakMap<ChoirSecondarySocket, BoundSecondary>();
@@ -173,25 +173,14 @@ export class ChoirIngress {
     if (packet.sampleCount > Math.ceil(bound.sampleRate * this.maxPacketMs / 1_000))
       return rejected('too-large');
     const sequence = packet.sequence;
-    // Opus state follows every packet decoded, so a duplicate or another
-    // capture's packet must be refused before it reaches the decoder.
-    if (bound.opus && bound.seenSequences.has(sequence)) return rejected('duplicate-packet');
-    if (bound.opus && bound.generation !== null && packet.generation !== bound.generation)
-      return rejected('capture-restarted');
-    const frame = bound.opus
-      ? decodeOpusFrame(bound.opus, packet)
-      : { generation: packet.generation, firstSampleIndex: packet.firstSampleIndex, pcm: packet.pcm };
-    if (!frame) return rejected('malformed-frame');
-
-    const sampleCount = frame.pcm.length / 2;
-    if (!Number.isSafeInteger(frame.firstSampleIndex)
-      || frame.generation === null
-      || !Number.isSafeInteger(frame.generation) || frame.generation < 0
-      || frame.firstSampleIndex === null || frame.firstSampleIndex < 0
+    // Admission is a metadata transaction. Nothing that can reject a packet
+    // may run after the stateful codec has consumed it.
+    const { firstSampleIndex, sampleCount } = bound.opus ? opusMicSampleSpan(packet) : packet;
+    if (!Number.isSafeInteger(firstSampleIndex) || firstSampleIndex < 0
       || sampleCount < 1 || sampleCount > Math.ceil(bound.sampleRate * this.maxPacketMs / 1_000)
-      || !Number.isSafeInteger(frame.firstSampleIndex + sampleCount))
+      || !Number.isSafeInteger(firstSampleIndex + sampleCount))
       return rejected('malformed-frame');
-    if (bound.generation !== null && frame.generation !== bound.generation)
+    if (bound.generation !== null && packet.generation !== bound.generation)
       return rejected('capture-restarted');
 
     {
@@ -206,11 +195,13 @@ export class ChoirIngress {
         if (forward === 0) return rejected('duplicate-packet');
         if (forward < 0x8000_0000) {
           if (forward > 4 * horizon) return rejected('sequence-out-of-window');
-        } else if (backward > horizon) {
+        } else if (bound.opus || backward > horizon) {
+          // B uses one ordered WebSocket, with no retransmission path. PCM
+          // may fill retained history; Opus cannot rewind decoder history.
           return rejected('sequence-out-of-window');
         }
       }
-      const start = frame.firstSampleIndex!;
+      const start = firstSampleIndex;
       const end = start + sampleCount;
       for (const window of bound.seenSequences.values()) {
         if (start < window.end && end > window.start)
@@ -221,16 +212,13 @@ export class ChoirIngress {
       this.releaseTransportBinding(socket, bound.transportId);
       return rejected('stale-authority');
     }
-    bound.generation = frame.generation;
-    this.onAcceptedFrame?.({
-      generation: frame.generation, firstSampleIndex: frame.firstSampleIndex!, pcm: frame.pcm,
-    }, bound.sampleRate, bound.participantId, nowMs);
+    bound.generation = packet.generation;
     {
       const latest = bound.latestSequence;
       if (latest === null || ((sequence - latest) >>> 0) < 0x8000_0000)
         bound.latestSequence = sequence;
       bound.seenSequences.set(sequence, {
-        start: frame.firstSampleIndex!, end: frame.firstSampleIndex! + sampleCount,
+        start: firstSampleIndex, end: firstSampleIndex + sampleCount,
       });
       const current = bound.latestSequence!;
       for (const previous of bound.seenSequences.keys()) {
@@ -239,6 +227,11 @@ export class ChoirIngress {
           bound.seenSequences.delete(previous);
       }
     }
+    const frame = bound.opus
+      ? (bound.opus.decoder ??= new OpusMicDecoder()).decode(packet)
+      : { generation: packet.generation, firstSampleIndex, pcm: packet.pcm };
+    if (!frame) return rejected('codec-error');
+    this.onAcceptedFrame?.(frame, bound.sampleRate, bound.participantId, nowMs);
     this.counts.accepted += 1;
     return { intercepted: true, accepted: true, reason: 'accepted' };
   }
@@ -275,30 +268,3 @@ export class ChoirIngress {
     return this.sockets.has(socket);
   }
 }
-
-/**
- * One Opus v3 packet to its PCM frame, as the main Mic's transport decodes
- * (audio-transport.ts): decoder state carries across packets, a hole is
- * concealed inside the decoder (OpusMicDecoder), and the encoder's look-ahead
- * is taken off the start.
- * Corrupt codec data is a hole, never stale decoder output.
- */
-function decodeOpusFrame(
-  opus: NonNullable<BoundSecondary['opus']>,
-  packet: { generation: number; firstSampleIndex: number; sampleCount: number; pcm: Buffer; opusDelaySamples?: number },
-): { generation: number; firstSampleIndex: number; pcm: Buffer } | null {
-  if (packet.opusDelaySamples === undefined) return null;
-  try {
-    opus.decoder ??= new OpusMicDecoder();
-    const pcm = opus.decoder.decodeAt(packet.firstSampleIndex, packet.pcm);
-    if (pcm.byteLength !== packet.sampleCount * 2) throw new Error('Opus sample count mismatch');
-    const start = packet.firstSampleIndex - packet.opusDelaySamples;
-    const trim = Math.max(0, -start);
-    if (trim * 2 >= pcm.byteLength) return null;
-    return { generation: packet.generation, firstSampleIndex: Math.max(0, start), pcm: pcm.subarray(trim * 2) };
-  } catch {
-    opus.decoder = null;
-    return null;
-  }
-}
-

@@ -120,6 +120,7 @@ function tonality(samples: ArrayLike<number>) {
 
 type Measurement = {
   scenario: string;
+  packetMs: number;
   missingPackets: number;
   evidenceGapMs: number;
   evidenceMissingMs: number;
@@ -135,6 +136,7 @@ type Measurement = {
 
 type RunOptions = {
   sampleRate?: number;
+  opusBitrate?: number;
   level?: number;
   seed?: number;
   /** Edits the mixed output before scoring: proves the scorer sees a fault. */
@@ -143,7 +145,7 @@ type RunOptions = {
 
 async function measure(
   scenario: Scenario,
-  { sampleRate = 48_000, level = SINGING_LEVEL, seed = 1, tamper }: RunOptions = {},
+  { sampleRate = 48_000, opusBitrate, level = SINGING_LEVEL, seed = 1, tamper }: RunOptions = {},
 ) {
   const session = new AudioSession({
     sampleRate: MIX_RATE,
@@ -167,6 +169,7 @@ async function measure(
     pageRetransmits: true,
     seed,
     sampleRate,
+    opusBitrate,
     pcm: (_index, first, count) => {
       const pcm = Buffer.alloc(count * 2);
       for (let i = 0; i < count; i += 1) {
@@ -291,6 +294,7 @@ async function measure(
 
   const measurement: Measurement = {
     scenario: `${scenario.name}${sampleRate === 48_000 ? '' : ` @ ${sampleRate} Hz`}${level === SINGING_LEVEL ? '' : ` @ level ${level}`}`,
+    packetMs: opusBitrate ? 20 : PACKET_MS,
     missingPackets: outcome.missing,
     evidenceGapMs: Math.round((scored.reduce((sum, { gap }) => sum + gap, 0) / MIX_RATE) * 1_000),
     evidenceMissingMs: Math.round((scored.reduce((sum, { missing }) => sum + missing, 0) / MIX_RATE) * 1_000),
@@ -322,7 +326,7 @@ function assertAudible(measurement: Measurement, { clickFree = true } = {}) {
   }
   // Concealment is audible fill, never received audio: every packet that was
   // not heard in time must still be missing in what a Take records.
-  const missingMs = measurement.missingPackets * PACKET_MS;
+  const missingMs = measurement.missingPackets * measurement.packetMs;
   assert.ok(measurement.evidenceMissingMs >= missingMs * 0.9, `lost audio not in the evidence: ${context}`);
 }
 
@@ -443,6 +447,20 @@ const scenarios: { scenario: Scenario; options?: RunOptions; clickFree?: boolean
 ];
 
 describe('Mic audible loss matrix (virtual clock, real transports and mix)', () => {
+  for (const opusBitrate of [32_000, 64_000, 128_000]) {
+    for (const { scenario, options, clickFree } of scenarios) {
+      if (options?.sampleRate && options.sampleRate !== 48_000) continue;
+      it(`Opus ${opusBitrate}: ${scenario.name}${options?.level ? ' for a loud singer' : ''}`, async () => {
+        assertAudible(await measure(scenario, { ...options, opusBitrate }), { clickFree });
+      });
+    }
+    for (const seed of [2, 3]) {
+      const burst = scenarios.find(({ scenario }) => scenario.name === 'Gilbert bursts')!;
+      it(`Opus ${opusBitrate}: Gilbert bursts, seed ${seed}`, async () => {
+        assertAudible(await measure(burst.scenario, { opusBitrate, seed }));
+      });
+    }
+  }
   for (const { scenario, options, clickFree } of scenarios) {
     const rate = options?.sampleRate ? ` at ${options.sampleRate / 1_000} kHz` : '';
     const loud = options?.level ? ' for a loud singer' : '';

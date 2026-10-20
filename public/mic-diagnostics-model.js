@@ -162,12 +162,13 @@ function describeLossRepair(status, t) {
   const retransmit = status.audio.receiverRetransmit;
   const recovered = count(retransmit?.recoveredPackets);
   const lost = count(receiver.lostPackets);
+  const decodeFailures = count(receiver.opus?.decodeFailures);
   const retried = count(retransmit?.retriedPackets);
   const roundTripMs = finite(retransmit?.repairRoundTripMs);
   const concealedMs = count(status.audio.timeline?.micConcealedMs);
   const resendSupported = count(status.audio.captureAndSender?.transport?.retransmitBufferPackets) > 0;
 
-  if (lost === 0 && recovered === 0) {
+  if (lost === 0 && recovered === 0 && decodeFailures === 0) {
     return row('repair', label, t('diag.mic.repair.none'), t('diag.mic.repair.noneNote'), 'ok');
   }
   const notes = [];
@@ -179,13 +180,16 @@ function describeLossRepair(status, t) {
   }
   if (retried > 0) notes.push(plural(t, 'diag.mic.repair.retried', retried));
   if (lost > 0) notes.push(plural(t, 'diag.mic.repair.lost', lost));
+  if (decodeFailures > 0) notes.push(plural(t, 'diag.mic.repair.decodeFailed', decodeFailures));
   if (concealedMs > 0) notes.push(t('diag.mic.repair.concealed', { ms: concealedMs }));
   if (!resendSupported) notes.push(t('diag.mic.repair.cannotResend'));
-  const tone = lost === 0 ? 'ok' : lost > recovered ? 'warn' : 'neutral';
+  const tone = decodeFailures > 0 ? 'warn' : lost === 0 ? 'ok' : lost > recovered ? 'warn' : 'neutral';
   return row(
     'repair',
     label,
-    t('diag.mic.repair.value', { recovered, lost }),
+    decodeFailures > 0 && lost === 0 && recovered === 0
+      ? plural(t, 'diag.mic.repair.decodeFailed', decodeFailures)
+      : t('diag.mic.repair.value', { recovered, lost }),
     `${sentence(t, notes)}${t('diag.sentenceGap')}${t('diag.mic.sinceStart')}`,
     tone,
   );

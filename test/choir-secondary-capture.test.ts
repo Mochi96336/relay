@@ -42,6 +42,31 @@ test('v2 encoder rejects malformed source PCM, cursor overflow and invalid gener
     Number.MAX_SAFE_INTEGER), RangeError);
 });
 
+for (const bitrate of [null, 32_000, 64_000, 128_000]) {
+  test(`B bounds ${bitrate ?? 'PCM'} backlog by time, including the next packet, across rebinds`, () => {
+    const c = new ChoirSecondaryCapture();
+    const sent: ArrayBuffer[] = [];
+    const socket = { readyState: 1, bufferedAmount: 0, send: (p: ArrayBuffer) => sent.push(p) };
+    c.socket = socket;
+    c.transport.setEncodedBitrate(bitrate);
+    c.transport.bind(socket, { sampleRate: 48_000 });
+    const packet = new ArrayBuffer(bitrate === null ? 1944 : bitrate / 8 / 50 + 28);
+    const budget = c.transport.maxBufferedBytes;
+    socket.bufferedAmount = budget - packet.byteLength;
+    assert.equal(c.sendPacket(packet), true, 'one frame may exactly fill the budget');
+    socket.bufferedAmount++;
+    assert.equal(c.sendPacket(packet), false, 'incoming bytes count before enqueueing');
+    const replacement = { ...socket, bufferedAmount: 0 };
+    c.socket = replacement;
+    c.transport.bind(replacement, { sampleRate: 48_000 });
+    assert.equal(c.transport.maxBufferedBytes, budget);
+    assert.equal(c.sendPacket(packet), true);
+    assert.equal(sent.length, 2);
+    c.stop();
+    assert.equal(c.sendPacket(packet), false);
+  });
+}
+
 test('secondary capture advances native cursor through WebSocket backlog without replaying old samples', () => {
   const previous = globalThis.WebSocket;
   Object.assign(globalThis, { WebSocket: { OPEN: 1 } });
@@ -57,6 +82,7 @@ test('secondary capture advances native cursor through WebSocket backlog without
     c.graph = graph;
     c.context = { currentTime: 1, close: async () => {} };
     c.socket = socket;
+    c.transport.bind(socket, { sampleRate: 48_000 });
     c.rate = 48_000;
     c.generation = 55;
     const epoch = c.epoch;
@@ -92,6 +118,7 @@ test('stale PCM never enters a newer capture generation and input-gap fails clos
     c.graph = graph;
     c.context = { currentTime: 3, close: async () => {} };
     c.socket = socket;
+    c.transport.bind(socket, { sampleRate: 44_100 });
     c.rate = 44_100;
     c.generation = 9;
     const epoch = c.epoch;
@@ -109,6 +136,26 @@ test('stale PCM never enters a newer capture generation and input-gap fails clos
   } finally {
     Object.assign(globalThis, { WebSocket: previous });
   }
+});
+
+test('a newly claimed B socket starts matching codec history without replacing the capture clock', () => {
+  const previous = globalThis.WebSocket;
+  Object.assign(globalThis, { WebSocket: { OPEN: 1 } });
+  try {
+    const c = new ChoirSecondaryCapture();
+    const resets: number[] = [];
+    c.opus = { reset: (generation: number) => resets.push(generation), close() {} };
+    c.graph = {};
+    c.context = { state: 'running' };
+    (c as any).track = { readyState: 'live', muted: false };
+    c.rate = 48_000; c.generation = 7; c.cursor = 19_440; c.sequence = 20;
+    const first = { readyState: 1 }, second = { readyState: 1 };
+    assert.equal(c.attach(first, 48_000), true);
+    assert.equal(c.attach(first, 48_000), true, 'the same binding does not restart prediction');
+    assert.equal(c.attach(second, 48_000), true);
+    assert.deepEqual(resets, [7, 7]);
+    assert.deepEqual([c.generation, c.cursor, c.sequence], [7, 19_440, 20]);
+  } finally { Object.assign(globalThis, { WebSocket: previous }); }
 });
 
 test('a HyperX-style 66% AudioContext capture clock cannot pass as valid secondary PCM', () => {

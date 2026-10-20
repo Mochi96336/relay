@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import type { AudioPacket } from './audio-packet.js';
 
 /**
  * One Mic's Opus decoder: libopus from the same opus.wasm the page's encoder
@@ -20,7 +21,6 @@ import { createRequire } from 'node:module';
 const OPUS_MIC_FRAME_SAMPLES = 960;
 /** Concealment fades to silence well within this; a longer hole needs no more. */
 const MAX_CONCEALED_FRAMES = 50;
-const OPUS_RESET_STATE = 4028;
 
 type OpusWasm = {
   memory: WebAssembly.Memory;
@@ -29,8 +29,24 @@ type OpusWasm = {
   opus_decoder_get_size(channels: number): number;
   opus_decoder_init(state: number, sampleRate: number, channels: number): number;
   opus_decode(state: number, data: number, length: number, pcm: number, frameSize: number, fec: number): number;
-  opus_decoder_ctl_set(state: number, request: number, value: number): number;
 };
+
+export type OpusMicDecoderStats = {
+  decodedPackets: number;
+  concealedPackets: number;
+  decodeFailures: number;
+};
+
+/** Pure placement metadata, usable for admission before a decoder is touched. */
+export function opusMicSampleSpan(packet: Pick<AudioPacket, 'firstSampleIndex' | 'sampleCount' | 'opusDelaySamples'>) {
+  if (packet.opusDelaySamples === undefined || packet.sampleCount !== OPUS_MIC_FRAME_SAMPLES)
+    throw new TypeError('Expected a 20 ms Mic Opus packet');
+  const start = packet.firstSampleIndex - packet.opusDelaySamples;
+  const trimSamples = Math.max(0, -start);
+  return { firstSampleIndex: Math.max(0, start), sampleCount: packet.sampleCount - trimSamples, trimSamples };
+}
+
+type OpusMicFrame = { generation: number; firstSampleIndex: number; pcm: Buffer };
 
 let shared: { wasm: OpusWasm; input: number; output: number } | null = null;
 function opus() {
@@ -50,12 +66,14 @@ const released = new FinalizationRegistry<number>((state) => shared?.wasm.free(s
 
 export class OpusMicDecoder {
   private readonly state: number;
-  /** Capture sample just past the last packet decoded; null before the first. */
-  private end: number | null = null;
+  private readonly checkpoint: Uint8Array;
+  private nextSequence: number | null = null;
+  private readonly counters: OpusMicDecoderStats = { decodedPackets: 0, concealedPackets: 0, decodeFailures: 0 };
 
   constructor() {
     const { wasm } = opus();
-    this.state = wasm.malloc(wasm.opus_decoder_get_size(1));
+    this.checkpoint = new Uint8Array(wasm.opus_decoder_get_size(1));
+    this.state = wasm.malloc(this.checkpoint.length);
     const code = wasm.opus_decoder_init(this.state, 48_000, 1);
     if (code < 0) {
       wasm.free(this.state);
@@ -65,31 +83,46 @@ export class OpusMicDecoder {
   }
 
   /**
-   * Decodes the 20 ms packet whose capture frame starts at `firstSampleIndex`.
-   * Across a forward hole of whole frames the lost frames are concealed first;
-   * anything else (overlap, a partial frame) starts the stream over.
+   * One admitted, ordered packet of this capture. Sequence counts encoder
+   * calls; capture positions include PCM discarded BEFORE encoding, which
+   * must not advance the decoder. Only missing encoded packets need PLC.
+   * A capture replacement owns a new decoder; a late packet never resets it.
    */
-  decodeAt(firstSampleIndex: number, payload: Uint8Array): Buffer {
-    if (this.end !== null && firstSampleIndex !== this.end) {
-      const missing = firstSampleIndex - this.end;
-      if (missing > 0 && missing % OPUS_MIC_FRAME_SAMPLES === 0) {
-        this.conceal(Math.min(MAX_CONCEALED_FRAMES, missing / OPUS_MIC_FRAME_SAMPLES));
-      } else {
-        this.reset();
-      }
+  decode(packet: AudioPacket): OpusMicFrame | null {
+    const span = opusMicSampleSpan(packet);
+    if (this.nextSequence !== null) {
+      const missing = (packet.sequence - this.nextSequence) >>> 0;
+      if (missing >= 0x8000_0000) return null;
+      this.conceal(Math.min(MAX_CONCEALED_FRAMES, missing));
     }
-    const pcm = this.decode(payload);
-    this.end = firstSampleIndex + OPUS_MIC_FRAME_SAMPLES;
-    return pcm;
+    this.nextSequence = (packet.sequence + 1) >>> 0;
+    const pcm = this.decodePayload(packet.pcm);
+    if (!pcm) return null;
+    this.counters.decodedPackets++;
+    if (span.sampleCount <= 0) return null;
+    return { generation: packet.generation, firstSampleIndex: span.firstSampleIndex, pcm: pcm.subarray(span.trimSamples * 2) };
   }
 
-  private decode(payload: Uint8Array): Buffer {
+  stats(): OpusMicDecoderStats {
+    return { ...this.counters };
+  }
+
+  private decodePayload(payload: Uint8Array): Buffer | null {
     const { wasm, input, output } = opus();
-    if (payload.byteLength < 1 || payload.byteLength > 1_500) throw new Error('Invalid Opus packet size');
-    new Uint8Array(wasm.memory.buffer, input, payload.byteLength).set(payload);
-    const samples = wasm.opus_decode(this.state, input, payload.byteLength, output, OPUS_MIC_FRAME_SAMPLES, 0);
-    if (samples !== OPUS_MIC_FRAME_SAMPLES) throw new Error(`Opus decode failed (${samples})`);
-    return Buffer.from(new Uint8Array(wasm.memory.buffer, output, samples * 2));
+    if (payload.byteLength >= 1 && payload.byteLength <= 1_275) {
+      // libopus state is position-independent contiguous memory (opus.h).
+      // Decode is transactional: even a valid packet of the wrong duration
+      // must not leave half a frame's history serving the next good packet.
+      this.checkpoint.set(new Uint8Array(wasm.memory.buffer, this.state, this.checkpoint.length));
+      new Uint8Array(wasm.memory.buffer, input, payload.byteLength).set(payload);
+      const samples = wasm.opus_decode(this.state, input, payload.byteLength, output, OPUS_MIC_FRAME_SAMPLES, 0);
+      if (samples === OPUS_MIC_FRAME_SAMPLES)
+        return Buffer.from(new Uint8Array(wasm.memory.buffer, output, samples * 2));
+      new Uint8Array(wasm.memory.buffer, this.state, this.checkpoint.length).set(this.checkpoint);
+    }
+    this.counters.decodeFailures++;
+    this.conceal(1);
+    return null;
   }
 
   /** libopus loss concealment for `frames` lost 20 ms frames; the audio is discarded. */
@@ -98,10 +131,7 @@ export class OpusMicDecoder {
     for (let i = 0; i < frames; i++) {
       const samples = wasm.opus_decode(this.state, 0, 0, output, OPUS_MIC_FRAME_SAMPLES, 0);
       if (samples < 0) throw new Error(`Opus concealment failed (${samples})`);
+      this.counters.concealedPackets++;
     }
-  }
-
-  private reset() {
-    shared?.wasm.opus_decoder_ctl_set(this.state, OPUS_RESET_STATE, 0);
   }
 }

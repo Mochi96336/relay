@@ -259,3 +259,36 @@ span, and all of them must use the same bound.
 Only the transport that currently owns playback may report a seek that
 invalidates mapping and calibration. A development adapter holds that authority
 only while no production Source does.
+
+## 8. Codec history, capture time and playback queues have separate boundaries
+
+Mic Opus packet sequence counts encoder calls. Capture sample positions also
+include PCM dropped before encoding. Only a missing encoded packet advances
+decoder loss concealment; a capture-time hole alone cannot make that decision.
+`OpusMicDecoder` owns that history, decoder failure accounting and look-ahead
+placement for both singers. Invalid codec data rolls back the decode attempt
+and conceals that encoded slot, without resetting the next good packet or
+presenting concealment as received audio.
+
+Transport admission precedes stateful decoding. Identity, generation, sequence,
+sample overlap and live authority must all pass before touching codec state.
+The primary receiver orders and deduplicates before decoding. B's single
+WebSocket refuses late Opus packets rather than rewinding its decoder. Each
+newly claimed B socket starts both encoder and decoder history afresh, while
+the acoustic capture clock and its positions continue.
+
+A listener-specific gap abandons queued playback, not the shared room encoder's
+history. Listen retains its decoder across that gap and maps returned samples
+through bounded, admitted input spans: WebCodecs timestamps may compress a
+gap and cannot own the mix position. Pending pre-gap output is consumed for
+codec continuity but never played after the live-edge jump. Stream/transport
+retirement and a switch to PCM discard the instance and all its pending spans.
+
+Audible concealment has the same separation internally: LPC prediction history
+stays linear; output energy matching and peak limits do not feed back into the
+filter. Concealed noise must remain noise rather than a clipping limit cycle.
+Every concealed sample remains missing evidence for calibration and Take.
+
+Realtime transport budgets measure time at the active codec rate, including the
+next packet before it is queued. B uses the same WebSocket budget as the primary
+Mic rather than retaining a PCM-sized byte ceiling after switching to Opus.

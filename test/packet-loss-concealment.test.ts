@@ -293,6 +293,22 @@ describe('estimatePitch voicing', () => {
 });
 
 describe('concealGap on unvoiced audio', () => {
+  it('keeps short band-limited fricatives stochastic and at the captured level', () => {
+    for (let seed = 1; seed <= 10; seed++) {
+      let state = seed;
+      const uniform = () => ((state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0) / 0x1_0000_0000);
+      const partials = Array.from({ length: 64 }, () => ({ hz: 2500 + uniform() * 6500, phase: uniform() * 2 * Math.PI }));
+      // A single 20 ms packet between two holes, as Opus burst loss exposes.
+      const history = Int16Array.from({ length: 960 }, (_, i) => Math.round(partials.reduce(
+        (sum, p) => sum + 100 * Math.sin(2 * Math.PI * p.hz * i / RATE + p.phase), 0)));
+      const fill = concealGap(history, history.slice(), null, 1920, { sampleRate: RATE })!.fill;
+      assert.ok(tonality(fill) <= Math.max(0.5, tonality(history) + 0.2),
+        `fricative ${seed} became more tonal than its captured history`);
+      assert.ok(rms(fill.subarray(0, 480)) <= rms(history) * 1.3, `fricative ${seed} gained energy`);
+      const peak = history.reduce((max, x) => Math.max(max, Math.abs(x)), 0);
+      assert.ok(fill.every(x => Math.abs(x) <= peak));
+    }
+  });
   for (const [name, make] of Object.entries(NOISES)) {
     it(`continues ${name} as noise, not as a buzz`, () => {
       for (let seed = 1; seed <= 10; seed += 1) {

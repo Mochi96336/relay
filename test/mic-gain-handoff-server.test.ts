@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { RelayClient, startRelay, waitForNewMessage } from './helpers/harness.js';
+import { participantIdFor, RelayClient, startRelay, waitForNewMessage } from './helpers/harness.js';
 
 const RATE = 48_000;
 const FAST = {
@@ -11,19 +11,14 @@ const FAST = {
   RELAY_MIC_TRANSPORT_GRACE_MS: '250',
 };
 
-async function connect(server: Awaited<ReturnType<typeof startRelay>>, id: string, name: string) {
-  const params = new URLSearchParams({ participant: id, name });
-  return RelayClient.connect(server, `?${params.toString()}`);
-}
-
 async function publish(
   server: Awaited<ReturnType<typeof startRelay>>,
-  id: string,
+  who: string,
   name: string,
   captureGeneration: number,
   options: { takeoverExpectedOwnerId?: string; micGainDb?: unknown; premixed?: boolean; localFileTitle?: unknown } = {},
 ) {
-  const publisher = await connect(server, id, name);
+  const publisher = await RelayClient.connectAs(server, who, name);
   publisher.send({
     type: 'register',
     role: 'publisher',
@@ -62,9 +57,9 @@ async function release(presence: RelayClient, publisher: RelayClient, observer: 
 test('Mic gain follows the device across handoffs instead of staying with the room', async () => {
   const server = await startRelay(FAST);
   try {
-    const observer = await connect(server, 'participant-watch', 'Watcher');
-    const alice = await connect(server, 'participant-alice', 'Alice');
-    const bob = await connect(server, 'participant-bobby', 'Bob');
+    const observer = await RelayClient.connectAs(server, 'participant-watch', 'Watcher');
+    const alice = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
+    const bob = await RelayClient.connectAs(server, 'participant-bobby', 'Bob');
 
     const alicePublisher = await publish(server, 'participant-alice', 'Alice', 1);
     assert.equal(await publisherGain(alicePublisher), 24, 'a device never seen starts at the default');
@@ -98,7 +93,7 @@ test('Mic gain follows the device across handoffs instead of staying with the ro
 
     from = observer.messages.length;
     bobPublisher = await publish(server, 'participant-bobby', 'Bob', 4, {
-      takeoverExpectedOwnerId: 'participant-alice',
+      takeoverExpectedOwnerId: participantIdFor('participant-alice'),
       micGainDb: 33,
     });
     await aliceAgain.waitForType('mic-revoked');
@@ -116,9 +111,9 @@ test('Mic gain follows the device across handoffs instead of staying with the ro
 test('a registered Mic gain is clamped, and an unusable one falls back to the default', async () => {
   const server = await startRelay(FAST);
   try {
-    const observer = await connect(server, 'participant-watch', 'Watcher');
-    const alice = await connect(server, 'participant-alice', 'Alice');
-    const bob = await connect(server, 'participant-bobby', 'Bob');
+    const observer = await RelayClient.connectAs(server, 'participant-watch', 'Watcher');
+    const alice = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
+    const bob = await RelayClient.connectAs(server, 'participant-bobby', 'Bob');
 
     const loud = await publish(server, 'participant-alice', 'Alice', 1, { micGainDb: 99 });
     assert.equal(await publisherGain(loud), 40, 'clamped to the same ceiling as set-mix');
@@ -137,8 +132,8 @@ test('a premixed capture is mixed at unity until the next ordinary capture', asy
   const server = await startRelay(FAST);
   const statusz = async () => (await fetch(server.httpUrl('/statusz')).then((response) => response.json()) as any).audio;
   try {
-    const observer = await connect(server, 'participant-watch', 'Watcher');
-    await connect(server, 'participant-alice', 'Alice');
+    const observer = await RelayClient.connectAs(server, 'participant-watch', 'Watcher');
+    await RelayClient.connectAs(server, 'participant-alice', 'Alice');
     let from = observer.messages.length;
     const premixed = await publish(server, 'participant-alice', 'Alice', 1,
       { premixed: true, localFileTitle: '  My\u0007 Song  ' });

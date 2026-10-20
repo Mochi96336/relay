@@ -12,6 +12,7 @@ import {
   waitForNewMessage,
   type RelayServer,
 } from './helpers/harness.js';
+import { playRoomSong, registerPlayback } from './support/client-commands.js';
 import { probeAudio } from './support/probe-audio.js';
 
 /**
@@ -33,16 +34,6 @@ import { probeAudio } from './support/probe-audio.js';
  */
 
 const RATE = 48_000;
-const PLAYING_TELEMETRY = {
-  type: 'youtube-telemetry',
-  videoId: 'dQw4w9WgXcQ',
-  state: 1,
-  currentTime: 42,
-  duration: 200,
-  playbackRate: 1,
-  networkRttMs: 40,
-};
-
 const BOOT_ROOM = {
   RELAY_LIVE_PREBUFFER_MS: '200',
   RELAY_HEARTBEAT_MS: '60000',
@@ -96,19 +87,19 @@ async function requestTimingStatus(
  * content against an unmapped Robot route.
  */
 async function bootedRobotRoom(server: RelayServer) {
-  const backing = await RelayClient.connect(server);
+  const backing = await RelayClient.connectInfrastructure(server);
   backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
   await backing.waitForType('registered');
 
-  const publisher = await RelayClient.connect(server);
+  const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
   publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
   await publisher.waitForType('registered');
 
-  const monitor = await RelayClient.connect(server);
+  const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
   monitor.send({ type: 'register', role: 'monitor' });
   await monitor.waitForType('registered');
 
-  const robot = await RelayClient.connect(server);
+  const robot = await RelayClient.connectInfrastructure(server);
   robot.send({ type: 'robot-source-hello' });
 
   await Promise.all([
@@ -149,7 +140,8 @@ async function bootedRobotRoom(server: RelayServer) {
 
   // A Song plus a fresh player delta is what turns the path-only boot result
   // into applied authority, and what makes content evidence mappable at all.
-  publisher.send(PLAYING_TELEMETRY);
+  await registerPlayback(publisher, 'boot-room-playback');
+  await playRoomSong(publisher, { positionSeconds: 42 });
   robot.send({ type: 'robot-player-offset', offsetMs: 0 });
   const heartbeat = setInterval(() => {
     robot.send({ type: 'robot-player-offset', offsetMs: 0 });

@@ -14,6 +14,7 @@ import {
   waitForNewMessage,
   type RelayServer,
 } from './helpers/harness.js';
+import { playingRoomSong } from './support/client-commands.js';
 
 const RATE = 48_000;
 const FAST = {
@@ -25,30 +26,20 @@ const FAST = {
   RELAY_CALIBRATION_PROBE: '0',
 };
 
-const playingTelemetry = {
-  type: 'youtube-telemetry',
-  videoId: 'dQw4w9WgXcQ',
-  state: 1,
-  currentTime: 42,
-  duration: 200,
-  playbackRate: 1,
-  networkRttMs: 40,
-};
-
 function tone(seconds: number, gain = 0.6, seed = 5) {
   return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, seed), gain);
 }
 
 async function liveSession(server: RelayServer, robotBacking = false) {
-  const backing = await RelayClient.connect(server);
+  const backing = await RelayClient.connectInfrastructure(server);
   backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: robotBacking });
   await backing.waitForType('registered');
 
-  const publisher = await RelayClient.connect(server);
+  const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
   publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
   await publisher.waitForType('registered');
 
-  const monitor = await RelayClient.connect(server);
+  const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
   monitor.send({ type: 'register', role: 'monitor' });
   await monitor.waitForType('registered');
 
@@ -68,10 +59,10 @@ async function calibrate(
   monitor: RelayClient,
   lagMs = 260,
 ) {
-  publisher.send(playingTelemetry);
+  const songTelemetry = await playingRoomSong(publisher);
   await primeStreams(backing, publisher);
   await startCalibrationCollecting(publisher, monitor, async () => {
-    publisher.send(playingTelemetry);
+    publisher.send(songTelemetry());
     await primeStreams(backing, publisher);
   });
 
@@ -99,7 +90,7 @@ describe('timing validity boundary', () => {
       const { backing, publisher, monitor } = await liveSession(server);
       const complete = await calibrate(backing, publisher, monitor);
 
-      const restarted = await RelayClient.connect(server);
+      const restarted = await RelayClient.connectAs(server, 'singer', 'Singer');
       restarted.newCaptureSession();
       restarted.send({ type: 'register', role: 'publisher', sampleRate: RATE });
       await restarted.waitForType('registered');
@@ -138,7 +129,7 @@ describe('timing validity boundary', () => {
       const { backing, publisher, monitor } = await liveSession(server);
       const complete = await calibrate(backing, publisher, monitor);
 
-      const restarted = await RelayClient.connect(server);
+      const restarted = await RelayClient.connectInfrastructure(server);
       restarted.newCaptureSession();
       restarted.send({ type: 'register', role: 'backing', sampleRate: RATE });
       await restarted.waitForType('registered');
@@ -202,7 +193,7 @@ describe('robot calibration ownership', () => {
     const server = await startRelay({ ...ROBOT_FAST, RELAY_AUTO_CALIBRATE: '1' });
     try {
       const { backing, publisher, monitor } = await liveSession(server, true);
-      publisher.send(playingTelemetry);
+      await playingRoomSong(publisher);
       await primeStreams(backing, publisher);
 
       monitor.send({ type: 'timing-calibration-status-request' });
@@ -224,7 +215,7 @@ describe('robot calibration ownership', () => {
       );
 
       // Chromium says hello; the boot probe then owns the launch.
-      const robot = await RelayClient.connect(server);
+      const robot = await RelayClient.connectInfrastructure(server);
       robot.send({ type: 'robot-source-hello' });
       const probe = await publisher.waitFor(
         (m) => m.type === 'play-calibration-probe' && m.target === 'mic',
@@ -245,9 +236,9 @@ describe('robot calibration ownership', () => {
     const server = await startRelay(ROBOT_FAST);
     try {
       const { backing, publisher, monitor } = await liveSession(server, true);
-      const robot = await RelayClient.connect(server);
+      const robot = await RelayClient.connectInfrastructure(server);
       robot.send({ type: 'robot-source-hello' });
-      publisher.send(playingTelemetry);
+      await playingRoomSong(publisher);
       await primeStreams(backing, publisher);
 
       const from = publisher.messages.length;
@@ -281,13 +272,13 @@ describe('robot calibration ownership', () => {
   test('only the newest robot source can publish delta', async () => {
     const server = await startRelay(ROBOT_FAST);
     try {
-      const monitor = await RelayClient.connect(server);
+      const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
       monitor.send({ type: 'register', role: 'monitor' });
       await monitor.waitForType('registered');
 
-      const first = await RelayClient.connect(server);
+      const first = await RelayClient.connectInfrastructure(server);
       first.send({ type: 'robot-source-hello' });
-      const second = await RelayClient.connect(server);
+      const second = await RelayClient.connectInfrastructure(server);
       second.send({ type: 'robot-source-hello' });
 
       await first.waitForType('robot-source-replaced', 3_000);
@@ -326,6 +317,7 @@ describe('boot probe lifecycle', () => {
       RELAY_CALIBRATION_PROBE_MIN_CORRELATION: '0',
       RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS: '3000',
       RELAY_BACKING_GRACE_MS: '100',
+      RELAY_MIC_TRANSPORT_GRACE_MS: '100',
     });
 
     try {
@@ -333,7 +325,7 @@ describe('boot probe lifecycle', () => {
       // measures one route's two legs, and mixing them would correlate a Mic
       // leg against backing the Robot never rendered.
       const { backing, publisher, monitor } = await liveSession(server, true);
-      const robot = await RelayClient.connect(server);
+      const robot = await RelayClient.connectInfrastructure(server);
       robot.send({ type: 'robot-source-hello' });
       await primeStreams(backing, publisher);
 
@@ -364,12 +356,12 @@ describe('boot probe lifecycle', () => {
         3_000,
       );
 
-      const newBacking = await RelayClient.connect(server);
+      const newBacking = await RelayClient.connectInfrastructure(server);
       newBacking.newCaptureSession();
       newBacking.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
       await newBacking.waitForType('registered');
 
-      const newPublisher = await RelayClient.connect(server);
+      const newPublisher = await RelayClient.connectAs(server, 'singer', 'Singer');
       newPublisher.newCaptureSession();
       newPublisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
       await newPublisher.waitForType('registered');

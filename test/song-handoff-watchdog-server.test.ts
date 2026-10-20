@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { RelayClient, startRelay } from './helpers/harness.js';
+import { participantIdFor, RelayClient, startRelay } from './helpers/harness.js';
 import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
 const RATE = 48_000;
@@ -11,17 +11,14 @@ const FAST = {
   RELAY_HEARTBEAT_MS: '60000',
 };
 
-function playbackQuery(participantId: string, name: string) {
-  return `?participant=${participantId}&name=${encodeURIComponent(name)}`;
-}
+const A_ID = participantIdFor('A');
 
 async function playback(
   server: Awaited<ReturnType<typeof startRelay>>,
-  participantId: string,
   name: string,
   transportId: string,
 ) {
-  const client = await RelayClient.connect(server, playbackQuery(participantId, name));
+  const client = await RelayClient.connectAs(server, name);
   client.send({ type: 'playback-hello', playbackTransportId: transportId, playbackGeneration: 1 });
   await client.waitForType('playback-registered');
   return client;
@@ -29,11 +26,10 @@ async function playback(
 
 async function publisher(
   server: Awaited<ReturnType<typeof startRelay>>,
-  participantId: string,
   name: string,
   takeoverExpectedOwnerId?: string,
 ) {
-  const client = await RelayClient.connect(server, playbackQuery(participantId, name));
+  const client = await RelayClient.connectAs(server, name);
   client.send({
     type: 'register',
     role: 'publisher',
@@ -76,14 +72,14 @@ async function establishPlayingRoom(client: RelayClient, currentTime: number) {
 test('server cancels a stuck commit without depending on the target client watchdog', async () => {
   const server = await startRelay(FAST);
   try {
-    const aPlayback = await playback(server, 'participant-a', 'A', 'playback-tab-a');
-    const aPublisher = await publisher(server, 'participant-a', 'A');
+    const aPlayback = await playback(server, 'A', 'playback-tab-a');
+    const aPublisher = await publisher(server, 'A');
     await establishPlayingRoom(aPlayback, 10);
 
-    const bPlayback = await playback(server, 'participant-b', 'B', 'playback-tab-b');
+    const bPlayback = await playback(server, 'B', 'playback-tab-b');
     bPlayback.send({ type: 'playback-mic-intent' });
     await bPlayback.waitForType('playback-mic-intent-registered');
-    const bPublisher = await publisher(server, 'participant-b', 'B', 'participant-a');
+    const bPublisher = await publisher(server, 'B', A_ID);
 
     const prepare = await bPlayback.waitForType('song-handoff-prepare');
     bPlayback.send({ type: 'song-handoff-ready', handoffId: prepare.handoffId });
@@ -99,7 +95,7 @@ test('server cancels a stuck commit without depending on the target client watch
     const status = await aPlayback.waitFor((message) => (
       message.type === 'youtube-timeline-status'
       && message.handoffState === 'idle'
-      && message.playbackLeaderParticipantId === 'participant-a'
+      && message.playbackLeaderParticipantId === A_ID
     ));
     assert.equal(status.playbackTransportId, 'playback-tab-a');
 
@@ -112,7 +108,7 @@ test('server cancels a stuck commit without depending on the target client watch
     const continued = await aPlayback.waitFor((message) => (
       aPlayback.messages.indexOf(message) >= continuationStart
       && message.type === 'youtube-timeline-status'
-      && message.playbackLeaderParticipantId === 'participant-a'
+      && message.playbackLeaderParticipantId === A_ID
       && message.handoffState === 'idle'
       && Number(message.ageMs) < 1_000
     ));

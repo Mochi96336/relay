@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { participantIdForCapability } from '../src/participant-capability.js';
-import { RelayClient, sleep, startRelay } from './helpers/harness.js';
+import { participantIdFor, RelayClient, sleep, startRelay } from './helpers/harness.js';
 import { requestProductStatus } from './support/client-commands.js';
 
 const RATE = 48_000;
@@ -68,14 +68,14 @@ test('a connected Mic that never sends its first frame times out and recovers on
     RELAY_MIC_FIRST_FRAME_TIMEOUT_MS: '120',
   });
   try {
-    const observer = await RelayClient.connect(server, '?participant=observer-first-frame&name=Observer');
-    const singer = await RelayClient.connect(server, '?participant=singer-first-frame&name=Singer');
+    const observer = await RelayClient.connectAs(server, 'observer-first-frame', 'Observer');
+    const singer = await RelayClient.connectAs(server, 'singer-first-frame', 'Singer');
     singer.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await singer.waitForType('registered');
 
     const starting = await requestProductStatus(
       observer,
-      (message) => message.room?.mic?.ownerId === 'singer-first-frame',
+      (message) => message.room?.mic?.ownerId === participantIdFor('singer-first-frame'),
     );
     assert.equal(starting.room.mic.state, 'starting');
     assert.equal(starting.health, 'healthy');

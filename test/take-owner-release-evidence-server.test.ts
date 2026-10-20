@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { RelayClient, sleep, startRelay, waitForNewMessage, type RelayServer } from './helpers/harness.js';
+import { participantIdFor, RelayClient, sleep, startRelay, waitForNewMessage, type RelayServer } from './helpers/harness.js';
 
 const RATE = 48_000;
 const FRAME_SAMPLES = 960;
@@ -15,11 +15,6 @@ const FAST = {
   RELAY_HEARTBEAT_MS: '60000',
   RELAY_LIVE_PREBUFFER_MS: '40',
 };
-
-function participantQuery(participantId: string, name: string) {
-  const params = new URLSearchParams({ participant: participantId, name });
-  return `?${params.toString()}`;
-}
 
 async function establishRoomSong(client: RelayClient, transportId: string) {
   client.send({ type: 'playback-hello', playbackTransportId: transportId, playbackGeneration: 1 });
@@ -59,7 +54,7 @@ async function establishRoomSong(client: RelayClient, transportId: string) {
 }
 
 async function startBacking(server: RelayServer) {
-  const backing = await RelayClient.connect(server);
+  const backing = await RelayClient.connectInfrastructure(server);
   backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
   await backing.waitFor((message) => message.type === 'registered' && message.role === 'backing');
   return backing;
@@ -77,8 +72,8 @@ function feedMic(mic: RelayClient, frames = 4, value = 4_000) {
   for (let i = 0; i < frames; i += 1) mic.sendPcm(frame);
 }
 
-async function registerMic(server: RelayServer, participantId: string, name: string) {
-  const mic = await RelayClient.connect(server, participantQuery(participantId, name));
+async function registerMic(server: RelayServer, who: string, name: string) {
+  const mic = await RelayClient.connectAs(server, who, name);
   mic.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
   await mic.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
   feedMic(mic);
@@ -109,9 +104,9 @@ async function stopAndRead(control: RelayClient, takeId: string) {
   ));
 }
 
-async function room(server: RelayServer, controllerId = 'participant-a') {
-  const control = await RelayClient.connect(server, participantQuery(controllerId, 'Controller'));
-  await establishRoomSong(control, `owner-release-${controllerId}`);
+async function room(server: RelayServer, controller = 'participant-a') {
+  const control = await RelayClient.connectAs(server, controller, 'Controller');
+  await establishRoomSong(control, `owner-release-${controller}`);
   const backing = await startBacking(server);
   feedBacking(backing);
   await sleep(60);
@@ -169,7 +164,7 @@ test('Mic transport grace release records ownership change while participant pre
       message.type === 'session-status'
       && message.micOwnerId === null
     ), 2_000);
-    assert.equal(released.participants.some((participant: { id: string }) => participant.id === 'participant-a'), true);
+    assert.equal(released.participants.some((participant: { id: string }) => participant.id === participantIdFor('participant-a')), true);
 
     const ready = await stopAndRead(control, takeId);
     assert.equal(ready.take.quality.evidence.events['mic-owner-changed'], 1);
@@ -202,7 +197,7 @@ test('participant presence expiry records ownership change before the longer Mic
       message.type === 'session-status'
       && message.micOwnerId === null
     ), 2_000);
-    assert.equal(released.participants.some((participant: { id: string }) => participant.id === 'participant-a'), false);
+    assert.equal(released.participants.some((participant: { id: string }) => participant.id === participantIdFor('participant-a')), false);
 
     const ready = await stopAndRead(observer, takeId);
     assert.equal(ready.take.quality.evidence.events['mic-owner-changed'], 1);

@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { createServer } from 'node:http';
 import assert from 'node:assert/strict';
@@ -28,8 +29,6 @@ function startRelay(extraEnv = {}) {
         ...process.env,
         PORT: '0',
         NODE_ENV: 'test',
-        RELAY_TEST_LEGACY_PARTICIPANTS: '1',
-        RELAY_TEST_LEGACY_INFRASTRUCTURE: '1',
         RELAY_AUTO_CALIBRATE: '0',
         RELAY_CALIBRATION_VALIDATION: '0',
         RELAY_CALIBRATION_PROBE: '0',
@@ -131,12 +130,28 @@ function waitForJson(socket, predicate, timeoutMs = 5_000) {
   });
 }
 
+/** The singer's private capability, and the id Relay derives from it (participant-capability.ts). */
+const SINGER_CAPABILITY = 'e1'.repeat(32);
+const SINGER_ID = `participant-${createHash('sha256').update(SINGER_CAPABILITY, 'utf8').digest('hex').slice(0, 32)}`;
+
 async function startDeterministicMic(relay) {
-  const socket = new WebSocket(relay.wsUrl('?participant=listener-proof-singer&name=Listener%20Proof%20Singer'));
+  const socket = new WebSocket(relay.wsUrl());
   await new Promise((resolve, reject) => {
     socket.once('open', resolve);
     socket.once('error', reject);
   });
+
+  const authenticated = waitForJson(
+    socket,
+    (message) => message.type === 'participant-authenticated' && message.participantId === SINGER_ID,
+  );
+  socket.send(JSON.stringify({
+    type: 'participant-authenticate',
+    participantId: SINGER_ID,
+    capability: SINGER_CAPABILITY,
+    nickname: 'Listener Proof Singer',
+  }));
+  await authenticated;
 
   const registered = waitForJson(
     socket,

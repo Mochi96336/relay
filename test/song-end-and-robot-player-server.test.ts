@@ -24,7 +24,7 @@ function telemetry(state: number, currentTime: number, duration: number) {
 
 /** A phone that holds playback of VIDEO, loaded and, if asked, playing. */
 async function holder(server: RelayServer, duration: number, play: boolean) {
-  const phone = await RelayClient.connect(server, '?participant=song-holder-123&name=Holder');
+  const phone = await RelayClient.connectAs(server, 'song-holder-123', 'Holder');
   phone.send({ type: 'playback-hello', playbackTransportId: 'holder-playback', playbackGeneration: 1 });
   await phone.waitFor((message) => message.type === 'playback-registered');
 
@@ -57,7 +57,7 @@ async function productStatus(client: RelayClient) {
 test('a Song whose holder leaves stops at its end instead of playing on forever', async () => {
   const server = await startRelay(FAST);
   try {
-    const watcher = await RelayClient.connect(server, '?participant=song-watcher-123&name=Watcher');
+    const watcher = await RelayClient.connectAs(server, 'song-watcher-123', 'Watcher');
     const phone = await holder(server, 2, true);
     phone.close();
 
@@ -83,7 +83,7 @@ test('a Song whose holder leaves stops at its end instead of playing on forever'
 test("a video the Robot cannot play is named in product status until it plays again", async () => {
   const server = await startRelay(FAST);
   try {
-    const robot = await RelayClient.connect(server);
+    const robot = await RelayClient.connectInfrastructure(server);
     robot.send({ type: 'robot-source-hello' });
     const phone = await holder(server, 200, false);
     const unplayable = (status: any) => status.issues.find((issue: any) => issue.cause === 'robot-video-unplayable');

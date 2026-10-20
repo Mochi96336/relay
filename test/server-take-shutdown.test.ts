@@ -34,7 +34,7 @@ for (const shutdownSignal of ['SIGTERM', 'SIGINT'] as const) {
         RELAY_LIVE_PREBUFFER_MS: '1',
       };
       first = await startRelay(env);
-      const singer = await RelayClient.connect(first, '?participant=shutdown-singer&name=Singer');
+      const singer = await RelayClient.connectAs(first, 'shutdown-singer', 'Singer');
       singer.send({ type: 'register', role: 'publisher', sampleRate: RATE });
       await singer.waitForType('registered');
       singer.sendPcm(pcm());

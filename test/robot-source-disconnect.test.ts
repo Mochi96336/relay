@@ -10,18 +10,10 @@ import {
   toInt16,
   waitForNewMessage,
 } from './helpers/harness.js';
+import { playRoomSong, registerPlayback } from './support/client-commands.js';
 import { probeAudio } from './support/probe-audio.js';
 
 const RATE = 48_000;
-const PLAYING_TELEMETRY = {
-  type: 'youtube-telemetry',
-  videoId: 'dQw4w9WgXcQ',
-  state: 1,
-  currentTime: 42,
-  duration: 200,
-  playbackRate: 1,
-  networkRttMs: 40,
-};
 
 function tone(seconds: number, gain = 0.6, seed = 5) {
   return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, seed), gain);
@@ -53,19 +45,19 @@ test('robot source disconnect suspends the applied delta until a fresh source of
   });
 
   try {
-    const backing = await RelayClient.connect(server);
+    const backing = await RelayClient.connectInfrastructure(server);
     backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
     await backing.waitForType('registered');
 
-    const publisher = await RelayClient.connect(server);
+    const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await publisher.waitForType('registered');
 
-    const monitor = await RelayClient.connect(server);
+    const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
     monitor.send({ type: 'register', role: 'monitor' });
     await monitor.waitForType('registered');
 
-    const robot = await RelayClient.connect(server);
+    const robot = await RelayClient.connectInfrastructure(server);
     robot.send({ type: 'robot-source-hello' });
 
     await Promise.all([
@@ -120,7 +112,8 @@ test('robot source disconnect suspends the applied delta until a fresh source of
     assert.ok(measured.probeCorrelation.backing >= 0.5);
 
     const beforeSong = monitor.messages.length;
-    publisher.send(PLAYING_TELEMETRY);
+    await registerPlayback(publisher, 'disconnect-playback');
+    await playRoomSong(publisher, { positionSeconds: 42 });
     const awaitingDelta = await waitForNewMessage(
       monitor,
       beforeSong,
@@ -199,7 +192,7 @@ test('robot source disconnect suspends the applied delta until a fresh source of
     assert.equal(suspended.calibrationStale, true);
     assert.equal(suspended.robotDeltaFresh, false);
 
-    const replacement = await RelayClient.connect(server);
+    const replacement = await RelayClient.connectInfrastructure(server);
     replacement.send({ type: 'robot-source-hello' });
     replacement.send({ type: 'robot-player-offset', offsetMs: 35 });
 

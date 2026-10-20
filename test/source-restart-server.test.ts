@@ -11,7 +11,7 @@ import {
   toInt16,
   waitForNewMessage,
 } from './helpers/harness.js';
-import { playingTelemetry } from './support/playing-telemetry.js';
+import { playingRoomSong } from './support/client-commands.js';
 
 const RATE = 48_000;
 const FAST = {
@@ -44,9 +44,9 @@ async function statusz(server: Relay) {
 }
 
 async function room(server: Relay, { robot = false } = {}) {
-  const backing = await RelayClient.connect(server);
-  const publisher = await RelayClient.connect(server);
-  const monitor = await RelayClient.connect(server);
+  const backing = await RelayClient.connectInfrastructure(server);
+  const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
+  const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
   backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot });
   publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
   monitor.send({ type: 'register', role: 'monitor' });
@@ -55,8 +55,11 @@ async function room(server: Relay, { robot = false } = {}) {
     publisher.waitForType('registered'),
     monitor.waitForType('registered'),
   ]);
+  // The room has a Song only once a test primes it.
+  let songTelemetry: Awaited<ReturnType<typeof playingRoomSong>> | null = null;
   const prime = async () => {
-    publisher.send(playingTelemetry());
+    songTelemetry ??= await playingRoomSong(publisher);
+    publisher.send(songTelemetry());
     await Promise.all([
       sendPcmInChunks(backing, tone(0.5, 0.8)),
       sendPcmInChunks(publisher, tone(0.5, 0.4)),
@@ -96,7 +99,7 @@ for (const side of ['publisher', 'backing'] as const) {
     const server = await startRelay(ROBOT);
     try {
       const clients = await room(server, { robot: true });
-      const robot = await RelayClient.connect(server);
+      const robot = await RelayClient.connectInfrastructure(server);
       robot.send({ type: 'robot-source-hello' });
       await clients.prime();
       const probeFrom = clients.publisher.messages.length;
@@ -123,7 +126,7 @@ test('a Desktop Source that does not come back leaves a singing room live, voice
   const server = await startRelay({ ...ROBOT, RELAY_BACKING_GRACE_MS: '250' });
   try {
     const { backing, publisher, monitor } = await room(server, { robot: true });
-    const robot = await RelayClient.connect(server);
+    const robot = await RelayClient.connectInfrastructure(server);
     robot.send({ type: 'robot-source-hello' });
     await Promise.all([
       sendPcmInChunks(backing, tone(0.5, 0.8)),
@@ -155,7 +158,7 @@ test('a Desktop Source that does not come back leaves a singing room live, voice
 test('a Desktop Source that does not come back stops a room nobody is singing in', async () => {
   const server = await startRelay({ ...FAST, RELAY_BACKING_GRACE_MS: '250' });
   try {
-    const backing = await RelayClient.connect(server);
+    const backing = await RelayClient.connectInfrastructure(server);
     backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
     await backing.waitForType('registered');
     await sendPcmInChunks(backing, tone(0.5, 0.8));

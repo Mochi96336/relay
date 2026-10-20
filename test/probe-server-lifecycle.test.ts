@@ -22,18 +22,18 @@ const PROBE_FAST = {
 };
 
 async function robotSession(server: Awaited<ReturnType<typeof startRelay>>) {
-  const backing = await RelayClient.connect(server);
+  const backing = await RelayClient.connectInfrastructure(server);
   backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
   await backing.waitForType('registered');
 
-  const publisher = await RelayClient.connect(server, '?participant=probe-singer&name=Singer');
+  const publisher = await RelayClient.connectAs(server, 'probe-singer', 'Singer');
   publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
   await publisher.waitForType('registered');
 
-  const robot = await RelayClient.connect(server);
+  const robot = await RelayClient.connectInfrastructure(server);
   robot.send({ type: 'robot-source-hello' });
 
-  const monitor = await RelayClient.connect(server);
+  const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
   monitor.send({ type: 'register', role: 'monitor' });
   await monitor.waitForType('registered');
 

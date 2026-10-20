@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { RelayClient, sleep, startRelay } from './helpers/harness.js';
+import { participantIdFor, RelayClient, sleep, startRelay } from './helpers/harness.js';
 import { registerPlayback } from './support/client-commands.js';
 import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
@@ -55,7 +55,7 @@ async function loadRoomSong(
 test('room song changes are accepted, targeted and completed through one command path', async () => {
   const server = await startRelay();
   try {
-    const a = await RelayClient.connect(server, '?participant=participant-a&name=A');
+    const a = await RelayClient.connectAs(server, 'participant-a', 'A');
     const transport = 'playback-command-a';
     await registerPlayback(a, transport);
 
@@ -103,7 +103,7 @@ test('room song changes are accepted, targeted and completed through one command
 test('identified telemetry cannot mutate the room without an accepted command', async () => {
   const server = await startRelay();
   try {
-    const a = await RelayClient.connect(server, '?participant=participant-a&name=A');
+    const a = await RelayClient.connectAs(server, 'participant-a', 'A');
     const transport = 'playback-direct-a';
     await registerPlayback(a, transport);
 
@@ -125,9 +125,9 @@ test('identified telemetry cannot mutate the room without an accepted command', 
 test('Mic owner authority and exact playback target both apply to room song commands', async () => {
   const server = await startRelay();
   try {
-    const owner = await RelayClient.connect(server, '?participant=participant-owner&name=Owner');
-    const sibling = await RelayClient.connect(server, '?participant=participant-owner&name=Owner');
-    const other = await RelayClient.connect(server, '?participant=participant-other&name=Other');
+    const owner = await RelayClient.connectAs(server, 'participant-owner', 'Owner');
+    const sibling = await RelayClient.connectAs(server, 'participant-owner', 'Owner');
+    const other = await RelayClient.connectAs(server, 'participant-other', 'Other');
     const ownerTransport = 'playback-owner-1';
     const siblingTransport = 'playback-owner-2';
     const otherTransport = 'playback-other-1';
@@ -170,8 +170,8 @@ test('Mic owner authority and exact playback target both apply to room song comm
 test('a Mic-free participant can change the Song through the current playback leader', async () => {
   const server = await startRelay();
   try {
-    const leader = await RelayClient.connect(server, '?participant=participant-leader&name=Leader');
-    const chooser = await RelayClient.connect(server, '?participant=participant-chooser&name=Chooser');
+    const leader = await RelayClient.connectAs(server, 'participant-leader', 'Leader');
+    const chooser = await RelayClient.connectAs(server, 'participant-chooser', 'Chooser');
     const leaderTransport = 'playback-shared-leader';
     const chooserTransport = 'playback-shared-chooser';
     await registerPlayback(leader, leaderTransport);
@@ -197,7 +197,7 @@ test('a Mic-free participant can change the Song through the current playback le
       && message.commandId === 'command-shared-replace'
     ));
     assert.equal(apply.targetPlaybackTransportId, leaderTransport);
-    assert.equal(apply.issuedByParticipantId, 'participant-chooser');
+    assert.equal(apply.issuedByParticipantId, participantIdFor('participant-chooser'));
     assert.equal(apply.videoId, '9bZkp7q19f0');
 
     leader.send(telemetry(0, 5, leaderTransport, 1, { videoId: '9bZkp7q19f0' }));
@@ -228,8 +228,8 @@ test('a Mic-free participant can change the Song through the current playback le
 test('a delegated playback failure returns to both target and chooser', async () => {
   const server = await startRelay();
   try {
-    const leader = await RelayClient.connect(server, '?participant=participant-leader&name=Leader');
-    const chooser = await RelayClient.connect(server, '?participant=participant-chooser&name=Chooser');
+    const leader = await RelayClient.connectAs(server, 'participant-leader', 'Leader');
+    const chooser = await RelayClient.connectAs(server, 'participant-chooser', 'Chooser');
     const leaderTransport = 'playback-failure-leader';
     await registerPlayback(leader, leaderTransport);
     await registerPlayback(chooser, 'playback-failure-chooser');
@@ -272,7 +272,7 @@ test('a delegated playback failure returns to both target and chooser', async ()
 test('stale revisions and concurrent pending intents are rejected without replacing 1A intent', async () => {
   const server = await startRelay();
   try {
-    const a = await RelayClient.connect(server, '?participant=participant-a&name=A');
+    const a = await RelayClient.connectAs(server, 'participant-a', 'A');
     const transport = 'playback-serial-a';
     await registerPlayback(a, transport);
     const revision1 = await loadRoomSong(a, transport);
@@ -319,7 +319,7 @@ test('stale revisions and concurrent pending intents are rejected without replac
 test('a rebuffering player keeps the room clock instead of being locked out of it', async () => {
   const server = await startRelay();
   try {
-    const a = await RelayClient.connect(server, '?participant=participant-a&name=A');
+    const a = await RelayClient.connectAs(server, 'participant-a', 'A');
     const transport = 'playback-stall-a';
     await registerPlayback(a, transport);
 

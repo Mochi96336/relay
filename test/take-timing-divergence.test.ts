@@ -79,16 +79,16 @@ type Room = {
  * here would silently test a room that never reaches content authority.
  */
 async function robotRoom(server: RelayServer): Promise<Room> {
-  const backing = await RelayClient.connect(server);
+  const backing = await RelayClient.connectInfrastructure(server);
   backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
   await backing.waitForType('registered');
 
-  const singer = await RelayClient.connect(server, '?participant=singer-1&name=Singer');
+  const singer = await RelayClient.connectAs(server, 'singer-1', 'Singer');
 
-  const robot = await RelayClient.connect(server);
+  const robot = await RelayClient.connectInfrastructure(server);
   robot.send({ type: 'robot-source-hello' });
 
-  const monitor = await RelayClient.connect(server);
+  const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
   monitor.send({ type: 'register', role: 'monitor' });
   await monitor.waitForType('registered');
 

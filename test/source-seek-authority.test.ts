@@ -112,13 +112,13 @@ test('superseded Robot seek cannot erase the active Robot delta', async () => {
     RELAY_HEARTBEAT_MS: '60000',
   });
   try {
-    const observer = await RelayClient.connect(relay);
+    const observer = await RelayClient.connectAs(relay, 'listener', 'Listener');
     observer.send({ type: 'register', role: 'monitor' });
     await observer.waitForType('registered');
 
-    const first = await RelayClient.connect(relay);
+    const first = await RelayClient.connectInfrastructure(relay);
     first.send({ type: 'robot-source-hello' });
-    const second = await RelayClient.connect(relay);
+    const second = await RelayClient.connectInfrastructure(relay);
     second.send({ type: 'robot-source-hello' });
     await first.waitForType('robot-source-replaced');
 

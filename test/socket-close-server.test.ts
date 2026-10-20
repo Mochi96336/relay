@@ -10,6 +10,7 @@ import {
   toInt16,
   waitForNewMessage,
 } from './helpers/harness.js';
+import { playingRoomSong } from './support/client-commands.js';
 import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
 const RATE = 48_000;
@@ -26,19 +27,6 @@ const FAST = {
 
 type Relay = Awaited<ReturnType<typeof startRelay>>;
 
-const playingStartedAtMs = Date.now();
-function playingTelemetry() {
-  return {
-    type: 'youtube-telemetry',
-    videoId: VIDEO,
-    state: 1,
-    currentTime: 42 + (Date.now() - playingStartedAtMs) / 1_000,
-    duration: 200,
-    playbackRate: 1,
-    networkRttMs: 40,
-  };
-}
-
 function tone(seconds: number, gain: number) {
   return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, 5), gain);
 }
@@ -47,11 +35,11 @@ async function statusz(server: Relay) {
   return (await fetch(server.httpUrl('/statusz'))).json();
 }
 
-/** A Desktop Source, a publisher without a lease and a monitor, calibrating. */
+/** A Desktop Source, a singer playing the room Song and a monitor, calibrating. */
 async function calibratingDesktopRoom(server: Relay) {
-  const backing = await RelayClient.connect(server);
-  const monitor = await RelayClient.connect(server);
-  const publisher = await RelayClient.connect(server);
+  const backing = await RelayClient.connectInfrastructure(server);
+  const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
+  const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
   backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
   monitor.send({ type: 'register', role: 'monitor' });
   publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
@@ -60,8 +48,9 @@ async function calibratingDesktopRoom(server: Relay) {
     monitor.waitForType('registered'),
     publisher.waitForType('registered'),
   ]);
+  const playing = await playingRoomSong(publisher);
   const prime = async () => {
-    publisher.send(playingTelemetry());
+    publisher.send(playing());
     await Promise.all([
       sendPcmInChunks(backing, tone(0.5, 0.8)),
       sendPcmInChunks(publisher, tone(0.5, 0.4)),
@@ -118,9 +107,9 @@ const ROBOT = {
 test('a Robot source that closes mid probe abandons the probe and says it is gone', async () => {
   const server = await startRelay(ROBOT);
   try {
-    const backing = await RelayClient.connect(server);
-    const publisher = await RelayClient.connect(server);
-    const monitor = await RelayClient.connect(server);
+    const backing = await RelayClient.connectInfrastructure(server);
+    const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
+    const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
     backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     monitor.send({ type: 'register', role: 'monitor' });
@@ -129,9 +118,9 @@ test('a Robot source that closes mid probe abandons the probe and says it is gon
       publisher.waitForType('registered'),
       monitor.waitForType('registered'),
     ]);
-    const robot = await RelayClient.connect(server);
+    const robot = await RelayClient.connectInfrastructure(server);
     robot.send({ type: 'robot-source-hello' });
-    publisher.send(playingTelemetry());
+    await playingRoomSong(publisher);
     await Promise.all([
       sendPcmInChunks(backing, tone(0.5, 0.8)),
       sendPcmInChunks(publisher, tone(0.5, 0.4)),
@@ -162,18 +151,14 @@ function songTelemetry(currentTime: number, state = 1) {
   return { type: 'youtube-telemetry', ...youtubeTelemetry({ state, currentTime }) };
 }
 
-function participantQuery(id: string, name: string) {
-  return `?${new URLSearchParams({ participant: id, name }).toString()}`;
-}
-
 test('a playback tab that closes fails the room command it owed at once, and leaves the Song', async () => {
   const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000' });
   try {
-    const observer = await RelayClient.connect(server, participantQuery('participant-watch', 'Watcher'));
-    const playback = await RelayClient.connect(server, participantQuery('participant-alice', 'Alice'));
+    const observer = await RelayClient.connectAs(server, 'participant-watch', 'Watcher');
+    const playback = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
     playback.send({ type: 'playback-hello', playbackTransportId: 'playback-tab-a', playbackGeneration: 1 });
     await playback.waitForType('playback-registered');
-    const publisher = await RelayClient.connect(server, participantQuery('participant-alice', 'Alice'));
+    const publisher = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
     await publisher.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
 

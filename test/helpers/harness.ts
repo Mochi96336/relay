@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -6,6 +7,7 @@ import WebSocket from 'ws';
 
 import { encodeAudioPacket } from '../../src/audio-packet.js';
 import { encodePcmFrame } from '../../src/pcm-frame.js';
+import { participantIdForCapability } from '../../src/participant-capability.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const STARTUP_TIMEOUT_MS = 20_000;
@@ -20,7 +22,29 @@ export type RelayServer = {
   stderr: () => string;
   /** Everything the server has written to stdout so far, where its [tagged] log lines go. */
   stdout: () => string;
+  /** The infrastructure capability this server accepts (RELAY_INFRA_KEY). */
+  infrastructureKey: string;
 };
+
+/**
+ * Lets anonymous sockets act as a participant or as infrastructure again. Only
+ * for the tests of that legacy path itself; they go when the path does.
+ * Everything else authenticates (connectAs, connectInfrastructure).
+ */
+export const LEGACY_IDENTITY = { RELAY_TEST_LEGACY_PARTICIPANTS: '1', RELAY_TEST_LEGACY_INFRASTRUCTURE: '1' };
+
+/** The infrastructure capability every spawned server accepts unless a test sets its own. */
+const HARNESS_INFRA_KEY = 'c0'.repeat(32);
+
+/** A fixture participant's private browser capability: the same for the same name, every run. */
+export function capabilityFor(name: string) {
+  return createHash('sha256').update(`relay-test-participant:${name}`).digest('hex');
+}
+
+/** The participant id that `name`'s capability authenticates as. */
+export function participantIdFor(name: string) {
+  return participantIdForCapability(capabilityFor(name))!;
+}
 
 /**
  * Runs the real server as a child process on an OS-assigned port. Timings that
@@ -36,8 +60,7 @@ export function startRelay(env: Record<string, string> = {}): Promise<RelayServe
         ...process.env,
         PORT: '0',
         NODE_ENV: 'test',
-        RELAY_TEST_LEGACY_PARTICIPANTS: '1',
-        RELAY_TEST_LEGACY_INFRASTRUCTURE: '1',
+        RELAY_INFRA_KEY: HARNESS_INFRA_KEY,
         ...env,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -94,6 +117,7 @@ export function startRelay(env: Record<string, string> = {}): Promise<RelayServe
         stop,
         stderr: () => stderr,
         stdout: () => stdout,
+        infrastructureKey: env.RELAY_INFRA_KEY ?? HARNESS_INFRA_KEY,
       });
     });
   });
@@ -146,6 +170,29 @@ export class RelayClient {
       socket.once('open', () => resolve(client));
       socket.once('error', reject);
     });
+  }
+
+  /**
+   * A client authenticated as the fixture participant `name`, as a browser
+   * page is: by its private capability, never by a URL. `participantId` is
+   * what the server knows it as (participantIdFor(name)). `query` is the rest
+   * of the page URL, such as a room key.
+   */
+  static async connectAs(server: RelayServer, name: string, nickname = name, query = '') {
+    const client = await RelayClient.connect(server, query);
+    const participantId = participantIdFor(name);
+    client.send({ type: 'participant-authenticate', participantId, capability: capabilityFor(name), nickname });
+    await client.waitFor((message) => message.type === 'participant-authenticated'
+      && message.participantId === participantId);
+    return client;
+  }
+
+  /** A client authenticated as Relay infrastructure (the Robot's backing or source), as the Robot is. */
+  static async connectInfrastructure(server: RelayServer, query = '') {
+    const client = await RelayClient.connect(server, query);
+    client.send({ type: 'infrastructure-authenticate', key: server.infrastructureKey });
+    await client.waitForType('infrastructure-authenticated');
+    return client;
   }
 
   send(payload: unknown) {

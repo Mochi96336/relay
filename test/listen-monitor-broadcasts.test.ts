@@ -4,6 +4,7 @@ import test from 'node:test';
 
 import { parseBroadcastTypes } from '../src/relay-socket-server.js';
 import { RelayClient, sleep, startRelay, toInt16, pulseTrain } from './helpers/harness.js';
+import { playRoomSong, registerPlayback } from './support/client-commands.js';
 
 const RATE = 48_000;
 const FRAME_SAMPLES = 960;
@@ -26,27 +27,21 @@ test('a monitor that names its broadcasts gets only those, and all of the audio'
   const server = await startRelay();
   const clients: RelayClient[] = [];
   try {
-    const listen = await RelayClient.connect(server);
-    const everything = await RelayClient.connect(server);
+    const listen = await RelayClient.connectAs(server, 'listener', 'Listener');
+    const everything = await RelayClient.connectAs(server, 'listener', 'Listener');
     clients.push(listen, everything);
     const listenFrom = await registerMonitor(listen, { broadcastTypes: ['session-status', 'source-status'] });
     const everythingFrom = await registerMonitor(everything);
 
-    const backing = await RelayClient.connect(server);
-    const publisher = await RelayClient.connect(server);
+    const backing = await RelayClient.connectInfrastructure(server);
+    const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
     clients.push(backing, publisher);
     backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
     await backing.waitForType('registered');
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await publisher.waitForType('registered');
-    publisher.send({
-      type: 'youtube-telemetry',
-      videoId: 'dQw4w9WgXcQ',
-      state: 1,
-      currentTime: 42,
-      duration: 200,
-      playbackRate: 1,
-    });
+    await registerPlayback(publisher, 'listen-playback');
+    await playRoomSong(publisher);
 
     const pcm = toInt16(pulseTrain(RATE, RATE, 5), 0.5);
     for (let start = 0; start + FRAME_SAMPLES <= pcm.length / 2; start += FRAME_SAMPLES) {

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { RelayClient, pulseTrain, sleep, startRelay, toInt16, waitForNewMessage } from './helpers/harness.js';
+import { completeRoomSongCommand, playingRoomSong } from './support/client-commands.js';
 
 const RATE = 48_000;
 const FAST = {
@@ -22,9 +23,9 @@ test('a Robot player that jumps away from the room timeline loses its delta, the
   const server = await startRelay(FAST);
   let feed: NodeJS.Timeout | undefined;
   try {
-    const backing = await RelayClient.connect(server);
-    const publisher = await RelayClient.connect(server);
-    const monitor = await RelayClient.connect(server);
+    const backing = await RelayClient.connectInfrastructure(server);
+    const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
+    const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
     backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     monitor.send({ type: 'register', role: 'monitor' });
@@ -33,17 +34,14 @@ test('a Robot player that jumps away from the room timeline loses its delta, the
       publisher.waitForType('registered'),
       monitor.waitForType('registered'),
     ]);
-    const robot = await RelayClient.connect(server);
+    const robot = await RelayClient.connectInfrastructure(server);
     robot.send({ type: 'robot-source-hello' });
     const frame = toInt16(pulseTrain(960, RATE, 5), 0.5);
     feed = setInterval(() => {
       backing.sendPcm(frame);
       publisher.sendPcm(frame);
     }, 20);
-    publisher.send({
-      type: 'youtube-telemetry', videoId: 'dQw4w9WgXcQ', state: 1,
-      currentTime: 42, duration: 200, playbackRate: 1, networkRttMs: 40,
-    });
+    await playingRoomSong(publisher);
 
     robot.send({ type: 'robot-player-offset', offsetMs: 35 });
     await sleep(200);
@@ -72,9 +70,9 @@ test('a room playback rate change rebuilds the Robot mapping', async () => {
   const server = await startRelay(FAST);
   let feed: NodeJS.Timeout | undefined;
   try {
-    const backing = await RelayClient.connect(server);
-    const publisher = await RelayClient.connect(server);
-    const monitor = await RelayClient.connect(server);
+    const backing = await RelayClient.connectInfrastructure(server);
+    const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
+    const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
     backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     monitor.send({ type: 'register', role: 'monitor' });
@@ -83,24 +81,24 @@ test('a room playback rate change rebuilds the Robot mapping', async () => {
       publisher.waitForType('registered'),
       monitor.waitForType('registered'),
     ]);
-    const robot = await RelayClient.connect(server);
+    const robot = await RelayClient.connectInfrastructure(server);
     robot.send({ type: 'robot-source-hello' });
     const frame = toInt16(pulseTrain(960, RATE, 5), 0.5);
     feed = setInterval(() => {
       backing.sendPcm(frame);
       publisher.sendPcm(frame);
     }, 20);
-    const telemetry = (playbackRate: number) => ({
-      type: 'youtube-telemetry', videoId: 'dQw4w9WgXcQ', state: 1,
-      currentTime: 42, duration: 200, playbackRate, networkRttMs: 40,
-    });
-    publisher.send(telemetry(1));
+    const songTelemetry = await playingRoomSong(publisher);
     robot.send({ type: 'robot-player-offset', offsetMs: 35 });
     await sleep(200);
     assert.equal(Math.round((await timingStatus(monitor)).robotPlayerOffsetMs), 35);
 
     // Deltas were converted to wall time at 1x; at 1.25x they mean something else.
-    publisher.send(telemetry(1.25));
+    await completeRoomSongCommand(
+      publisher,
+      { commandId: 'rate-1.25', expectedRevision: 2, action: 'rate', playbackRate: 1.25 },
+      { ...songTelemetry(), playbackRate: 1.25 },
+    );
     await sleep(200);
     const rebuilt = await timingStatus(monitor);
     assert.equal(rebuilt.robotPlayerOffsetMs, null);

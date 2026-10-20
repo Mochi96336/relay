@@ -13,11 +13,6 @@ function pcm(value: number) {
   return buffer;
 }
 
-function participantQuery(id: string, nickname: string) {
-  const params = new URLSearchParams({ participant: id, name: nickname });
-  return `?${params.toString()}`;
-}
-
 async function waitForBinaryFrames(client: RelayClient, count: number, timeoutMs = 2_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -74,12 +69,12 @@ test('v2 media stays ordered and capture-authoritative across websocket reconnec
   });
 
   try {
-    const presence = await RelayClient.connect(server, participantQuery('participant-alice', 'Alice'));
-    const monitor = await RelayClient.connect(server);
+    const presence = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
+    const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
     monitor.send({ type: 'register', role: 'monitor' });
     await monitor.waitForType('registered');
 
-    const publisher = await RelayClient.connect(server, participantQuery('participant-alice', 'Alice'));
+    const publisher = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
     registerV2(publisher, 7);
     await publisher.waitForType('registered');
     await presence.waitFor(
@@ -129,7 +124,7 @@ test('v2 media stays ordered and capture-authoritative across websocket reconnec
       (message) => message.type === 'session-status' && message.micConnected === false,
     );
 
-    const reconnected = await RelayClient.connect(server, participantQuery('participant-alice', 'Alice'));
+    const reconnected = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
     registerV2(reconnected, 7);
     await reconnected.waitForType('registered');
     reconnected.sendBinary(encodeAudioPacket({
@@ -138,7 +133,7 @@ test('v2 media stays ordered and capture-authoritative across websocket reconnec
     stats = await waitForReceiverStats(server, (value) => value.emittedPackets >= 4);
     assert.equal(stats.emittedPackets, 4, 'same-capture reconnect keeps receiver continuity');
 
-    const freshCapture = await RelayClient.connect(server, participantQuery('participant-alice', 'Alice'));
+    const freshCapture = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
     registerV2(freshCapture, 8);
     await freshCapture.waitForType('registered');
 

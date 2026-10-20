@@ -16,7 +16,10 @@ test('with Choir off, no second Mic is offered and its messages take no role', a
   try {
     const page = await fetch(relay.httpUrl('/'));
     assert.equal(page.status, 200);
-    const [client, publisher] = await Promise.all([RelayClient.connect(relay), RelayClient.connect(relay)]);
+    const [client, publisher] = await Promise.all([
+      RelayClient.connect(relay),
+      RelayClient.connectAs(relay, 'singer', 'Singer'),
+    ]);
     clients.push(client, publisher);
     const capability = '9'.repeat(64);
     const participantId = participantIdForCapability(capability)!;
@@ -59,7 +62,6 @@ const CAPABILITY_B = 'd'.repeat(64);
 async function startDuet() {
   const relay = await startRelay({
     RELAY_CHOIR: '1',
-    RELAY_TEST_LEGACY_PARTICIPANTS: '0',
     RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000',
   });
   const clients: RelayClient[] = [];
@@ -77,6 +79,10 @@ async function startDuet() {
     client.send({ type: 'participant-authenticate', participantId, capability, nickname });
     await client.waitFor((m) => m.type === 'participant-authenticated' && m.participantId === participantId);
   };
+  const authenticateInfrastructure = async (client: RelayClient) => {
+    client.send({ type: 'infrastructure-authenticate', key: relay.infrastructureKey });
+    await client.waitForType('infrastructure-authenticated');
+  };
   try {
     const [a, b, publisher, robotBacking, robotControl, bMedia] = await Promise.all(
       Array.from({ length: 6 }, () => connect()),
@@ -84,6 +90,7 @@ async function startDuet() {
     await Promise.all([
       authenticate(a, CAPABILITY_A, 'A'), authenticate(b, CAPABILITY_B, 'B'),
       authenticate(publisher, CAPABILITY_A, 'A'), authenticate(bMedia, CAPABILITY_B, 'B'),
+      authenticateInfrastructure(robotBacking), authenticateInfrastructure(robotControl),
     ]);
     await a.waitForType('choir-available');
     publisher.send({ type: 'register', role: 'publisher', sampleRate: 48_000,

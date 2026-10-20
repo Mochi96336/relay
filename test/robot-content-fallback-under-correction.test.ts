@@ -11,9 +11,8 @@ import {
 import {
   backingBoundaryRequestCount,
   laggedBacking,
-  playingTelemetry,
-  type RobotRoom,
   robotRoom,
+  type RobotRoom,
 } from './support/robot-content-room.js';
 
 const RATE = 48_000;
@@ -178,8 +177,6 @@ test('Robot content fallback maps real follower seeks and applies the post-corre
   let keepMappingFresh: NodeJS.Timeout | null = null;
   let liveContent: ReturnType<typeof streamRange> | null = null;
   try {
-    room.publisher.send(playingTelemetry);
-
     const maxAdvanceSamples = Math.round((RATE * REFERENCE_LAG_MS) / 1_000);
     const master = pulseTrain(TOTAL_SAMPLES + maxAdvanceSamples + RATE, RATE, 7);
     const mic = toInt16(master.subarray(0, TOTAL_SAMPLES), 0.45, 0.004, 11);

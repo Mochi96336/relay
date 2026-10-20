@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   RelayClient,
   laggedPair,
+  participantIdFor,
   pulseTrain,
   sendPcmInChunks,
   sleep,
@@ -12,7 +13,7 @@ import {
   toInt16,
   waitForNewMessage,
 } from './helpers/harness.js';
-import { playingTelemetry } from './support/playing-telemetry.js';
+import { playingRoomSong } from './support/client-commands.js';
 
 const RATE = 48_000;
 const FAST = {
@@ -32,9 +33,9 @@ function tone(seconds: number, gain: number) {
 
 /** A legacy Mic and Desktop Source with a confirmed content calibration. */
 async function calibratedRoom(server: Awaited<ReturnType<typeof startRelay>>) {
-  const backing = await RelayClient.connect(server);
-  const publisher = await RelayClient.connect(server);
-  const monitor = await RelayClient.connect(server);
+  const backing = await RelayClient.connectInfrastructure(server);
+  const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
+  const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
   backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
   publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
   monitor.send({ type: 'register', role: 'monitor' });
@@ -43,8 +44,9 @@ async function calibratedRoom(server: Awaited<ReturnType<typeof startRelay>>) {
     publisher.waitForType('registered'),
     monitor.waitForType('registered'),
   ]);
+  const songTelemetry = await playingRoomSong(publisher);
   const prime = async () => {
-    publisher.send(playingTelemetry());
+    publisher.send(songTelemetry());
     await Promise.all([
       sendPcmInChunks(backing, tone(0.5, 0.8)),
       sendPcmInChunks(publisher, tone(0.5, 0.4)),
@@ -73,7 +75,7 @@ test('a replaced Mic capture keeps the calibration result but stops it driving t
     const { monitor, lagMs, activeLagMs } = await calibratedRoom(server);
     assert.equal(activeLagMs, lagMs, 'the result drives the mix');
 
-    const replacement = await RelayClient.connect(server);
+    const replacement = await RelayClient.connectAs(server, 'singer', 'Singer');
     replacement.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 2 });
     await replacement.waitForType('registered');
     await sleep(200);
@@ -96,8 +98,11 @@ test('a new Mic owner starts from no calibration', async () => {
   try {
     const { monitor } = await calibratedRoom(server);
 
-    const alice = await RelayClient.connect(server, '?participant=participant-alice&name=Alice');
-    alice.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 7 });
+    const alice = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
+    alice.send({
+      type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 7,
+      takeoverExpectedOwnerId: participantIdFor('singer'),
+    });
     await alice.waitForType('registered');
     await sleep(200);
 
@@ -116,9 +121,9 @@ test('a new Mic owner starts from no calibration', async () => {
 test('a new Mic owner during calibration fails it with the reason', async () => {
   const server = await startRelay(FAST);
   try {
-    const backing = await RelayClient.connect(server);
-    const publisher = await RelayClient.connect(server);
-    const monitor = await RelayClient.connect(server);
+    const backing = await RelayClient.connectInfrastructure(server);
+    const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
+    const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
     backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
     monitor.send({ type: 'register', role: 'monitor' });
@@ -127,8 +132,9 @@ test('a new Mic owner during calibration fails it with the reason', async () => 
       publisher.waitForType('registered'),
       monitor.waitForType('registered'),
     ]);
+    const songTelemetry = await playingRoomSong(publisher);
     const prime = async () => {
-      publisher.send(playingTelemetry());
+      publisher.send(songTelemetry());
       await Promise.all([
         sendPcmInChunks(backing, tone(0.5, 0.8)),
         sendPcmInChunks(publisher, tone(0.5, 0.4)),
@@ -138,8 +144,11 @@ test('a new Mic owner during calibration fails it with the reason', async () => 
     await startCalibrationCollecting(publisher, monitor, prime);
 
     const from = monitor.messages.length;
-    const alice = await RelayClient.connect(server, '?participant=participant-alice&name=Alice');
-    alice.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 7 });
+    const alice = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
+    alice.send({
+      type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 7,
+      takeoverExpectedOwnerId: participantIdFor('singer'),
+    });
     const failed = await waitForNewMessage(monitor, from, (message) => (
       message.type === 'timing-calibration-status' && message.state === 'failed'
     ));

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  LEGACY_IDENTITY,
+  participantIdFor,
   RelayClient,
   pulseTrain,
   sendPcmInChunks,
@@ -25,11 +27,6 @@ const FAST = {
   RELAY_MIC_TRANSPORT_GRACE_MS: '5000',
 };
 
-function participant(server: Awaited<ReturnType<typeof startRelay>>, id: string, nickname: string) {
-  const params = new URLSearchParams({ participant: id, name: nickname });
-  return RelayClient.connect(server, `?${params.toString()}`);
-}
-
 function registerPublisher(client: RelayClient, captureGeneration: number) {
   client.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration });
 }
@@ -42,7 +39,7 @@ test('a Mic without a lease that drops during calibration fails it and gives up 
   // A publisher with no participant identity holds no lease, so there is
   // nothing to keep for a reconnect. (The lease owner's reconnect grace is
   // covered in participant-server.test.ts.)
-  const server = await startRelay(FAST);
+  const server = await startRelay({ ...FAST, ...LEGACY_IDENTITY });
   try {
     const backing = await RelayClient.connect(server);
     const monitor = await RelayClient.connect(server);
@@ -86,14 +83,14 @@ test('a Mic without a lease that drops during calibration fails it and gives up 
 test('an explicit release revokes the publisher, acknowledges the releaser and frees the Mic at once', async () => {
   const server = await startRelay(FAST);
   try {
-    const observer = await participant(server, 'participant-watch', 'Watcher');
-    const alicePresence = await participant(server, 'participant-alice', 'Alice');
-    const alicePublisher = await participant(server, 'participant-alice', 'Alice');
+    const observer = await RelayClient.connectAs(server, 'participant-watch', 'Watcher');
+    const alicePresence = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
+    const alicePublisher = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
     registerPublisher(alicePublisher, 5);
     await alicePublisher.waitForType('registered');
     await observer.waitFor((message) => (
       message.type === 'session-status'
-      && message.micOwnerId === 'participant-alice'
+      && message.micOwnerId === participantIdFor('participant-alice')
       && message.micConnected === true
     ));
 
@@ -108,14 +105,14 @@ test('an explicit release revokes the publisher, acknowledges the releaser and f
 
     // Nothing of Alice's lease is left waiting on a grace: Bob takes the Mic
     // straight away, without a takeover.
-    const bob = await participant(server, 'participant-bobby', 'Bob');
+    const bob = await RelayClient.connectAs(server, 'participant-bobby', 'Bob');
     const bobFrom = observer.messages.length;
     registerPublisher(bob, 9);
     await bob.waitForType('registered');
     const taken = await waitForNewMessage(observer, bobFrom, (message) => (
       message.type === 'session-status' && message.micConnected === true
     ));
-    assert.equal(taken.micOwnerId, 'participant-bobby');
+    assert.equal(taken.micOwnerId, participantIdFor('participant-bobby'));
   } finally {
     await server.stop();
   }

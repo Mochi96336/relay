@@ -11,7 +11,7 @@ import {
   toInt16,
   waitForNewMessage,
 } from './helpers/harness.js';
-import { playingTelemetry } from './support/playing-telemetry.js';
+import { playingRoomSong } from './support/client-commands.js';
 
 const RATE = 48_000;
 const FAST = {
@@ -38,13 +38,14 @@ async function primeStreams(backing: RelayClient, publisher: RelayClient) {
 async function completeCalibration(
   backing: RelayClient,
   publisher: RelayClient,
+  songTelemetry: () => Record<string, unknown>,
   monitor: RelayClient,
   lagMs: number,
 ) {
-  publisher.send(playingTelemetry());
+  publisher.send(songTelemetry());
   await primeStreams(backing, publisher);
   await startCalibrationCollecting(publisher, monitor, async () => {
-    publisher.send(playingTelemetry());
+    publisher.send(songTelemetry());
     await primeStreams(backing, publisher);
   });
 
@@ -64,9 +65,9 @@ async function completeCalibration(
 
 test('server keeps old confirmed alignment through failed retry and replaces it only on promotion', async () => {
   const server = await startRelay(FAST);
-  const backing = await RelayClient.connect(server);
-  const publisher = await RelayClient.connect(server);
-  const monitor = await RelayClient.connect(server);
+  const backing = await RelayClient.connectInfrastructure(server);
+  const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
+  const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
 
   try {
     backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
@@ -77,17 +78,18 @@ test('server keeps old confirmed alignment through failed retry and replaces it 
       publisher.waitForType('registered'),
       monitor.waitForType('registered'),
     ]);
+    const songTelemetry = await playingRoomSong(publisher);
 
-    const first = await completeCalibration(backing, publisher, monitor, 260);
+    const first = await completeCalibration(backing, publisher, songTelemetry, monitor, 260);
     const oldLag = Number(first.micLagMs);
     assert.ok(Number.isFinite(oldLag));
     assert.ok(Math.abs(oldLag - 260) <= 25, `expected first calibration near 260 ms, got ${oldLag}`);
     assert.equal(first.activeMicLagMs, oldLag, 'confirmed result must already be mixer authority');
 
-    publisher.send(playingTelemetry());
+    publisher.send(songTelemetry());
     await primeStreams(backing, publisher);
     const retryCollecting = await startCalibrationCollecting(publisher, monitor, async () => {
-      publisher.send(playingTelemetry());
+      publisher.send(songTelemetry());
       await primeStreams(backing, publisher);
     });
     assert.equal(retryCollecting.micLagMs, oldLag, 'retry keeps the old confirmed result applied');
@@ -104,7 +106,7 @@ test('server keeps old confirmed alignment through failed retry and replaces it 
     assert.equal(failed.activeMicLagMs, oldLag, 'failed retry must leave the mixer on old confirmed authority');
     assert.equal(failed.provisional, false);
 
-    const promoted = await completeCalibration(backing, publisher, monitor, 420);
+    const promoted = await completeCalibration(backing, publisher, songTelemetry, monitor, 420);
     const newLag = Number(promoted.micLagMs);
     assert.ok(Number.isFinite(newLag));
     assert.ok(Math.abs(newLag - 420) <= 25, `expected promoted calibration near 420 ms, got ${newLag}`);

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { RelayClient, sleep, startRelay } from './helpers/harness.js';
+import { playRoomSong, registerPlayback } from './support/client-commands.js';
 
 const RATE = 48_000;
 const FAST = {
@@ -26,7 +27,7 @@ test('readyz distinguishes unarmed, robot-host and full live-session readiness',
     assert.deepEqual(readiness.reasons, []);
     assert.equal(readiness.components.route.mode, 'idle');
 
-    const robot = await RelayClient.connect(server);
+    const robot = await RelayClient.connectInfrastructure(server);
     clients.push(robot);
     robot.send({ type: 'robot-source-hello' });
     await sleep(30);
@@ -38,7 +39,7 @@ test('readyz distinguishes unarmed, robot-host and full live-session readiness',
     assert.equal(readiness.components.route.mode, 'robot');
     assert.ok(readiness.reasons.includes('backing-not-connected'));
 
-    const backing = await RelayClient.connect(server);
+    const backing = await RelayClient.connectInfrastructure(server);
     clients.push(backing);
     backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
     await backing.waitForType('registered');
@@ -61,20 +62,13 @@ test('readyz distinguishes unarmed, robot-host and full live-session readiness',
     assert.ok(readiness.sessionReasons.includes('phone-timeline-not-connected'));
     assert.ok(readiness.sessionReasons.includes('calibration-missing'));
 
-    const mic = await RelayClient.connect(server);
+    const mic = await RelayClient.connectAs(server, 'singer', 'Singer');
     clients.push(mic);
     mic.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await mic.waitForType('registered');
     mic.sendPcm(pcm(40));
-    mic.send({
-      type: 'youtube-telemetry',
-      videoId: 'dQw4w9WgXcQ',
-      state: 1,
-      currentTime: 42,
-      duration: 200,
-      playbackRate: 1,
-      networkRttMs: 40,
-    });
+    await registerPlayback(mic, 'readiness-playback');
+    await playRoomSong(mic);
     robot.send({ type: 'robot-player-offset', offsetMs: 12 });
     await sleep(30);
 
@@ -97,11 +91,11 @@ test('readyz does not mistake a development backing client for an armed Robot ro
   const server = await startRelay(FAST);
   const clients: RelayClient[] = [];
   try {
-    const robot = await RelayClient.connect(server);
+    const robot = await RelayClient.connectInfrastructure(server);
     clients.push(robot);
     robot.send({ type: 'robot-source-hello' });
 
-    const backing = await RelayClient.connect(server);
+    const backing = await RelayClient.connectInfrastructure(server);
     clients.push(backing);
     backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
     await backing.waitForType('registered');

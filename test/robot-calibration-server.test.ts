@@ -12,7 +12,7 @@ import {
   toInt16,
   waitForNewMessage,
 } from './helpers/harness.js';
-import { playingTelemetry } from './support/playing-telemetry.js';
+import { playingRoomSong } from './support/client-commands.js';
 
 const RATE = 48_000;
 const FAST = {
@@ -47,9 +47,9 @@ test('a content calibration from the desktop route does not survive the room bec
   // The drop only applies while a Robot boot probe is the room's strategy.
   const server = await startRelay({ ...FAST, RELAY_CALIBRATION_PROBE: '1' });
   try {
-    const backing = await RelayClient.connect(server);
-    const publisher = await RelayClient.connect(server);
-    const monitor = await RelayClient.connect(server);
+    const backing = await RelayClient.connectInfrastructure(server);
+    const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
+    const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
     backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     monitor.send({ type: 'register', role: 'monitor' });
@@ -58,8 +58,9 @@ test('a content calibration from the desktop route does not survive the room bec
       publisher.waitForType('registered'),
       monitor.waitForType('registered'),
     ]);
+    const songTelemetry = await playingRoomSong(publisher);
     const prime = async () => {
-      publisher.send(playingTelemetry());
+      publisher.send(songTelemetry());
       await Promise.all([
         sendPcmInChunks(backing, tone(0.5, 0.8)),
         sendPcmInChunks(publisher, tone(0.5, 0.4)),
@@ -82,7 +83,7 @@ test('a content calibration from the desktop route does not survive the room bec
 
     // The Robot takes over the Source. The desktop measurement was taken
     // over a different path and must not keep driving the Robot room.
-    const robot = await RelayClient.connect(server);
+    const robot = await RelayClient.connectInfrastructure(server);
     robot.send({ type: 'robot-source-hello' });
     await monitor.waitFor((message) => message.type === 'source-status' && message.robotSourceConnected === true);
     await sleep(200);
@@ -110,9 +111,9 @@ test('a manual recalibration on the Robot route starts a fresh probe run after o
   const server = await startRelay(ROBOT);
   const stops: Array<() => void> = [];
   try {
-    const backing = await RelayClient.connect(server);
-    const publisher = await RelayClient.connect(server);
-    const monitor = await RelayClient.connect(server);
+    const backing = await RelayClient.connectInfrastructure(server);
+    const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
+    const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
     backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     monitor.send({ type: 'register', role: 'monitor' });
@@ -121,7 +122,7 @@ test('a manual recalibration on the Robot route starts a fresh probe run after o
       publisher.waitForType('registered'),
       monitor.waitForType('registered'),
     ]);
-    const robot = await RelayClient.connect(server);
+    const robot = await RelayClient.connectInfrastructure(server);
     robot.send({ type: 'robot-source-hello' });
     // A probe starts only while both legs are streaming.
     stops.push(streamLive(backing, 0.8), streamLive(publisher, 0.4));

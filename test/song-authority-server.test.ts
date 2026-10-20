@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { RelayClient, sleep, startRelay } from './helpers/harness.js';
+import { LEGACY_IDENTITY, participantIdFor, RelayClient, sleep, startRelay } from './helpers/harness.js';
 import { registerPlayback } from './support/client-commands.js';
 import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
 const VIDEO = 'dQw4w9WgXcQ';
+const A_ID = participantIdFor('A');
 
 function telemetry(currentTime: number, transportId = 'playback-transport-a', generation = 1, state = 1) {
   return {
@@ -43,8 +44,8 @@ async function establishRoomSong(client: RelayClient, transportId: string, curre
 test('server keeps one authoritative participant playback transport', async () => {
   const server = await startRelay();
   try {
-    const a = await RelayClient.connect(server, '?participant=participant-a&name=A');
-    const b = await RelayClient.connect(server, '?participant=participant-b&name=B');
+    const a = await RelayClient.connectAs(server, 'A');
+    const b = await RelayClient.connectAs(server, 'B');
 
     await registerPlayback(a, 'playback-transport-a');
     await registerPlayback(b, 'playback-transport-b');
@@ -53,7 +54,7 @@ test('server keeps one authoritative participant playback transport', async () =
     a.send({ type: 'youtube-timeline-request' });
     const leader = await a.waitFor((message) => (
       message.type === 'youtube-timeline-status'
-      && message.playbackLeaderParticipantId === 'participant-a'
+      && message.playbackLeaderParticipantId === A_ID
     ));
     assert.equal(leader.playbackTransportId, 'playback-transport-a');
 
@@ -69,7 +70,7 @@ test('server keeps one authoritative participant playback transport', async () =
     const status = b.latest('youtube-timeline-status');
 
     assert.ok(status);
-    assert.equal(status.playbackLeaderParticipantId, 'participant-a');
+    assert.equal(status.playbackLeaderParticipantId, A_ID);
     assert.equal(status.playbackTransportId, 'playback-transport-a');
     assert.ok(Number(status.serverTime) < 20, `competing telemetry overwrote timeline: ${status.serverTime}`);
   } finally {
@@ -96,7 +97,7 @@ test('anonymous non-publisher sockets cannot claim the room timeline', async () 
 });
 
 test('only the selected anonymous publisher keeps the narrow legacy telemetry path', async () => {
-  const server = await startRelay();
+  const server = await startRelay(LEGACY_IDENTITY);
   try {
     const publisher = await RelayClient.connect(server);
     const observer = await RelayClient.connect(server);
@@ -138,8 +139,8 @@ test('only the selected anonymous publisher keeps the narrow legacy telemetry pa
 test('a rejected playback page is told why, once per reason', async () => {
   const server = await startRelay();
   try {
-    const a = await RelayClient.connect(server, '?participant=participant-a&name=A');
-    const b = await RelayClient.connect(server, '?participant=participant-b&name=B');
+    const a = await RelayClient.connectAs(server, 'A');
+    const b = await RelayClient.connectAs(server, 'B');
 
     // Room song changes go through the command path now, so establish one that
     // way before testing what a competing player is told.
@@ -159,7 +160,7 @@ test('a rejected playback page is told why, once per reason', async () => {
     a.send({ ...telemetry(10), state: 5 });
     await a.waitFor((message) => (
       message.type === 'youtube-timeline-status'
-      && message.playbackLeaderParticipantId === 'participant-a'
+      && message.playbackLeaderParticipantId === A_ID
     ));
 
     // B reports the room's own position, so this is not an attempted mutation:
@@ -167,7 +168,7 @@ test('a rejected playback page is told why, once per reason', async () => {
     b.send({ ...telemetry(10, 'playback-transport-b'), state: 5 });
     const rejected = await b.waitFor((message) => message.type === 'youtube-telemetry-rejected');
     assert.equal(rejected.reason, 'leader-busy');
-    assert.equal(rejected.playbackLeaderParticipantId, 'participant-a');
+    assert.equal(rejected.playbackLeaderParticipantId, A_ID);
 
     // Telemetry repeats several times a second; repeating the same rejection
     // would drown the socket in messages nobody can act on.
@@ -186,7 +187,7 @@ test('a rejected playback page is told why, once per reason', async () => {
 });
 
 test('a replacement anonymous publisher takes the room clock without waiting out the old one', async () => {
-  const server = await startRelay();
+  const server = await startRelay(LEGACY_IDENTITY);
   try {
     const observer = await RelayClient.connect(server);
     const first = await RelayClient.connect(server);

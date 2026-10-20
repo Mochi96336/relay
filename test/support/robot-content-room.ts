@@ -1,18 +1,12 @@
-import { RelayClient, sleep, toInt16, type RelayServer } from '../helpers/harness.js';
+import { RelayClient, sleep, type RelayServer, toInt16 } from '../helpers/harness.js';
+import { playRoomSong, registerPlayback } from './client-commands.js';
 
 const RATE = 48_000;
 
-/** The room-song telemetry of a playing song, as the Robot tests send it. */
-export const playingTelemetry = {
-  type: 'youtube-telemetry',
-  videoId: 'dQw4w9WgXcQ',
-  state: 1,
-  currentTime: 42,
-  duration: 200,
-  playbackRate: 1,
-};
-
-/** A Relay room with a Robot backing, a Mic publisher, the Robot control and a monitor. */
+/**
+ * A Relay room with a Robot backing, a Mic publisher that also plays the room
+ * Song, the Robot control and a monitor.
+ */
 export type RobotRoom = {
   backing: RelayClient;
   publisher: RelayClient;
@@ -22,20 +16,23 @@ export type RobotRoom = {
 };
 
 export async function robotRoom(server: RelayServer): Promise<RobotRoom> {
-  const backing = await RelayClient.connect(server);
+  const backing = await RelayClient.connectInfrastructure(server);
   backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
   await backing.waitForType('registered');
 
-  const publisher = await RelayClient.connect(server);
+  const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
   publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
   await publisher.waitForType('registered');
 
-  const robot = await RelayClient.connect(server);
+  const robot = await RelayClient.connectInfrastructure(server);
   robot.send({ type: 'robot-source-hello' });
 
-  const monitor = await RelayClient.connect(server);
+  const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
   monitor.send({ type: 'register', role: 'monitor' });
   await monitor.waitForType('registered');
+
+  await registerPlayback(publisher, 'robot-room-playback');
+  await playRoomSong(publisher, { positionSeconds: 42 });
 
   return {
     backing,

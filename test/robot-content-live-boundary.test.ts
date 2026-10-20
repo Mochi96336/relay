@@ -11,7 +11,6 @@ import {
   acknowledgeNextBackingBoundary,
   backingBoundaryRequestCount,
   laggedBacking,
-  playingTelemetry,
   robotRoom,
   waitForRobotMapping,
   waitForTimingStatus,
@@ -60,8 +59,6 @@ test('confirmed Robot content keeps pre-seek live lag until post-seek PCM commit
   const room = await robotRoom(server);
   let keepMappingFresh: NodeJS.Timeout | null = null;
   try {
-    room.publisher.send(playingTelemetry);
-
     const maxAdvanceSamples = Math.round((RATE * REFERENCE_LAG_MS) / 1_000);
     const master = pulseTrain(TOTAL_SAMPLES + maxAdvanceSamples + RATE, RATE, 73);
     const mic = toInt16(master.subarray(0, TOTAL_SAMPLES), 0.45, 0.004, 79);

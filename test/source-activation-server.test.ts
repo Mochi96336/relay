@@ -10,7 +10,7 @@ import {
   toInt16,
   waitForNewMessage,
 } from './helpers/harness.js';
-import { playingTelemetry } from './support/playing-telemetry.js';
+import { playingRoomSong } from './support/client-commands.js';
 
 const RATE = 48_000;
 const FAST = {
@@ -53,11 +53,11 @@ async function timingStatus(monitor: RelayClient) {
 test('a newer Desktop Source tab replaces the old one', async () => {
   const server = await startRelay(FAST);
   try {
-    const first = await RelayClient.connect(server);
+    const first = await RelayClient.connectInfrastructure(server);
     first.send({ type: 'register', role: 'backing', sampleRate: RATE });
     await first.waitForType('registered');
 
-    const second = await RelayClient.connect(server);
+    const second = await RelayClient.connectInfrastructure(server);
     second.send({ type: 'register', role: 'backing', sampleRate: RATE });
     await second.waitForType('registered');
 
@@ -71,9 +71,9 @@ test('a newer Desktop Source tab replaces the old one', async () => {
 test('a Desktop Source that comes back with a new capture during calibration fails it', async () => {
   const server = await startRelay(FAST);
   try {
-    const backing = await RelayClient.connect(server);
-    const publisher = await RelayClient.connect(server);
-    const monitor = await RelayClient.connect(server);
+    const backing = await RelayClient.connectInfrastructure(server);
+    const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
+    const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
     backing.send({ type: 'register', role: 'backing', sampleRate: RATE, captureGeneration: 1, captureSampleCursor: 0 });
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     monitor.send({ type: 'register', role: 'monitor' });
@@ -82,8 +82,9 @@ test('a Desktop Source that comes back with a new capture during calibration fai
       publisher.waitForType('registered'),
       monitor.waitForType('registered'),
     ]);
+    const songTelemetry = await playingRoomSong(publisher);
     const prime = async () => {
-      publisher.send(playingTelemetry());
+      publisher.send(songTelemetry());
       await Promise.all([
         sendPcmInChunks(backing, tone(0.5, 0.8)),
         sendPcmInChunks(publisher, tone(0.5, 0.4)),
@@ -94,7 +95,7 @@ test('a Desktop Source that comes back with a new capture during calibration fai
 
     // The tab reloaded: same Desktop Source, a different capture.
     const from = monitor.messages.length;
-    const reloaded = await RelayClient.connect(server);
+    const reloaded = await RelayClient.connectInfrastructure(server);
     reloaded.send({ type: 'register', role: 'backing', sampleRate: RATE, captureGeneration: 2, captureSampleCursor: 0 });
     await reloaded.waitForType('registered');
 
@@ -111,9 +112,9 @@ test('a Robot that replaces another mid probe abandons the probe and starts with
   const server = await startRelay(ROBOT);
   const stops: Array<() => void> = [];
   try {
-    const backing = await RelayClient.connect(server);
-    const publisher = await RelayClient.connect(server);
-    const monitor = await RelayClient.connect(server);
+    const backing = await RelayClient.connectInfrastructure(server);
+    const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
+    const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
     backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     monitor.send({ type: 'register', role: 'monitor' });
@@ -122,7 +123,7 @@ test('a Robot that replaces another mid probe abandons the probe and starts with
       publisher.waitForType('registered'),
       monitor.waitForType('registered'),
     ]);
-    const first = await RelayClient.connect(server);
+    const first = await RelayClient.connectInfrastructure(server);
     first.send({ type: 'robot-source-hello' });
     stops.push(streamLive(backing, 0.8), streamLive(publisher, 0.4));
     first.send({ type: 'robot-player-offset', offsetMs: 35 });
@@ -134,7 +135,7 @@ test('a Robot that replaces another mid probe abandons the probe and starts with
     assert.equal(Math.round(before.robotPlayerOffsetMs), 35);
 
     const from = monitor.messages.length;
-    const second = await RelayClient.connect(server);
+    const second = await RelayClient.connectInfrastructure(server);
     second.send({ type: 'robot-source-hello' });
     await first.waitForType('robot-source-replaced');
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { RelayClient, sleep, startRelay } from './helpers/harness.js';
+import { participantIdFor, RelayClient, sleep, startRelay } from './helpers/harness.js';
 import { uplinkHealthReport } from './support/uplink-health.js';
 
 const RATE = 48_000;
@@ -42,9 +42,9 @@ function evidence(captureGeneration: number) {
 test('only the authoritative singer and current capture generation can relay truthful Mic F0 evidence', async () => {
   const server = await startRelay(FAST);
   try {
-    const observer = await RelayClient.connect(server, '?participant=presence-observer&name=Observer');
-    const singerMedia = await RelayClient.connect(server, '?participant=presence-singer&name=Singer');
-    const singerStatus = await RelayClient.connect(server, '?participant=presence-singer&name=Singer');
+    const observer = await RelayClient.connectAs(server, 'presence-observer', 'Observer');
+    const singerMedia = await RelayClient.connectAs(server, 'presence-singer', 'Singer');
+    const singerStatus = await RelayClient.connectAs(server, 'presence-singer', 'Singer');
 
     singerMedia.send({
       type: 'register',
@@ -82,7 +82,7 @@ test('only the authoritative singer and current capture generation can relay tru
     singerStatus.send(currentEvidence);
     const relayed = await observer.waitFor((message) => (
       message.type === 'room-mic-presence'
-      && message.ownerId === 'presence-singer'
+      && message.ownerId === participantIdFor('presence-singer')
     ));
 
     assert.equal(relayed.version, 1);

@@ -7,7 +7,7 @@ const VIDEO = 'dQw4w9WgXcQ';
 const FAST = { RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000' };
 
 async function playbackTab(server: Awaited<ReturnType<typeof startRelay>>) {
-  const tab = await RelayClient.connect(server, '?participant=participant-a&name=A');
+  const tab = await RelayClient.connectAs(server, 'a', 'A');
   tab.send({ type: 'playback-hello', playbackTransportId: 'acceptance-tab', playbackGeneration: 1 });
   await tab.waitForType('playback-registered');
   return tab;
@@ -25,7 +25,7 @@ const load = {
 test('an accepted room command is published as pending, and applied by the tab it targets', async () => {
   const server = await startRelay(FAST);
   try {
-    const watcher = await RelayClient.connect(server, '?participant=participant-w&name=W');
+    const watcher = await RelayClient.connectAs(server, 'w', 'W');
     const tab = await playbackTab(server);
 
     const from = watcher.messages.length;

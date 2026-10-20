@@ -1,20 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { RelayClient, startRelay, waitForNewMessage } from './helpers/harness.js';
+import { LEGACY_IDENTITY, participantIdFor, RelayClient, startRelay, waitForNewMessage } from './helpers/harness.js';
 
 const RATE = 48_000;
 
 async function participant(
   server: Awaited<ReturnType<typeof startRelay>>,
-  id: string,
   name: string,
   role: 'publisher' | 'monitor' | null = null,
 ) {
-  const client = await RelayClient.connect(
-    server,
-    `?participant=${encodeURIComponent(id)}&name=${encodeURIComponent(name)}`,
-  );
+  const client = await RelayClient.connectAs(server, name);
   if (role) {
     client.send(role === 'publisher'
       ? { type: 'register', role, sampleRate: RATE, captureGeneration: 1 }
@@ -27,9 +23,9 @@ async function participant(
 test('shared mix and timing commands belong to the current Mic owner, not an arbitrary socket', async () => {
   const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000' });
   try {
-    const ownerPublisher = await participant(server, 'participant-owner', 'Owner', 'publisher');
-    const ownerControl = await participant(server, 'participant-owner', 'Owner', 'monitor');
-    const other = await participant(server, 'participant-other', 'Other', 'monitor');
+    const ownerPublisher = await participant(server, 'Owner', 'publisher');
+    const ownerControl = await participant(server, 'Owner', 'monitor');
+    const other = await participant(server, 'Other', 'monitor');
 
     let from = other.messages.length;
     other.send({ type: 'set-mix', micGainDb: 3, songLevel: 5 });
@@ -39,7 +35,7 @@ test('shared mix and timing commands belong to the current Mic owner, not an arb
       (message) => message.type === 'command-rejected' && message.command === 'set-mix',
     );
     assert.equal(mixRejected.reason, 'not-mic-owner');
-    assert.equal(mixRejected.owner?.id, 'participant-owner');
+    assert.equal(mixRejected.owner?.id, participantIdFor('Owner'));
 
     from = other.messages.length;
     ownerControl.send({ type: 'set-mix', micGainDb: 17, songLevel: 27 });
@@ -105,7 +101,7 @@ test('shared mix and timing commands belong to the current Mic owner, not an arb
 });
 
 test('only the server-selected anonymous publisher keeps legacy command authority', async () => {
-  const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000' });
+  const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000', ...LEGACY_IDENTITY });
   try {
     const publisher = await RelayClient.connect(server);
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 7 });
@@ -156,7 +152,7 @@ test('only the server-selected anonymous publisher keeps legacy command authorit
 test('an identified participant may adjust Voice while nobody holds the mic', async () => {
   const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000' });
   try {
-    const listener = await participant(server, 'participant-listener', 'Listener', 'monitor');
+    const listener = await participant(server, 'Listener', 'monitor');
 
     const from = listener.messages.length;
     listener.send({ type: 'set-mix', micGainDb: 9, songLevel: 41 });

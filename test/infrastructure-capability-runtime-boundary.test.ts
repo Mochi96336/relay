@@ -10,11 +10,9 @@ test('server delegates infrastructure security state without moving domain effec
 
   assert.match(server, /new InfrastructureCapabilityRuntime<RelaySocket>\(/);
   assert.match(server, /infrastructureCapability\.authenticate\(socket, payload\.key\)/);
-  assert.match(server, /infrastructureCapability\.authorized\(socket\)/);
   assert.match(server, /infrastructureCapability\.authenticated\(socket\)/);
   assert.doesNotMatch(server, /socket\.infrastructureAuthenticated/);
   assert.doesNotMatch(server, /function infrastructureAuthorized/);
-  assert.doesNotMatch(server, /function legacyTestInfrastructureEnabled/);
 
   assert.match(
     server,

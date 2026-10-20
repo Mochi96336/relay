@@ -16,7 +16,6 @@ test('fails closed when no deployment infrastructure key is configured', () => {
 
   assert.equal(runtime.authenticate(socket, KEY), false);
   assert.equal(runtime.authenticated(socket), false);
-  assert.equal(runtime.authorized(socket), false);
 });
 
 test('wrong capability does not authenticate the socket', () => {
@@ -27,13 +26,12 @@ test('wrong capability does not authenticate the socket', () => {
   assert.equal(runtime.authenticated(socket), false);
 });
 
-test('matching capability authenticates and authorizes the socket', () => {
+test('matching capability authenticates the socket', () => {
   const runtime = new InfrastructureCapabilityRuntime<Socket>({ key: KEY });
   const socket: Socket = {};
 
   assert.equal(runtime.authenticate(socket, KEY), true);
   assert.equal(runtime.authenticated(socket), true);
-  assert.equal(runtime.authorized(socket), true);
 });
 
 test('participant identity and infrastructure capability are mutually exclusive', () => {
@@ -42,15 +40,4 @@ test('participant identity and infrastructure capability are mutually exclusive'
 
   assert.equal(runtime.authenticate(participant, KEY), false);
   assert.equal(runtime.authenticated(participant), false);
-});
-
-test('legacy test authorization does not mint real infrastructure authentication', () => {
-  const runtime = new InfrastructureCapabilityRuntime<Socket>({
-    key: KEY,
-    legacyAuthorized: true,
-  });
-  const socket: Socket = {};
-
-  assert.equal(runtime.authorized(socket), true);
-  assert.equal(runtime.authenticated(socket), false);
 });

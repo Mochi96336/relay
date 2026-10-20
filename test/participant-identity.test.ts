@@ -4,56 +4,26 @@ import { describe, test } from 'node:test';
 import { participantIdForCapability } from '../src/participant-capability.js';
 import {
   participantIdentityFromAuthentication,
-  participantIdentityFromUpgradeRequest,
+  upgradeRequestNamesParticipant,
 } from '../src/participant-identity.js';
 
 describe('participant identity parsing', () => {
-  test('treats an upgrade without participant query identity as unauthenticated', () => {
-    assert.deepEqual(
-      participantIdentityFromUpgradeRequest({ url: '/ws', headers: { host: 'relay.test' } }),
-      { kind: 'none' },
+  test('an upgrade URL without a participant names nobody', () => {
+    assert.equal(
+      upgradeRequestNamesParticipant({ url: '/ws?key=room', headers: { host: 'relay.test' } }),
+      false,
     );
   });
 
-  test('never accepts a browser participant identity from the upgrade URL', () => {
-    const participantId = 'participant-' + 'ab'.repeat(16);
-    assert.deepEqual(
-      participantIdentityFromUpgradeRequest({
-        url: '/ws?participant=' + participantId + '&name=Singer',
-        headers: { host: 'relay.test' },
-      }),
-      { kind: 'invalid' },
-    );
-  });
-
-  test('keeps legacy query identity test-only', () => {
-    const previousNodeEnv = process.env.NODE_ENV;
-    const previousLegacyGate = process.env.RELAY_TEST_LEGACY_PARTICIPANTS;
-    try {
-      process.env.NODE_ENV = 'production';
-      process.env.RELAY_TEST_LEGACY_PARTICIPANTS = '1';
-      assert.deepEqual(
-        participantIdentityFromUpgradeRequest({
-          url: '/ws?participant=participant-alice&name=Alice',
+  test('any participant in the upgrade URL is refused, browser-shaped or not', () => {
+    for (const participantId of ['participant-' + 'ab'.repeat(16), 'participant-alice']) {
+      assert.equal(
+        upgradeRequestNamesParticipant({
+          url: '/ws?participant=' + participantId + '&name=Singer',
           headers: { host: 'relay.test' },
         }),
-        { kind: 'invalid' },
+        true,
       );
-
-      process.env.NODE_ENV = 'test';
-      process.env.RELAY_TEST_LEGACY_PARTICIPANTS = '1';
-      assert.deepEqual(
-        participantIdentityFromUpgradeRequest({
-          url: '/ws?participant=participant-alice&name=%20Alice%20',
-          headers: { host: 'relay.test' },
-        }),
-        { kind: 'valid', participantId: 'participant-alice', nickname: 'Alice' },
-      );
-    } finally {
-      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
-      else process.env.NODE_ENV = previousNodeEnv;
-      if (previousLegacyGate === undefined) delete process.env.RELAY_TEST_LEGACY_PARTICIPANTS;
-      else process.env.RELAY_TEST_LEGACY_PARTICIPANTS = previousLegacyGate;
     }
   });
 

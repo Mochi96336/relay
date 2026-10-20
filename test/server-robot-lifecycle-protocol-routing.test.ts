@@ -13,7 +13,7 @@ test('server delegates Robot source hello selection through its own lifecycle se
 });
 
 test('server still owns Robot source lifecycle authority and effects', () => {
-  assert.match(server, /infrastructureCapability\.authorized\(socket\)/);
+  assert.match(server, /infrastructureCapability\.authenticated\(socket\)/);
   assert.match(server, /rejectInfrastructure\(socket, 'Authenticate Relay infrastructure before becoming the Robot source\.'\)/);
   assert.match(server, /sourceRuntime\.isActive\(socket\)/);
   assert.match(server, /sourceRuntime\.attachRobot\(socket\)/);

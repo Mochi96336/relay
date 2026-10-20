@@ -6,11 +6,10 @@ export type MicOwnerCommand =
 
 export type CommandActor = {
   participantId: string | null;
-  isCurrentPublisher: boolean;
 };
 
 export type CommandAuthorityDecision =
-  | { ok: true; authority: 'mic-owner' | 'legacy-publisher' | 'room-open' }
+  | { ok: true; authority: 'mic-owner' | 'room-open' }
   | { ok: false; reason: 'not-mic-owner' | 'no-identity' };
 
 /**
@@ -26,12 +25,8 @@ export type CommandAuthorityDecision =
  * somebody takes the microphone reads as a broken app rather than as a rule:
  * the song level is heard by everyone in the room, not only by the singer.
  * What the rule exists to prevent is a *second* person overriding whoever is
- * currently singing, and that is still enforced above.
- *
- * Pre-participant clients remain supported through one narrow compatibility
- * path: while there is no participant Mic owner, the server-selected anonymous
- * publisher transport is also an authority. An arbitrary anonymous
- * monitor/source/unknown socket never inherits that power.
+ * currently singing, and that is still enforced above. A socket without a
+ * participant identity never holds this authority.
  */
 export function authorizeMicOwnerCommand(
   actor: CommandActor,
@@ -43,13 +38,7 @@ export function authorizeMicOwnerCommand(
       : { ok: false, reason: 'not-mic-owner' };
   }
 
-  if (actor.participantId !== null) {
-    return { ok: true, authority: 'room-open' };
-  }
-
-  if (actor.isCurrentPublisher) {
-    return { ok: true, authority: 'legacy-publisher' };
-  }
-
-  return { ok: false, reason: 'no-identity' };
+  return actor.participantId !== null
+    ? { ok: true, authority: 'room-open' }
+    : { ok: false, reason: 'no-identity' };
 }

@@ -610,16 +610,4 @@ describe('room song telemetry command gate', () => {
       reason: 'command-mismatch',
     });
   });
-
-  test('keeps the narrow pre-participant publisher compatibility path', () => {
-    const session = new RoomSongCommandSession();
-    const legacy = {
-      participantId: '__relay_legacy_publisher__',
-      transportId: 'legacy-publisher-1',
-      generation: 1,
-    };
-    assert.deepEqual(session.gateTelemetry(telemetry({ state: 1, currentTime: 50 }), legacy, room(), 0), {
-      ok: true,
-    });
-  });
 });

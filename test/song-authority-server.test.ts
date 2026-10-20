@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { LEGACY_IDENTITY, participantIdFor, RelayClient, sleep, startRelay } from './helpers/harness.js';
+import { participantIdFor, RelayClient, sleep, startRelay } from './helpers/harness.js';
 import { loadRoomSong, registerPlayback } from './support/client-commands.js';
 import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
@@ -72,46 +72,6 @@ test('anonymous non-publisher sockets cannot claim the room timeline', async () 
   }
 });
 
-test('only the selected anonymous publisher keeps the narrow legacy telemetry path', async () => {
-  const server = await startRelay(LEGACY_IDENTITY);
-  try {
-    const publisher = await RelayClient.connect(server);
-    const observer = await RelayClient.connect(server);
-
-    publisher.send({ type: 'register', role: 'publisher', sampleRate: 48_000, captureGeneration: 7 });
-    await publisher.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
-
-    // Legacy publisher clients did not carry participant/playback fields.
-    publisher.send({
-      type: 'youtube-telemetry',
-      videoId: VIDEO,
-      state: 1,
-      currentTime: 12,
-      duration: 200,
-      playbackRate: 1,
-      bufferedFraction: 0.5,
-    });
-
-    const accepted = await observer.waitFor((message) => (
-      message.type === 'youtube-timeline-status'
-      && message.videoId === VIDEO
-    ));
-    assert.equal(accepted.playbackLeaderParticipantId, '__relay_legacy_publisher__');
-
-    observer.send(telemetry(90, 'anonymous-observer'));
-    await sleep(100);
-    observer.send({ type: 'youtube-timeline-request' });
-    await sleep(50);
-    const after = observer.latest('youtube-timeline-status');
-
-    assert.ok(after);
-    assert.equal(after.playbackLeaderParticipantId, '__relay_legacy_publisher__');
-    assert.ok(Number(after.serverTime) < 20, `anonymous observer overwrote timeline: ${after.serverTime}`);
-  } finally {
-    await server.stop();
-  }
-});
-
 test('a rejected playback page is told why, once per reason', async () => {
   const server = await startRelay();
   try {
@@ -156,46 +116,6 @@ test('a rejected playback page is told why, once per reason', async () => {
       seen,
       'the same rejection reason was repeated',
     );
-  } finally {
-    await server.stop();
-  }
-});
-
-test('a replacement anonymous publisher takes the room clock without waiting out the old one', async () => {
-  const server = await startRelay(LEGACY_IDENTITY);
-  try {
-    const observer = await RelayClient.connect(server);
-    const first = await RelayClient.connect(server);
-    first.send({ type: 'register', role: 'publisher', sampleRate: 48_000 });
-    await first.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
-
-    const legacyTelemetry = (currentTime: number) => ({
-      type: 'youtube-telemetry',
-      videoId: VIDEO,
-      state: 1,
-      currentTime,
-      duration: 200,
-      playbackRate: 1,
-      bufferedFraction: 0.5,
-    });
-
-    first.send(legacyTelemetry(12));
-    await observer.waitFor((message) => (
-      message.type === 'youtube-timeline-status' && message.videoId === VIDEO
-    ));
-
-    // The replacement is the same anonymous playback device reconnecting, so it
-    // must not have to wait out the previous socket's staleness window.
-    const second = await RelayClient.connect(server);
-    second.send({ type: 'register', role: 'publisher', sampleRate: 48_000 });
-    await second.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
-
-    second.send(legacyTelemetry(120));
-    const moved = await observer.waitFor(
-      (message) => message.type === 'youtube-timeline-status' && Number(message.serverTime) > 100,
-      1_000,
-    );
-    assert.equal(moved.playbackLeaderParticipantId, '__relay_legacy_publisher__');
   } finally {
     await server.stop();
   }

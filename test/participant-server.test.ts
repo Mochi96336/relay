@@ -320,7 +320,6 @@ describe('participant presence and microphone ownership', () => {
     const server = await startRelay({
       ...FAST,
       NODE_ENV: 'production',
-      RELAY_TEST_LEGACY_PARTICIPANTS: '1',
     });
     try {
       const capability = 'ab'.repeat(32);
@@ -361,7 +360,6 @@ describe('participant presence and microphone ownership', () => {
     const server = await startRelay({
       ...FAST,
       NODE_ENV: 'production',
-      RELAY_TEST_LEGACY_PARTICIPANTS: '1',
     });
     try {
       const legacy = await RelayClient.connect(server, '?participant=participant-alice&name=Alice');

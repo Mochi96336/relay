@@ -73,11 +73,10 @@ import {
   ParticipantSession,
   normalizeParticipantId,
 } from './participant-session.js';
-import { legacyTestParticipantIdentityEnabled } from './participant-capability.js';
 import {
   participantIdentityFromAuthentication,
-  participantIdentityFromUpgradeRequest,
   type ParticipantIdentityResult,
+  upgradeRequestNamesParticipant,
 } from './participant-identity.js';
 import { PlaybackTransportRuntime } from './playback-transport-runtime.js';
 import { InfrastructureCapabilityRuntime } from './infrastructure-capability-runtime.js';
@@ -85,8 +84,6 @@ import { parseRoomSongCommand } from './room-song-command.js';
 import type { AcceptedRoomSongCommand } from './room-song-command-session.js';
 import { RoomSongCommandRuntime } from './room-song-command-runtime.js';
 import {
-  LEGACY_PLAYBACK_PARTICIPANT_ID,
-  LEGACY_PLAYBACK_TRANSPORT_ID,
   SongSession,
   normalizePlaybackGeneration,
   normalizePlaybackTransportId,
@@ -220,7 +217,6 @@ const monitorTransport = createMonitorSocketTransport(wss, {
 });
 const infrastructureCapability = new InfrastructureCapabilityRuntime<RelaySocket>({
   key: relayConfig.infrastructureKey,
-  legacyAuthorized: relayConfig.legacyTestInfrastructure,
 });
 const playbackTransport = new PlaybackTransportRuntime<RelaySocket>({
   clients: () => Array.from(wss.clients, (client) => client as RelaySocket),
@@ -1192,10 +1188,7 @@ function participantPayload(participantId: string | null) {
 
 function requireMicOwnerCommand(socket: RelaySocket, command: MicOwnerCommand) {
   const decision = authorizeMicOwnerCommand(
-    {
-      participantId: socket.participantId ?? null,
-      isCurrentPublisher: micRuntime.isPublisher(socket),
-    },
+    { participantId: socket.participantId ?? null },
     participants.micOwnerId,
   );
   if (decision.ok) return true;
@@ -2792,21 +2785,13 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
   },
   youtubeTelemetry: (socket, payload) => {
     const registeredPlaybackIdentity = playbackTransport.identity(socket);
-    let playbackParticipantId = socket.participantId;
-    let playbackTransportId = registeredPlaybackIdentity?.transportId
+    const playbackParticipantId = socket.participantId;
+    const playbackTransportId = registeredPlaybackIdentity?.transportId
       ?? normalizePlaybackTransportId(payload.playbackTransportId);
-    let playbackGeneration = registeredPlaybackIdentity?.generation
+    const playbackGeneration = registeredPlaybackIdentity?.generation
       ?? normalizePlaybackGeneration(payload.playbackGeneration);
 
-    if (!playbackParticipantId) {
-      if (!micRuntime.isPublisher(socket)) {
-        reportTelemetryRejected(socket, 'not-publisher');
-        return;
-      }
-      playbackParticipantId = LEGACY_PLAYBACK_PARTICIPANT_ID;
-      playbackTransportId = LEGACY_PLAYBACK_TRANSPORT_ID;
-      playbackGeneration = socket.connectionIncarnation;
-    } else if (!playbackTransportId || playbackGeneration === null) {
+    if (!playbackParticipantId || !playbackTransportId || playbackGeneration === null) {
       reportTelemetryRejected(socket, 'invalid-identity');
       return;
     }
@@ -3156,7 +3141,7 @@ const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<Relay
     return;
   },
   sourceSeeked: (socket, payload) => {
-    if (!infrastructureCapability.authorized(socket)) {
+    if (!infrastructureCapability.authenticated(socket)) {
       rejectInfrastructure(socket, 'Authenticate the active Source before reporting a seek.');
       return;
     }
@@ -3397,10 +3382,9 @@ function backingActivated(
 const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
   publisher: (socket, payload) => {
     if (!canClaimSocketRole(socket, 'publisher')) return;
-    // A publisher is the microphone media authority. Browser clients must
-    // authenticate that authority before registration; anonymous publishers
-    // remain available only to the explicitly enabled legacy test harness.
-    if (!socket.participantId && !legacyTestParticipantIdentityEnabled()) {
+    // A publisher is the microphone media authority, so it must be an
+    // authenticated participant before it registers.
+    if (!socket.participantId) {
       sendJson(socket, {
         type: 'participant-auth-rejected',
         message: 'Authenticate this Relay participant before registering the microphone.',
@@ -3507,7 +3491,7 @@ const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
     return;
   },
   backing: (socket, payload) => {
-    if (!infrastructureCapability.authorized(socket)) {
+    if (!infrastructureCapability.authenticated(socket)) {
       rejectInfrastructure(socket, 'Authenticate Relay infrastructure before registering backing audio.');
       return;
     }
@@ -3549,7 +3533,7 @@ const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
     return;
   },
   monitor: (socket, payload) => {
-    if (!socket.participantId && !infrastructureCapability.authorized(socket)) {
+    if (!socket.participantId && !infrastructureCapability.authenticated(socket)) {
       rejectInfrastructure(socket, 'Monitor audio requires a Relay participant or infrastructure capability.');
       return;
     }
@@ -3623,7 +3607,7 @@ function robotSourceActivated(previous: RelaySocket | null, replaced: boolean) {
 
 const robotLifecycleProtocol = createRelayRobotLifecycleProtocol<RelaySocket>({
   robotSourceHello: (socket, payload) => {
-    if (!infrastructureCapability.authorized(socket)) {
+    if (!infrastructureCapability.authenticated(socket)) {
       rejectInfrastructure(socket, 'Authenticate Relay infrastructure before becoming the Robot source.');
       return;
     }
@@ -3745,8 +3729,7 @@ wss.on('connection', (rawSocket, request) => {
     socket.close(1012, 'Relay is shutting down.');
     return;
   }
-  const identity = participantIdentityFromUpgradeRequest(request);
-  if (identity.kind === 'invalid') {
+  if (upgradeRequestNamesParticipant(request)) {
     sendJson(socket, {
       type: 'participant-auth-rejected',
       message: 'Participant identity did not match its private browser capability. Reload Relay.',
@@ -3754,7 +3737,6 @@ wss.on('connection', (rawSocket, request) => {
     socket.close(1008, 'Participant capability mismatch.');
     return;
   }
-  if (identity.kind === 'valid') attachParticipantIdentity(socket, identity);
 
   socket.on('message', (data, isBinary) => {
     if (shuttingDown) return;

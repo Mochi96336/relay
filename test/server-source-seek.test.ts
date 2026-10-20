@@ -11,7 +11,7 @@ const server = parseTypeScriptSource(
 
 test('server retains Source seek authority and mapping classification before its effects', () => {
   const block = objectArrowCallbackCode(server, 'infrastructureEventProtocol', 'sourceSeeked');
-  assert.match(block, /infrastructureCapability\.authorized\(socket\)/);
+  assert.match(block, /infrastructureCapability\.authenticated\(socket\)/);
   assert.match(block, /sourceRuntime\.canReportSeek\(socket\)/);
   assert.match(block, /robotContentTransitionRuntime\.clearPendingBoundary\(\)/);
   assert.match(block, /payload\.reason === 'follower-correction'/);

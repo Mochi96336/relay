@@ -16,8 +16,6 @@ async function authenticateInfrastructure(client: RelayClient, key = INFRA_KEY) 
 async function productionRelay() {
   return startRelay({
     NODE_ENV: 'production',
-    RELAY_TEST_LEGACY_INFRASTRUCTURE: '1',
-    RELAY_TEST_LEGACY_PARTICIPANTS: '1',
     RELAY_INFRA_KEY: INFRA_KEY,
     RELAY_AUTO_CALIBRATE: '0',
     RELAY_CALIBRATION_PROBE: '0',

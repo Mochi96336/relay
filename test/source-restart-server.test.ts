@@ -3,12 +3,12 @@ import test from 'node:test';
 
 import {
   RelayClient,
-  pulseTrain,
   sendPcmInChunks,
   sleep,
   startCalibrationCollecting,
   startRelay,
-  toInt16,
+  statusz,
+  tone,
   waitForNewMessage,
 } from './helpers/harness.js';
 import { playingRoomSong } from './support/client-commands.js';
@@ -17,7 +17,6 @@ const RATE = 48_000;
 const FAST = {
   RELAY_LIVE_PREBUFFER_MS: '200',
   RELAY_CALIBRATION_TIMEOUT_MS: '5000',
-  RELAY_HEARTBEAT_MS: '60000',
   RELAY_AUTO_CALIBRATE: '0',
   RELAY_CALIBRATION_AGREEMENT: '1',
   RELAY_CALIBRATION_PROBE: '0',
@@ -34,14 +33,6 @@ const ROBOT = {
 };
 
 type Relay = Awaited<ReturnType<typeof startRelay>>;
-
-function tone(seconds: number, gain: number) {
-  return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, 5), gain);
-}
-
-async function statusz(server: Relay) {
-  return (await fetch(server.httpUrl('/statusz'))).json();
-}
 
 async function room(server: Relay, { robot = false } = {}) {
   const backing = await RelayClient.connectInfrastructure(server);
@@ -158,9 +149,7 @@ test('a Desktop Source that does not come back leaves a singing room live, voice
 test('a Desktop Source that does not come back stops a room nobody is singing in', async () => {
   const server = await startRelay({ ...FAST, RELAY_BACKING_GRACE_MS: '250' });
   try {
-    const backing = await RelayClient.connectInfrastructure(server);
-    backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
-    await backing.waitForType('registered');
+    const backing = await RelayClient.connectBacking(server, { robot: true });
     await sendPcmInChunks(backing, tone(0.5, 0.8));
     const before = await statusz(server);
     assert.equal(before.mix.active, true);

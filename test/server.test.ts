@@ -5,12 +5,13 @@ import {
   LEGACY_IDENTITY,
   RelayClient,
   laggedPair,
+  primeStreams,
   sendPcmInChunks,
   sleep,
   startCalibrationCollecting,
   startRelay,
-  toInt16,
-  pulseTrain,
+  statusz,
+  tone,
   waitForNewMessage,
   type RelayServer,
 } from './helpers/harness.js';
@@ -20,7 +21,6 @@ const RATE = 48_000;
 const FAST = {
   RELAY_LIVE_PREBUFFER_MS: '200',
   RELAY_CALIBRATION_TIMEOUT_MS: '1500',
-  RELAY_HEARTBEAT_MS: '60000',
   // Off by default here so tests that drive calibration by hand are not racing
   // the unattended trigger. The auto path has its own test.
   RELAY_AUTO_CALIBRATE: '0',
@@ -31,22 +31,6 @@ const FAST = {
 
 function silence(seconds: number) {
   return Buffer.alloc(Math.round(RATE * seconds) * 2);
-}
-
-function tone(seconds: number, gain = 0.6, seed = 5) {
-  return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, seed), gain);
-}
-
-/**
- * Gets audio genuinely moving on both sides. Calibration refuses to start
- * against a registered-but-silent client, because that spends the whole window
- * receiving nothing and says only that progress stopped.
- */
-async function primeStreams(backing: RelayClient, publisher: RelayClient) {
-  await Promise.all([
-    sendPcmInChunks(backing, tone(0.5, 0.8)),
-    sendPcmInChunks(publisher, tone(0.5, 0.4)),
-  ]);
 }
 
 /**
@@ -67,17 +51,13 @@ async function anchorTogether(backing: RelayClient, publisher: RelayClient, moni
 }
 
 async function liveSession(server: RelayServer) {
-  const backing = await RelayClient.connectInfrastructure(server);
-  backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
-  await backing.waitForType('registered');
+  const backing = await RelayClient.connectBacking(server);
 
   const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
   publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
   await publisher.waitForType('registered');
 
-  const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
-  monitor.send({ type: 'register', role: 'monitor' });
-  await monitor.waitForType('registered');
+  const monitor = await RelayClient.connectMonitor(server);
   await monitor.waitForType('source-status');
 
   return { backing, publisher, monitor };
@@ -136,7 +116,7 @@ describe('remote status', () => {
   before(async () => { server = await startRelay(FAST); });
   after(async () => { await server.stop(); });
 
-  const status = async () => (await fetch(server.httpUrl('/statusz'))).json();
+  const status = () => statusz(server);
 
   test('calls a server with nothing connected idle rather than broken', async () => {
     const body = await status();
@@ -153,9 +133,7 @@ describe('remote status', () => {
    * or a collapsed capture looks like from the server.
    */
   test('faults when a connected source stops sending audio', async () => {
-    const backing = await RelayClient.connectInfrastructure(server);
-    backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
-    await backing.waitForType('registered');
+    const backing = await RelayClient.connectBacking(server);
     await sendPcmInChunks(backing, tone(0.3));
 
     const streaming = await status();
@@ -236,9 +214,7 @@ describe('microphone transport', () => {
   });
 
   test('forwards the authoritative voice-only mix to monitors when no source is connected', async () => {
-    const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
-    monitor.send({ type: 'register', role: 'monitor' });
-    await monitor.waitForType('registered');
+    const monitor = await RelayClient.connectMonitor(server);
 
     const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
@@ -394,12 +370,8 @@ describe('framed pcm', () => {
       }
     };
     try {
-      const backing = await RelayClient.connectInfrastructure(server);
-      backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
-      await backing.waitForType('registered');
-      const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
-      monitor.send({ type: 'register', role: 'monitor' });
-      await monitor.waitForType('registered');
+      const backing = await RelayClient.connectBacking(server);
+      const monitor = await RelayClient.connectMonitor(server);
       const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
       registerCapture(publisher);
       await publisher.waitFor((m) => m.type === 'registered' && m.role === 'publisher');
@@ -492,9 +464,7 @@ describe('mix settings', () => {
     phone.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await phone.waitForType('registered');
 
-    const desktop = await RelayClient.connectAs(server, 'listener', 'Listener');
-    desktop.send({ type: 'register', role: 'monitor' });
-    await desktop.waitForType('registered');
+    const desktop = await RelayClient.connectMonitor(server);
 
     phone.send({ type: 'set-mix', micGainDb: 18, songLevel: 25 });
 
@@ -536,9 +506,7 @@ describe('timing calibration', () => {
       publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
       await publisher.waitForType('registered');
 
-      const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
-      monitor.send({ type: 'register', role: 'monitor' });
-      await monitor.waitForType('registered');
+      const monitor = await RelayClient.connectMonitor(server);
 
       publisher.send({ type: 'start-timing-calibration' });
       const status = await monitor.waitFor((m) => m.type === 'timing-calibration-status' && m.state === 'failed');

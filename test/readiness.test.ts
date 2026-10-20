@@ -8,7 +8,6 @@ const RATE = 48_000;
 const FAST = {
   RELAY_AUTO_CALIBRATE: '0',
   RELAY_CALIBRATION_PROBE: '0',
-  RELAY_HEARTBEAT_MS: '60000',
 };
 
 function pcm(ms: number) {

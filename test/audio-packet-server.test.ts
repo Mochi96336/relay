@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { encodeAudioPacket } from '../src/audio-packet.js';
-import { RelayClient, sleep, startRelay, waitForNewMessage } from './helpers/harness.js';
+import { RelayClient, sleep, startRelay, statusz, waitForNewMessage } from './helpers/harness.js';
 
 const RATE = 48_000;
 
@@ -23,8 +23,7 @@ async function waitForBinaryFrames(client: RelayClient, count: number, timeoutMs
 }
 
 async function receiverStats(server: Awaited<ReturnType<typeof startRelay>>) {
-  const response = await fetch(server.httpUrl('/statusz'));
-  const status = await response.json() as any;
+  const status = await statusz(server);
   return status.audio?.receiverTransport as Record<string, number> | null;
 }
 
@@ -55,7 +54,6 @@ function registerV2(client: RelayClient, generation: number) {
 test('v2 media stays ordered and capture-authoritative across websocket reconnects', async () => {
   const server = await startRelay({
     RELAY_AUTO_CALIBRATE: '0',
-    RELAY_HEARTBEAT_MS: '60000',
     RELAY_PARTICIPANT_GRACE_MS: '500',
     RELAY_MIC_TRANSPORT_GRACE_MS: '500',
     RELAY_AUDIO_REORDER_WINDOW_PACKETS: '4',
@@ -70,9 +68,7 @@ test('v2 media stays ordered and capture-authoritative across websocket reconnec
 
   try {
     const presence = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
-    const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
-    monitor.send({ type: 'register', role: 'monitor' });
-    await monitor.waitForType('registered');
+    const monitor = await RelayClient.connectMonitor(server);
 
     const publisher = await RelayClient.connectAs(server, 'participant-alice', 'Alice');
     registerV2(publisher, 7);

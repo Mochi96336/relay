@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
 import test, { describe } from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import {
   DEFAULT_TIMING_CALIBRATION_ANALYSIS_TIMEOUT_MS,
@@ -29,7 +30,7 @@ describe('timing calibration worker', () => {
     );
 
     const timerStarted = performance.now();
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await sleep(25);
     const timerDelay = performance.now() - timerStarted;
     assert.ok(timerDelay < 150, `main-thread timer was delayed ${timerDelay.toFixed(1)} ms`);
 

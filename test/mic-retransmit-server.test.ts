@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { encodeAudioPacket } from '../src/audio-packet.js';
-import { RelayClient, sleep, startRelay } from './helpers/harness.js';
+import { RelayClient, sleep, startRelay, statusz } from './helpers/harness.js';
 import { uplinkHealthReport } from './support/uplink-health.js';
 
 const CHUNK = 960;
@@ -34,14 +34,9 @@ function packet(generation: number, sequence: number) {
   });
 }
 
-async function statusz(server: Awaited<ReturnType<typeof startRelay>>) {
-  return fetch(server.httpUrl('/statusz')).then((response) => response.json()) as Promise<any>;
-}
-
 async function runLoss(retransmitBufferPackets: number | undefined, tailPackets = 10) {
   const server = await startRelay({
     RELAY_AUTO_CALIBRATE: '0',
-    RELAY_HEARTBEAT_MS: '60000',
   });
   try {
     const generation = 11;

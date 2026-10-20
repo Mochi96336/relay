@@ -40,7 +40,6 @@ const PROBE_FAST = {
   RELAY_AUTO_CALIBRATION_RETRY_MS: '100',
   RELAY_CALIBRATION_AGREEMENT: '1',
   RELAY_CALIBRATION_TIMEOUT_MS: '20000',
-  RELAY_HEARTBEAT_MS: '60000',
 };
 
 async function waitForActiveLag(monitor: RelayClient, expectedMs: number, timeoutMs: number, from?: number) {

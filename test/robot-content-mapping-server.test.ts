@@ -2,22 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { RelayClient, pulseTrain, sleep, startRelay, toInt16, waitForNewMessage } from './helpers/harness.js';
-import { completeRoomSongCommand, playingRoomSong } from './support/client-commands.js';
+import { completeRoomSongCommand, playingRoomSong, timingStatus } from './support/client-commands.js';
 
 const RATE = 48_000;
 const FAST = {
   RELAY_LIVE_PREBUFFER_MS: '200',
-  RELAY_HEARTBEAT_MS: '60000',
   RELAY_AUTO_CALIBRATE: '0',
   RELAY_CALIBRATION_PROBE: '0',
   RELAY_CALIBRATION_VALIDATION: '0',
 };
-
-async function timingStatus(monitor: RelayClient) {
-  const from = monitor.messages.length;
-  monitor.send({ type: 'timing-calibration-status-request' });
-  return waitForNewMessage(monitor, from, (message) => message.type === 'timing-calibration-status');
-}
 
 test('a Robot player that jumps away from the room timeline loses its delta, then starts over', async () => {
   const server = await startRelay(FAST);

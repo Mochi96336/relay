@@ -1,13 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import { BackingRuntime } from '../src/backing-runtime.js';
 
 type FakeSocket = { id: string; open: boolean };
-
-function delay(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
 
 test('BackingRuntime owns backing identity, format, route kind and frame freshness', () => {
   const first: FakeSocket = { id: 'first', open: true };

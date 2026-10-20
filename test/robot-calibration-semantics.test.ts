@@ -12,7 +12,6 @@ const RATE = 48_000;
 const ROBOT_FAST = {
   RELAY_LIVE_PREBUFFER_MS: '200',
   RELAY_CALIBRATION_TIMEOUT_MS: '1500',
-  RELAY_HEARTBEAT_MS: '60000',
   RELAY_AUTO_CALIBRATE: '0',
   RELAY_CALIBRATION_AGREEMENT: '1',
   RELAY_CALIBRATION_PROBE: '1',
@@ -26,9 +25,7 @@ const ROBOT_FAST = {
 test('Robot manual realignment starts boot-probe from fresh silent capture without YouTube telemetry', async () => {
   const server = await startRelay(ROBOT_FAST);
   try {
-    const backing = await RelayClient.connectInfrastructure(server);
-    backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
-    await backing.waitForType('registered');
+    const backing = await RelayClient.connectBacking(server, { robot: true });
 
     const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });

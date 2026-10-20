@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { participantIdFor, RelayClient, startRelay, waitForNewMessage } from './helpers/harness.js';
+import { participantIdFor, RelayClient, startRelay, statusz, waitForNewMessage } from './helpers/harness.js';
 
 const RATE = 48_000;
 const FAST = {
-  RELAY_HEARTBEAT_MS: '60000',
   RELAY_AUTO_CALIBRATE: '0',
   RELAY_PARTICIPANT_GRACE_MS: '250',
   RELAY_MIC_TRANSPORT_GRACE_MS: '250',
@@ -130,7 +129,7 @@ test('a registered Mic gain is clamped, and an unusable one falls back to the de
 
 test('a premixed capture is mixed at unity until the next ordinary capture', async () => {
   const server = await startRelay(FAST);
-  const statusz = async () => (await fetch(server.httpUrl('/statusz')).then((response) => response.json()) as any).audio;
+  const statusAudio = async () => (await statusz(server)).audio;
   try {
     const observer = await RelayClient.connectAs(server, 'participant-watch', 'Watcher');
     await RelayClient.connectAs(server, 'participant-alice', 'Alice');
@@ -146,7 +145,7 @@ test('a premixed capture is mixed at unity until the next ordinary capture', asy
     await waitForNewMessage(observer, from, (message) => (
       message.type === 'product-status' && message.room?.localFile?.title === 'Second song'
     ));
-    let mic = await statusz();
+    let mic = await statusAudio();
     assert.equal(mic.micPremixed, true);
     assert.equal(mic.micLevel.micGainDb, 24, 'the room setting is kept for the next ordinary capture');
 
@@ -157,7 +156,7 @@ test('a premixed capture is mixed at unity until the next ordinary capture', asy
       message.type === 'product-status' && message.room?.mic?.ownerId && !message.room?.localFile
     ));
     await premixed.waitForType('publisher-superseded');
-    mic = await statusz();
+    mic = await statusAudio();
     assert.equal(mic.micPremixed, false);
     assert.equal(mic.micLevel.micGainDb, 24);
     ordinary.close();

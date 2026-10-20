@@ -8,6 +8,7 @@ import {
 } from '../src/content-calibration-validator.js';
 import type { CalibrationContext } from '../src/calibration-session.js';
 import type { TimingCalibrationAnalysis } from '../src/timing-calibration.js';
+import { deferred } from './support/deferred.js';
 
 const RATE = 48_000;
 const DURATION_MS = 6_000;
@@ -82,16 +83,6 @@ function makeHarness(options: {
     get now() { return now; },
     get changeCount() { return changeCount; },
   };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
 }
 
 function nextTurn() {

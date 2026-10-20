@@ -4,12 +4,11 @@ import { describe, test } from 'node:test';
 import {
   RelayClient,
   laggedPair,
-  pulseTrain,
+  primeStreams,
   sendPcmInChunks,
   sleep,
   startCalibrationCollecting,
   startRelay,
-  toInt16,
   waitForNewMessage,
   type RelayServer,
 } from './helpers/harness.js';
@@ -19,7 +18,6 @@ const RATE = 48_000;
 const FAST = {
   RELAY_LIVE_PREBUFFER_MS: '200',
   RELAY_CALIBRATION_TIMEOUT_MS: '5000',
-  RELAY_HEARTBEAT_MS: '60000',
   RELAY_AUTO_CALIBRATE: '0',
   RELAY_CALIBRATION_AGREEMENT: '1',
   RELAY_CALIBRATION_PROBE: '0',
@@ -29,35 +27,20 @@ const FAST = {
   RELAY_CALIBRATION_VALIDATION_DEVIATION_MS: '30',
 };
 
-function tone(seconds: number, gain = 0.6, seed = 5) {
-  return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, seed), gain);
-}
-
 async function liveSession(server: RelayServer) {
-  const backing = await RelayClient.connectInfrastructure(server);
-  backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
-  await backing.waitForType('registered');
+  const backing = await RelayClient.connectBacking(server);
 
   const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
   publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
   await publisher.waitForType('registered');
 
-  const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
-  monitor.send({ type: 'register', role: 'monitor' });
-  await monitor.waitForType('registered');
+  const monitor = await RelayClient.connectMonitor(server);
 
   const songTelemetry = await playingRoomSong(publisher);
   return { backing, publisher, monitor, songTelemetry };
 }
 
 type LiveSession = Awaited<ReturnType<typeof liveSession>>;
-
-async function primeStreams(backing: RelayClient, publisher: RelayClient) {
-  await Promise.all([
-    sendPcmInChunks(backing, tone(0.5, 0.8)),
-    sendPcmInChunks(publisher, tone(0.5, 0.4)),
-  ]);
-}
 
 function refreshLivePath({ backing, publisher, songTelemetry }: LiveSession) {
   publisher.send(songTelemetry());

@@ -20,6 +20,12 @@ export function manualTimers() {
       callback();
       return true;
     },
+    /** Runs timers, including ones they schedule, until none is left or `limit` ran. */
+    drain(limit = 100) {
+      let count = 0;
+      while (count < limit && this.runNext()) count += 1;
+      return count;
+    },
     pending() {
       return tasks.size;
     },

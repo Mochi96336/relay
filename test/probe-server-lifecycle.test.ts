@@ -18,13 +18,10 @@ const PROBE_FAST = {
   RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS: '200',
   RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS: '1500',
   RELAY_CALIBRATION_PROBE_MIN_CORRELATION: '0',
-  RELAY_HEARTBEAT_MS: '60000',
 };
 
 async function robotSession(server: Awaited<ReturnType<typeof startRelay>>) {
-  const backing = await RelayClient.connectInfrastructure(server);
-  backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
-  await backing.waitForType('registered');
+  const backing = await RelayClient.connectBacking(server, { robot: true });
 
   const publisher = await RelayClient.connectAs(server, 'probe-singer', 'Singer');
   publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
@@ -33,9 +30,7 @@ async function robotSession(server: Awaited<ReturnType<typeof startRelay>>) {
   const robot = await RelayClient.connectInfrastructure(server);
   robot.send({ type: 'robot-source-hello' });
 
-  const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
-  monitor.send({ type: 'register', role: 'monitor' });
-  await monitor.waitForType('registered');
+  const monitor = await RelayClient.connectMonitor(server);
 
   const keepFlowing = setInterval(() => {
     backing.sendPcm(FRAME);

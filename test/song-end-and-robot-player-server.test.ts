@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { RelayClient, sleep, startRelay, waitForNewMessage, type RelayServer } from './helpers/harness.js';
+import { RelayClient, sleep, startRelay, statusz, waitForNewMessage, type RelayServer } from './helpers/harness.js';
+import { registerPlayback } from './support/client-commands.js';
 
 const VIDEO = 'nqooEdrsPoo';
 const FAST = {
-  RELAY_HEARTBEAT_MS: '60000',
   RELAY_AUTO_CALIBRATE: '0',
   RELAY_CALIBRATION_PROBE: '0',
 };
@@ -25,8 +25,7 @@ function telemetry(state: number, currentTime: number, duration: number) {
 /** A phone that holds playback of VIDEO, loaded and, if asked, playing. */
 async function holder(server: RelayServer, duration: number, play: boolean) {
   const phone = await RelayClient.connectAs(server, 'song-holder-123', 'Holder');
-  phone.send({ type: 'playback-hello', playbackTransportId: 'holder-playback', playbackGeneration: 1 });
-  await phone.waitFor((message) => message.type === 'playback-registered');
+  await registerPlayback(phone, 'holder-playback');
 
   phone.send({
     type: 'room-song-command',
@@ -106,9 +105,9 @@ test("a video the Robot cannot play is named in product status until it plays ag
       affects: ['song', 'recording'],
       recovery: 'change-song',
     });
-    const statusz = await (await fetch(server.httpUrl('/statusz'))).json() as any;
-    assert.deepEqual(statusz.robot.playerError, { videoId: VIDEO, code: 150, unplayable: true });
-    assert.equal(statusz.source.micArriving, false, 'statusz names Mic arrival apart from playability');
+    const status = await statusz(server);
+    assert.deepEqual(status.robot.playerError, { videoId: VIDEO, code: 150, unplayable: true });
+    assert.equal(status.source.micArriving, false, 'statusz names Mic arrival apart from playability');
 
     robot.send({ type: 'robot-player-status', videoId: VIDEO, errorCode: null });
     await sleep(50);

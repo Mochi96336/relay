@@ -1,24 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { deferred } from './support/deferred.js';
 const { CalibrationProbePlayback } = await import(new URL('../public/calibration-probe-playback.js', import.meta.url).href);
-
-function deferred() {
-  let resolve!: () => void;
-  let reject!: (reason: Error) => void;
-  const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
-  return { promise, resolve, reject };
-}
 
 function fixture() {
   const messages: any[] = [];
-  const resumes: ReturnType<typeof deferred>[] = [];
+  const resumes: ReturnType<typeof deferred<void>>[] = [];
   const oscillators: any[] = [];
   const gains: any[] = [];
   const send = { sent: true, reason: null as string | null };
   let staleCalls = 0;
   const context = {
     currentTime: 10, state: 'running',
-    resume() { const wait = deferred(); resumes.push(wait); return wait.promise; },
+    resume() { const wait = deferred<void>(); resumes.push(wait); return wait.promise; },
     createOscillator() {
       const node = {
         frequency: { value: 0 }, starts: [] as number[], stops: [] as (number | undefined)[],

@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { participantIdFor, RelayClient, startRelay } from './helpers/harness.js';
+import { playRoomSong, registerPlayback } from './support/client-commands.js';
 import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
 const RATE = 48_000;
 const VIDEO = 'dQw4w9WgXcQ';
 const FAST = {
   RELAY_AUTO_CALIBRATE: '0',
-  RELAY_HEARTBEAT_MS: '60000',
 };
 
 const A_ID = participantIdFor('A');
@@ -20,11 +20,7 @@ async function playback(
   transportId: string,
 ) {
   const client = await RelayClient.connectAs(server, name);
-  client.send({ type: 'playback-hello', playbackTransportId: transportId, playbackGeneration: 1 });
-  await client.waitFor((message) => (
-    message.type === 'playback-registered'
-    && message.playbackTransportId === transportId
-  ));
+  await registerPlayback(client, transportId);
   return client;
 }
 
@@ -52,42 +48,6 @@ function telemetry(currentTime: number, state = 1) {
   return { type: 'youtube-telemetry', ...youtubeTelemetry({ state, currentTime }) };
 }
 
-async function establishPlayingRoom(client: RelayClient, currentTime = 10) {
-  client.send({
-    type: 'room-song-command',
-    commandId: 'epoch-base-load',
-    expectedRevision: 0,
-    action: 'load',
-    videoId: VIDEO,
-    positionSeconds: currentTime,
-  });
-  await client.waitFor((message) => (
-    message.type === 'room-song-command-apply'
-    && message.commandId === 'epoch-base-load'
-  ));
-  client.send(telemetry(currentTime, 5));
-  await client.waitFor((message) => (
-    message.type === 'room-song-command-complete'
-    && message.commandId === 'epoch-base-load'
-  ));
-
-  client.send({
-    type: 'room-song-command',
-    commandId: 'epoch-base-play',
-    expectedRevision: 1,
-    action: 'play',
-  });
-  await client.waitFor((message) => (
-    message.type === 'room-song-command-apply'
-    && message.commandId === 'epoch-base-play'
-  ));
-  client.send(telemetry(currentTime + 0.05, 1));
-  await client.waitFor((message) => (
-    message.type === 'room-song-command-complete'
-    && message.commandId === 'epoch-base-play'
-  ));
-}
-
 async function leavePendingSeek(client: RelayClient) {
   client.send({
     type: 'room-song-command',
@@ -112,7 +72,7 @@ test('Mic takeover terminates the prior owner intent before prepared playback ha
   try {
     const aPlayback = await playback(server, 'A', 'playback-epoch-a');
     const aPublisher = await publisher(server, 'A');
-    await establishPlayingRoom(aPlayback);
+    await playRoomSong(aPlayback, { prefix: 'epoch-base' });
     await leavePendingSeek(aPlayback);
 
     const bPlayback = await playback(server, 'B', 'playback-epoch-b');
@@ -169,7 +129,7 @@ test('explicit Mic release terminates pending intent and late proof cannot resur
   try {
     const aPlayback = await playback(server, 'A', 'playback-release-a');
     const aPublisher = await publisher(server, 'A');
-    await establishPlayingRoom(aPlayback);
+    await playRoomSong(aPlayback, { prefix: 'epoch-base' });
     await leavePendingSeek(aPlayback);
 
     aPlayback.send({ type: 'release-mic' });

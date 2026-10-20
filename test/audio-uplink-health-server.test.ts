@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { RelayClient, sleep, startRelay } from './helpers/harness.js';
+import { RelayClient, sleep, startRelay, statusz } from './helpers/harness.js';
 import { uplinkHealthReport } from './support/uplink-health.js';
 
 function uplinkHealth(generation: number) {
@@ -79,7 +79,6 @@ function calibrationAuthorityProjection(status: Record<string, any>) {
 test('statusz separates browser uplink, receiver transport and timeline evidence', async () => {
   const server = await startRelay({
     RELAY_AUTO_CALIBRATE: '0',
-    RELAY_HEARTBEAT_MS: '60000',
   });
 
   try {
@@ -103,7 +102,7 @@ test('statusz separates browser uplink, receiver transport and timeline evidence
       'capture level telemetry must not start, fail, or apply calibration authority',
     );
 
-    const status = await fetch(server.httpUrl('/statusz')).then((response) => response.json()) as any;
+    const status = await statusz(server);
     assert.equal(status.audio.micMediaPath, 'websocket');
     assert.equal(status.audio.captureAndSender.captureGeneration, 7);
     assert.equal(status.audio.captureAndSender.inputGapSamples, 128);
@@ -155,7 +154,7 @@ test('statusz separates browser uplink, receiver transport and timeline evidence
     malformed.captureLevel = { peakDbfs: -40, rmsDbfs: -20 };
     publisher.send(malformed);
     await sleep(20);
-    const afterMalformed = await fetch(server.httpUrl('/statusz')).then((response) => response.json()) as any;
+    const afterMalformed = await statusz(server);
     assert.equal(
       afterMalformed.audio.captureAndSender.capturedSamples,
       96_000,
@@ -172,7 +171,7 @@ test('statusz separates browser uplink, receiver transport and timeline evidence
 
     publisher.send(uplinkHealth(6));
     await sleep(20);
-    const stale = await fetch(server.httpUrl('/statusz')).then((response) => response.json()) as any;
+    const stale = await statusz(server);
     assert.equal(stale.audio.captureAndSender.captureGeneration, 7, 'wrong-generation telemetry is ignored');
 
     publisher.close();
@@ -184,7 +183,6 @@ test('statusz separates browser uplink, receiver transport and timeline evidence
 test('statusz reports captured Mic audio that has not reached Relay yet', async () => {
   const server = await startRelay({
     RELAY_AUTO_CALIBRATE: '0',
-    RELAY_HEARTBEAT_MS: '60000',
   });
 
   try {
@@ -207,7 +205,7 @@ test('statusz reports captured Mic audio that has not reached Relay yet', async 
     publisher.send({ ...uplinkHealth(publisher.generationId), capturedSamples: 96_000 });
     await sleep(50);
 
-    const status = await fetch(server.httpUrl('/statusz')).then((response) => response.json()) as any;
+    const status = await statusz(server);
     assert.deepEqual(status.audio.micUplinkBacklog, {
       generation: publisher.generationId,
       backlogMs: 1_000,
@@ -234,7 +232,6 @@ test('statusz reports captured Mic audio that has not reached Relay yet', async 
 test('statusz names an old page instead of calling its arriving audio silent (#487)', async () => {
   const server = await startRelay({
     RELAY_AUTO_CALIBRATE: '0',
-    RELAY_HEARTBEAT_MS: '60000',
   });
 
   try {
@@ -256,7 +253,7 @@ test('statusz names an old page instead of calling its arriving audio silent (#4
     for (let packet = 0; packet < 10; packet += 1) publisher.sendAudioPacket(Buffer.alloc(480 * 2));
     await sleep(50);
 
-    const stale = await fetch(server.httpUrl('/statusz')).then((response) => response.json()) as any;
+    const stale = await statusz(server);
     assert.equal(stale.source.micStreaming, false);
     assert.deepEqual(stale.faults, [
       'microphone page is out of date and does not report its input state; reload the page',
@@ -267,7 +264,7 @@ test('statusz names an old page instead of calling its arriving audio silent (#4
     for (let packet = 0; packet < 10; packet += 1) publisher.sendAudioPacket(Buffer.alloc(480 * 2));
     await sleep(50);
 
-    const current = await fetch(server.httpUrl('/statusz')).then((response) => response.json()) as any;
+    const current = await statusz(server);
     assert.equal(current.source.micStreaming, true);
     assert.doesNotMatch(current.faults.join(' '), /out of date/);
   } finally {

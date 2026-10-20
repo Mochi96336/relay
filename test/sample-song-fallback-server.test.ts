@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { RelayClient, sleep, startRelay, waitForNewMessage } from './helpers/harness.js';
+import { registerPlayback } from './support/client-commands.js';
 const videoId = 'dQw4w9WgXcQ';
 test('real protocol selects sample/song fallback and withdraws it when both reporters stop', async () => {
   const server = await startRelay({ RELAY_SAMPLE_SONG_FALLBACK: 'sample-song',
@@ -10,8 +11,7 @@ test('real protocol selects sample/song fallback and withdraws it when both repo
     const phone = await RelayClient.connectAs(server, 'sample-song-phone', 'Phone'); clients.push(phone);
     phone.send({ type: 'register', role: 'publisher', sampleRate: 48000, captureGeneration: 1 });
     await phone.waitForType('registered');
-    phone.send({ type: 'playback-hello', playbackTransportId: 'sample-song-player', playbackGeneration: 1 });
-    await phone.waitForType('playback-registered');
+    await registerPlayback(phone, 'sample-song-player');
     const telemetry = (state: number, time: number, captureAnchor?: unknown) => phone.send({
       type: 'youtube-telemetry', videoId, state, currentTime: time, duration: 200, playbackRate: 1,
       playbackTransportId: 'sample-song-player', playbackGeneration: 1, networkRttMs: 40, captureAnchor,

@@ -3,21 +3,16 @@ import test from 'node:test';
 
 import {
   RelayClient,
-  pulseTrain,
   sendPcmInChunks,
   sleep,
   startRelay,
-  toInt16,
+  tone,
   waitForNewMessage,
 } from './helpers/harness.js';
 import { playRoomSong, registerPlayback } from './support/client-commands.js';
 import { probeAudio } from './support/probe-audio.js';
 
 const RATE = 48_000;
-
-function tone(seconds: number, gain = 0.6, seed = 5) {
-  return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, seed), gain);
-}
 
 function assertBootUsesDelta(status: Record<string, any>, expectedDeltaMs: number) {
   assert.equal(Math.round(status.robotPlayerOffsetMs), expectedDeltaMs);
@@ -31,7 +26,6 @@ function assertBootUsesDelta(status: Record<string, any>, expectedDeltaMs: numbe
 test('robot source disconnect suspends the applied delta until a fresh source offset arrives', async () => {
   const server = await startRelay({
     RELAY_LIVE_PREBUFFER_MS: '200',
-    RELAY_HEARTBEAT_MS: '60000',
     RELAY_AUTO_CALIBRATE: '0',
     RELAY_CALIBRATION_PROBE: '1',
     RELAY_CALIBRATION_PROBE_RETRY_MS: '100',
@@ -45,17 +39,13 @@ test('robot source disconnect suspends the applied delta until a fresh source of
   });
 
   try {
-    const backing = await RelayClient.connectInfrastructure(server);
-    backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
-    await backing.waitForType('registered');
+    const backing = await RelayClient.connectBacking(server, { robot: true });
 
     const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
     await publisher.waitForType('registered');
 
-    const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
-    monitor.send({ type: 'register', role: 'monitor' });
-    await monitor.waitForType('registered');
+    const monitor = await RelayClient.connectMonitor(server);
 
     const robot = await RelayClient.connectInfrastructure(server);
     robot.send({ type: 'robot-source-hello' });

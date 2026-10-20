@@ -14,6 +14,13 @@ export async function registerPlayback(client: RelayClient, transportId: string,
   ));
 }
 
+/** Asks for timing calibration status and waits for the reply. */
+export async function timingStatus(monitor: RelayClient) {
+  const from = monitor.messages.length;
+  monitor.send({ type: 'timing-calibration-status-request' });
+  return waitForNewMessage(monitor, from, (message) => message.type === 'timing-calibration-status');
+}
+
 /** Asks for product status and waits for one that satisfies `predicate`. */
 export async function requestProductStatus(
   client: RelayClient,
@@ -49,6 +56,37 @@ export async function completeRoomSongCommand(
   ));
 }
 
+const VIDEO = 'dQw4w9WgXcQ';
+
+/** What a playback tab reports about the room Song at `currentTime`. */
+function songTelemetry(videoId: string, state: number, currentTime: number) {
+  return {
+    type: 'youtube-telemetry',
+    videoId,
+    state,
+    currentTime,
+    duration: 200,
+    playbackRate: 1,
+    bufferedFraction: 0.8,
+  };
+}
+
+/**
+ * Loads a room Song through the command path and leaves it cued at
+ * `positionSeconds`. `client` must already be a registered playback tab
+ * (registerPlayback).
+ */
+export async function loadRoomSong(
+  client: RelayClient,
+  { videoId = VIDEO, positionSeconds = 10, commandId = 'room-song-load', expectedRevision = 0 } = {},
+) {
+  await completeRoomSongCommand(
+    client,
+    { commandId, expectedRevision, action: 'load', videoId, positionSeconds },
+    songTelemetry(videoId, 5, positionSeconds),
+  );
+}
+
 /**
  * Loads and plays a room Song through the command path, the way the product
  * does. `client` must already be a registered playback tab (registerPlayback);
@@ -57,26 +95,13 @@ export async function completeRoomSongCommand(
  */
 export async function playRoomSong(
   client: RelayClient,
-  { videoId = 'dQw4w9WgXcQ', positionSeconds = 10, prefix = 'room-song', expectedRevision = 0 } = {},
+  { videoId = VIDEO, positionSeconds = 10, prefix = 'room-song', expectedRevision = 0 } = {},
 ) {
-  const telemetry = (state: number, currentTime: number) => ({
-    type: 'youtube-telemetry',
-    videoId,
-    state,
-    currentTime,
-    duration: 200,
-    playbackRate: 1,
-    bufferedFraction: 0.8,
-  });
-  await completeRoomSongCommand(
-    client,
-    { commandId: `${prefix}-load`, expectedRevision, action: 'load', videoId, positionSeconds },
-    telemetry(5, positionSeconds),
-  );
+  await loadRoomSong(client, { videoId, positionSeconds, commandId: `${prefix}-load`, expectedRevision });
   await completeRoomSongCommand(
     client,
     { commandId: `${prefix}-play`, expectedRevision: expectedRevision + 1, action: 'play' },
-    telemetry(1, positionSeconds + 0.05),
+    songTelemetry(videoId, 1, positionSeconds + 0.05),
   );
 }
 
@@ -93,13 +118,7 @@ export async function playingRoomSong(
   await playRoomSong(client, { positionSeconds });
   const playingSinceMs = Date.now();
   return () => ({
-    type: 'youtube-telemetry',
-    videoId: 'dQw4w9WgXcQ',
-    state: 1,
-    currentTime: positionSeconds + 0.05 + (Date.now() - playingSinceMs) / 1_000,
-    duration: 200,
-    playbackRate: 1,
-    bufferedFraction: 0.8,
+    ...songTelemetry(VIDEO, 1, positionSeconds + 0.05 + (Date.now() - playingSinceMs) / 1_000),
     networkRttMs: 40,
   });
 }

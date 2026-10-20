@@ -5,8 +5,8 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { participantIdFor, RelayClient, sleep, startRelay, waitForNewMessage, type RelayServer } from './helpers/harness.js';
+import { loadRoomSong, registerPlayback } from './support/client-commands.js';
 import { uplinkHealthReport } from './support/uplink-health.js';
-import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
 const RATE = 48_000;
 const FRAME_SAMPLES = 960;
@@ -14,16 +14,11 @@ const VIDEO = 'dQw4w9WgXcQ';
 const FAST = {
   RELAY_AUTO_CALIBRATE: '0',
   RELAY_CALIBRATION_PROBE: '0',
-  RELAY_HEARTBEAT_MS: '60000',
   RELAY_LIVE_PREBUFFER_MS: '40',
 };
 
 function keyQuery(key?: string) {
   return key ? `?key=${encodeURIComponent(key)}` : '';
-}
-
-function telemetry(currentTime: number, state = 5) {
-  return { type: 'youtube-telemetry', ...youtubeTelemetry({ state, currentTime }) };
 }
 
 function pcmFrame(value: number) {
@@ -32,37 +27,9 @@ function pcmFrame(value: number) {
   return frame;
 }
 
-async function playback(client: RelayClient, transportId: string) {
-  client.send({ type: 'playback-hello', playbackTransportId: transportId, playbackGeneration: 1 });
-  await client.waitFor((message) => (
-    message.type === 'playback-registered'
-    && message.playbackTransportId === transportId
-  ));
-}
-
 async function establishRoomSong(client: RelayClient, transportId: string) {
-  await playback(client, transportId);
-  client.send({
-    type: 'room-song-command',
-    commandId: `load-${transportId}`,
-    expectedRevision: 0,
-    action: 'load',
-    videoId: VIDEO,
-    positionSeconds: 0,
-  });
-  await client.waitFor((message) => (
-    message.type === 'room-song-command-accepted'
-    && message.commandId === `load-${transportId}`
-  ));
-  await client.waitFor((message) => (
-    message.type === 'room-song-command-apply'
-    && message.commandId === `load-${transportId}`
-  ));
-  client.send(telemetry(0));
-  await client.waitFor((message) => (
-    message.type === 'room-song-command-complete'
-    && message.commandId === `load-${transportId}`
-  ));
+  await registerPlayback(client, transportId);
+  await loadRoomSong(client, { positionSeconds: 0, commandId: `load-${transportId}` });
 }
 
 async function startBacking(server: RelayServer, key?: string) {
@@ -379,22 +346,11 @@ test('a Take survives Mic takeover and can be stopped by the new participant wit
   const server = await startRelay({ ...FAST, RELAY_TAKE_DIR: directory });
   try {
     const a = await RelayClient.connectAs(server, 'participant-a', 'A');
-    await playback(a, 'takeover-playback-a');
+    await registerPlayback(a, 'takeover-playback-a');
     a.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
     await a.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
 
-    a.send({
-      type: 'room-song-command',
-      commandId: 'takeover-load',
-      expectedRevision: 0,
-      action: 'load',
-      videoId: VIDEO,
-      positionSeconds: 0,
-    });
-    await a.waitFor((message) => message.type === 'room-song-command-accepted' && message.commandId === 'takeover-load');
-    await a.waitFor((message) => message.type === 'room-song-command-apply' && message.commandId === 'takeover-load');
-    a.send(telemetry(0));
-    await a.waitFor((message) => message.type === 'room-song-command-complete' && message.commandId === 'takeover-load');
+    await loadRoomSong(a, { positionSeconds: 0, commandId: 'takeover-load' });
 
     const backing = await startBacking(server);
     feedMic(a, 8);
@@ -488,22 +444,11 @@ test('a sustained backing outage is attached to the Take and degrades the final 
   });
   try {
     const control = await RelayClient.connectAs(server, 'participant-a', 'A');
-    await playback(control, 'quality-playback-a');
+    await registerPlayback(control, 'quality-playback-a');
     control.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
     await control.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
 
-    control.send({
-      type: 'room-song-command',
-      commandId: 'quality-load',
-      expectedRevision: 0,
-      action: 'load',
-      videoId: VIDEO,
-      positionSeconds: 0,
-    });
-    await control.waitFor((message) => message.type === 'room-song-command-accepted' && message.commandId === 'quality-load');
-    await control.waitFor((message) => message.type === 'room-song-command-apply' && message.commandId === 'quality-load');
-    control.send(telemetry(0));
-    await control.waitFor((message) => message.type === 'room-song-command-complete' && message.commandId === 'quality-load');
+    await loadRoomSong(control, { positionSeconds: 0, commandId: 'quality-load' });
 
     let backing = await startBacking(server);
     feedMic(control, 60);

@@ -3,19 +3,15 @@ import test from 'node:test';
 
 import {
   RelayClient,
-  pulseTrain,
   sendPcmInChunks,
   startRelay,
-  toInt16,
+  statusz,
+  tone,
   waitForNewMessage,
 } from './helpers/harness.js';
 
 const RATE = 48_000;
-const FAST = { RELAY_AUTO_CALIBRATE: '0', RELAY_HEARTBEAT_MS: '60000' };
-
-function tone(seconds: number, gain = 0.6, seed = 5) {
-  return toInt16(pulseTrain(Math.round(RATE * seconds), RATE, seed), gain);
-}
+const FAST = { RELAY_AUTO_CALIBRATE: '0' };
 
 test('a backing WebSocket cannot morph into a monitor and split readiness from PCM ingest', async () => {
   const server = await startRelay(FAST);
@@ -35,7 +31,7 @@ test('a backing WebSocket cannot morph into a monitor and split readiness from P
     assert.equal(conflict.requestedRole, 'monitor');
 
     await sendPcmInChunks(backing, tone(0.35, 0.7));
-    const status = await (await fetch(server.httpUrl('/statusz'))).json() as Record<string, any>;
+    const status = await statusz(server);
     assert.equal(status.source.backingConnected, true);
     assert.equal(
       status.source.backingStreaming,
@@ -66,7 +62,7 @@ test('a publisher WebSocket cannot become a monitor while the Mic pointer still 
     assert.equal(conflict.requestedRole, 'monitor');
 
     await sendPcmInChunks(publisher, tone(0.35, 0.4));
-    const status = await (await fetch(server.httpUrl('/statusz'))).json() as Record<string, any>;
+    const status = await statusz(server);
     assert.equal(status.source.micConnected, true);
     assert.equal(status.source.micStreaming, true);
     publisher.close();

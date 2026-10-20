@@ -1,12 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { RelayClient, participantIdFor, sleep, startRelay } from './helpers/harness.js';
+import { RelayClient, participantIdFor, sleep, startRelay, statusz } from './helpers/harness.js';
 
 const RATE = 48_000;
 const FAST = {
   RELAY_AUTO_CALIBRATE: '0',
-  RELAY_HEARTBEAT_MS: '60000',
 };
 
 function pcm(ms: number) {
@@ -16,7 +15,7 @@ function pcm(ms: number) {
 test('/statusz, /readyz and product-status agree that a completely unarmed room is healthy idle', async () => {
   const server = await startRelay(FAST);
   try {
-    const remote = await (await fetch(server.httpUrl('/statusz'))).json() as any;
+    const remote = await statusz(server);
     assert.equal(remote.ok, true);
     assert.equal(remote.state, 'idle');
 
@@ -55,7 +54,7 @@ test('arming the Robot source makes missing Robot audio a blocker everywhere', a
     robot.send({ type: 'robot-source-hello' });
     await sleep(30);
 
-    const remote = await (await fetch(server.httpUrl('/statusz'))).json() as any;
+    const remote = await statusz(server);
     assert.equal(remote.ok, false);
     assert.equal(remote.state, 'fault');
     assert.equal(remote.robot.route, true);
@@ -91,13 +90,11 @@ test('arming the Robot source makes missing Robot audio a blocker everywhere', a
 test('a legacy backing route stays healthy without Robot identity or player delta', async () => {
   const server = await startRelay(FAST);
   try {
-    const backing = await RelayClient.connectInfrastructure(server);
-    backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
-    await backing.waitForType('registered');
+    const backing = await RelayClient.connectBacking(server);
     backing.sendPcm(pcm(40));
     await sleep(30);
 
-    const remote = await (await fetch(server.httpUrl('/statusz'))).json() as any;
+    const remote = await statusz(server);
     assert.equal(remote.ok, true);
     assert.equal(remote.state, 'live');
     assert.equal(remote.robot.route, false);
@@ -119,9 +116,7 @@ test('a legacy backing route stays healthy without Robot identity or player delt
 test('stale Backing catch-up stays transport-streaming but is not product-playable', async () => {
   const server = await startRelay(FAST);
   try {
-    const backing = await RelayClient.connectInfrastructure(server);
-    backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
-    await backing.waitForType('registered');
+    const backing = await RelayClient.connectBacking(server);
 
     // Establish the capture clock, then let the mixer run far beyond its
     // frontier while the socket itself remains connected.
@@ -165,9 +160,7 @@ test('legacy route expectation survives backing grace instead of collapsing to i
     RELAY_BACKING_GRACE_MS: '250',
   });
   try {
-    const backing = await RelayClient.connectInfrastructure(server);
-    backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
-    await backing.waitForType('registered');
+    const backing = await RelayClient.connectBacking(server);
     backing.sendPcm(pcm(40));
     await sleep(30);
 
@@ -180,7 +173,7 @@ test('legacy route expectation survives backing grace instead of collapsing to i
     assert.equal(readiness.components.route.mode, 'legacy');
     assert.ok(readiness.reasons.includes('backing-not-connected'));
 
-    const remote = await (await fetch(server.httpUrl('/statusz'))).json() as any;
+    const remote = await statusz(server);
     assert.equal(remote.ok, false);
     assert.equal(remote.state, 'fault');
     assert.equal(remote.robot.route, false);
@@ -213,9 +206,7 @@ test('Robot route expectation survives simultaneous source loss during backing g
     const robot = await RelayClient.connectInfrastructure(server);
     robot.send({ type: 'robot-source-hello' });
 
-    const backing = await RelayClient.connectInfrastructure(server);
-    backing.send({ type: 'register', role: 'backing', sampleRate: RATE, robot: true });
-    await backing.waitForType('registered');
+    const backing = await RelayClient.connectBacking(server, { robot: true });
     backing.sendPcm(pcm(40));
     await sleep(30);
 
@@ -230,7 +221,7 @@ test('Robot route expectation survives simultaneous source loss during backing g
     assert.ok(readiness.reasons.includes('backing-not-connected'));
     assert.ok(readiness.reasons.includes('robot-source-not-connected'));
 
-    const remote = await (await fetch(server.httpUrl('/statusz'))).json() as any;
+    const remote = await statusz(server);
     assert.equal(remote.ok, false);
     assert.equal(remote.state, 'fault');
     assert.equal(remote.robot.route, true);

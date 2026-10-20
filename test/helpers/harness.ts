@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import WebSocket from 'ws';
 
@@ -61,6 +62,8 @@ export function startRelay(env: Record<string, string> = {}): Promise<RelayServe
         PORT: '0',
         NODE_ENV: 'test',
         RELAY_INFRA_KEY: HARNESS_INFRA_KEY,
+        // Test clients answer pings themselves; no test is about liveness.
+        RELAY_HEARTBEAT_MS: '60000',
         ...env,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -195,6 +198,22 @@ export class RelayClient {
     return client;
   }
 
+  /** A listening participant's socket, registered as a monitor of the room mix. */
+  static async connectMonitor(server: RelayServer) {
+    const client = await RelayClient.connectAs(server, 'listener', 'Listener');
+    client.send({ type: 'register', role: 'monitor' });
+    await client.waitForType('registered');
+    return client;
+  }
+
+  /** The Desktop Source's backing socket at 48 kHz, registered; `robot` makes it the Robot's. */
+  static async connectBacking(server: RelayServer, { robot = false } = {}) {
+    const client = await RelayClient.connectInfrastructure(server);
+    client.send({ type: 'register', role: 'backing', sampleRate: 48_000, robot });
+    await client.waitForType('registered');
+    return client;
+  }
+
   send(payload: unknown) {
     this.socket.send(JSON.stringify(payload));
   }
@@ -300,7 +319,7 @@ export class RelayClient {
   }
 }
 
-export const sleep = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
+export { sleep };
 
 /**
  * Waits for a matching message received at or after `fromIndex`.
@@ -452,6 +471,11 @@ export function toInt16(values: Float64Array, gain = 1, noise = 0, seed = 11) {
   return output;
 }
 
+/** `seconds` of the seeded 48 kHz pulse train as Int16 PCM: stand-in Song or Mic audio. */
+export function tone(seconds: number, gain = 0.6, seed = 5) {
+  return toInt16(pulseTrain(Math.round(48_000 * seconds), 48_000, seed), gain);
+}
+
 /**
  * Builds a microphone/backing pair where the same events land `lagMs` later in
  * the microphone stream, which is the sign convention the server uses.
@@ -510,4 +534,21 @@ export async function sendPcmInChunks(client: RelayClient, pcm: Buffer, frameSam
     // Yield so the socket drains instead of building a multi-megabyte backlog.
     if ((offset / frameBytes) % 50 === 0) await sleep(0);
   }
+}
+
+/**
+ * Gets audio genuinely moving on both sides. Calibration refuses to start
+ * against a registered-but-silent client, because that spends the whole window
+ * receiving nothing and says only that progress stopped.
+ */
+export async function primeStreams(backing: RelayClient, mic: RelayClient) {
+  await Promise.all([
+    sendPcmInChunks(backing, tone(0.5, 0.8)),
+    sendPcmInChunks(mic, tone(0.5, 0.4)),
+  ]);
+}
+
+/** Relay's /statusz, as an operator would read it. */
+export async function statusz(server: RelayServer): Promise<any> {
+  return (await fetch(server.httpUrl('/statusz'))).json();
 }

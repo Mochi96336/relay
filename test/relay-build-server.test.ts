@@ -2,12 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { participantIdForCapability } from '../src/participant-capability.js';
-import { RelayClient, startRelay } from './helpers/harness.js';
+import { RelayClient, startRelay, statusz } from './helpers/harness.js';
 
 const FAST = {
   RELAY_AUTO_CALIBRATE: '0',
   RELAY_CALIBRATION_PROBE: '0',
-  RELAY_HEARTBEAT_MS: '60000',
 };
 
 async function authenticatedMic(server: Awaited<ReturnType<typeof startRelay>>, capability: string, build?: string) {
@@ -36,7 +35,7 @@ test('the served page, the authentication reply and /statusz agree on one build 
 
     const current = await authenticatedMic(server, 'ab'.repeat(32), served);
     assert.equal(current.authenticated.build, served);
-    const status = await fetch(server.httpUrl('/statusz')).then((response) => response.json()) as any;
+    const status = await statusz(server);
     assert.deepEqual(status.build, { relay: served, micPage: served });
     current.client.close();
   } finally {
@@ -50,7 +49,7 @@ test('a Mic page from before builds existed is visible as such in /statusz', asy
     const old = await authenticatedMic(server, 'cd'.repeat(32));
     const relay = old.authenticated.build;
     assert.match(relay, /^[0-9a-f]{12}$/, 'an old page simply ignores the field');
-    const status = await fetch(server.httpUrl('/statusz')).then((response) => response.json()) as any;
+    const status = await statusz(server);
     assert.deepEqual(status.build, { relay, micPage: null });
     old.client.close();
   } finally {

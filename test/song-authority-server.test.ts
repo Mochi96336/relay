@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { LEGACY_IDENTITY, participantIdFor, RelayClient, sleep, startRelay } from './helpers/harness.js';
-import { registerPlayback } from './support/client-commands.js';
+import { loadRoomSong, registerPlayback } from './support/client-commands.js';
 import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
 const VIDEO = 'dQw4w9WgXcQ';
@@ -17,30 +17,6 @@ function telemetry(currentTime: number, transportId = 'playback-transport-a', ge
   };
 }
 
-async function establishRoomSong(client: RelayClient, transportId: string, currentTime: number) {
-  client.send({
-    type: 'room-song-command',
-    commandId: 'authority-load-1',
-    expectedRevision: 0,
-    action: 'load',
-    videoId: VIDEO,
-    positionSeconds: currentTime,
-  });
-  await client.waitFor((message) => (
-    message.type === 'room-song-command-accepted'
-    && message.commandId === 'authority-load-1'
-  ));
-  await client.waitFor((message) => (
-    message.type === 'room-song-command-apply'
-    && message.commandId === 'authority-load-1'
-  ));
-  client.send(telemetry(currentTime, transportId, 1, 5));
-  await client.waitFor((message) => (
-    message.type === 'room-song-command-complete'
-    && message.commandId === 'authority-load-1'
-  ));
-}
-
 test('server keeps one authoritative participant playback transport', async () => {
   const server = await startRelay();
   try {
@@ -49,7 +25,7 @@ test('server keeps one authoritative participant playback transport', async () =
 
     await registerPlayback(a, 'playback-transport-a');
     await registerPlayback(b, 'playback-transport-b');
-    await establishRoomSong(a, 'playback-transport-a', 10);
+    await loadRoomSong(a, { positionSeconds: 10, commandId: 'authority-load-1' });
 
     a.send({ type: 'youtube-timeline-request' });
     const leader = await a.waitFor((message) => (
@@ -144,8 +120,7 @@ test('a rejected playback page is told why, once per reason', async () => {
 
     // Room song changes go through the command path now, so establish one that
     // way before testing what a competing player is told.
-    a.send({ type: 'playback-hello', playbackTransportId: 'playback-transport-a', playbackGeneration: 1 });
-    await a.waitForType('playback-registered');
+    await registerPlayback(a, 'playback-transport-a');
     a.send({
       type: 'room-song-command',
       commandId: 'command-load-authority',

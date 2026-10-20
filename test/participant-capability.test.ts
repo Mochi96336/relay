@@ -23,28 +23,10 @@ describe('participant capability', () => {
     assert.equal(participantCapabilityMatches(participantId ?? '', null), false);
   });
 
-  test('legacy fixture ids are test-only and production fails closed', () => {
-    const previousNodeEnv = process.env.NODE_ENV;
-    const previousLegacyGate = process.env.RELAY_TEST_LEGACY_PARTICIPANTS;
-    try {
-      assert.equal(browserParticipantIdentity('participant-alice'), false);
-
-      process.env.NODE_ENV = 'production';
-      process.env.RELAY_TEST_LEGACY_PARTICIPANTS = '1';
-      assert.equal(participantCapabilityMatches('participant-alice', null), false);
-
-      process.env.NODE_ENV = 'test';
-      delete process.env.RELAY_TEST_LEGACY_PARTICIPANTS;
-      assert.equal(participantCapabilityMatches('participant-alice', null), false);
-
-      process.env.RELAY_TEST_LEGACY_PARTICIPANTS = '1';
-      assert.equal(participantCapabilityMatches('participant-alice', null), true);
-    } finally {
-      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
-      else process.env.NODE_ENV = previousNodeEnv;
-      if (previousLegacyGate === undefined) delete process.env.RELAY_TEST_LEGACY_PARTICIPANTS;
-      else process.env.RELAY_TEST_LEGACY_PARTICIPANTS = previousLegacyGate;
-    }
+  test('an id that is not a browser id never matches any capability', () => {
+    assert.equal(browserParticipantIdentity('participant-alice'), false);
+    assert.equal(participantCapabilityMatches('participant-alice', null), false);
+    assert.equal(participantCapabilityMatches('participant-alice', 'ab'.repeat(32)), false);
   });
 
   test('rejects malformed participant capabilities for browser ids', () => {

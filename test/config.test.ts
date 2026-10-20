@@ -23,7 +23,6 @@ test('relay config owns remaining server-local deployment inputs', () => {
   const defaults = loadRelayConfig({});
   assert.equal(defaults.takeDir, 'takes');
   assert.equal(defaults.infrastructureKey, null);
-  assert.equal(defaults.legacyTestInfrastructure, false);
   assert.equal(defaults.monitorBacklogMs, 200);
   assert.equal(defaults.micFirstFrameTimeoutMs, 3_000);
   assert.equal(defaults.probeReplyTimeoutMs, 3_000);
@@ -37,8 +36,6 @@ test('relay config owns remaining server-local deployment inputs', () => {
   const configured = loadRelayConfig({
     RELAY_TAKE_DIR: './custom-takes',
     RELAY_INFRA_KEY: infrastructureKey,
-    NODE_ENV: 'test',
-    RELAY_TEST_LEGACY_INFRASTRUCTURE: '1',
     RELAY_MONITOR_BACKLOG_MS: '350',
     RELAY_MIC_FIRST_FRAME_TIMEOUT_MS: '4500',
     RELAY_CALIBRATION_PROBE_REPLY_TIMEOUT_MS: '4200',
@@ -50,7 +47,6 @@ test('relay config owns remaining server-local deployment inputs', () => {
   });
   assert.equal(configured.takeDir, './custom-takes');
   assert.equal(configured.infrastructureKey, infrastructureKey);
-  assert.equal(configured.legacyTestInfrastructure, true);
   assert.equal(configured.monitorBacklogMs, 350);
   assert.equal(configured.micFirstFrameTimeoutMs, 4_500);
   assert.equal(configured.probeReplyTimeoutMs, 4_200);
@@ -82,11 +78,6 @@ test('relay config owns remaining server-local deployment inputs', () => {
   assert.equal(legacyFallbacks.robotContentTransitionMaxWorkerFailures, 3);
 
   assert.equal(loadRelayConfig({ RELAY_TAKE_DIR: '' }).takeDir, '');
-  assert.equal(
-    loadRelayConfig({ NODE_ENV: 'production', RELAY_TEST_LEGACY_INFRASTRUCTURE: '1' })
-      .legacyTestInfrastructure,
-    false,
-  );
   assert.throws(
     () => loadRelayConfig({ RELAY_INFRA_KEY: 'ABC' }),
     /RELAY_INFRA_KEY must be a 64-character lowercase hexadecimal secret/,

@@ -27,20 +27,6 @@ const BUFFERING_STATE = 3;
 const PLAYING_STATE = 1;
 const PAUSED_STATE = 2;
 
-/**
- * The single synthetic playback identity shared by pre-participant clients.
- *
- * There is only ever one anonymous publisher transport at a time, so this is
- * one logical device rather than a population; each connection is a newer
- * incarnation of it, distinguished by its generation.
- *
- * It lives beside PlaybackIdentity rather than in the server module because
- * more than one authority layer has to recognise it, and two spellings of the
- * same identity would be a silent hole in whichever one drifted.
- */
-export const LEGACY_PLAYBACK_PARTICIPANT_ID = '__relay_legacy_publisher__';
-export const LEGACY_PLAYBACK_TRANSPORT_ID = 'legacy-publisher';
-
 export type PlaybackIdentity = {
   participantId: string;
   transportId: string;

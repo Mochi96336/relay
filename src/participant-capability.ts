@@ -21,16 +21,9 @@ export function participantIdForCapability(value: unknown) {
   return `participant-${digest.slice(0, 32)}`;
 }
 
-export function legacyTestParticipantIdentityEnabled() {
-  return process.env.NODE_ENV === 'test'
-    && process.env.RELAY_TEST_LEGACY_PARTICIPANTS === '1';
-}
-
 export function participantCapabilityMatches(participantId: string, value: unknown) {
-  if (!BROWSER_PARTICIPANT_PATTERN.test(participantId)) {
-    return legacyTestParticipantIdentityEnabled();
-  }
-  return participantIdForCapability(value) === participantId;
+  return BROWSER_PARTICIPANT_PATTERN.test(participantId)
+    && participantIdForCapability(value) === participantId;
 }
 
 export function browserParticipantIdentity(participantId: string) {

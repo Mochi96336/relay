@@ -40,7 +40,7 @@ test('server still owns registration authority, validation, and effects', () => 
   const factory = functionCode(protocol, 'createRelayRegistrationProtocol');
 
   assert.match(serverFlow, /canClaimSocketRole\(socket, 'publisher'\)/);
-  assert.match(serverFlow, /legacyTestParticipantIdentityEnabled\(\)/);
+  assert.match(serverFlow, /if \(!socket\.participantId\) \{/);
   assert.match(serverFlow, /validSampleRate\(payload\.sampleRate\)/);
   assert.match(serverFlow, /validAudioPacketVersion\(payload\.audioPacketVersion\)/);
   assert.match(serverFlow, /participants\.takeoverMic\(/);
@@ -49,7 +49,7 @@ test('server still owns registration authority, validation, and effects', () => 
   assert.match(serverFlow, /micRuntime\.bindPublisher\(/);
   assert.match(serverFlow, /retirePublisherTransport\(/);
 
-  assert.match(serverFlow, /infrastructureCapability\.authorized\(socket\)/);
+  assert.match(serverFlow, /infrastructureCapability\.authenticated\(socket\)/);
   assert.match(serverFlow, /canClaimSocketRole\(socket, 'backing'\)/);
   assert.match(serverFlow, /commitSocketRole\(socket, 'backing'\)/);
   assert.match(serverFlow, /backingRuntime\.bind\(/);

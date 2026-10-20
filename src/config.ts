@@ -80,8 +80,6 @@ export function loadRelayConfig(env: Env = process.env) {
     relayKey: rawValue(env, 'RELAY_KEY') ?? null,
     takeDir: env.RELAY_TAKE_DIR ?? 'takes',
     infrastructureKey: relayInfrastructureKey(env),
-    legacyTestInfrastructure: env.NODE_ENV === 'test'
-      && env.RELAY_TEST_LEGACY_INFRASTRUCTURE === '1',
     monitorBacklogMs: legacyPositiveNumber(env, 'RELAY_MONITOR_BACKLOG_MS', 200),
     monitorUnacknowledgedMs: envNumber(env, 'RELAY_MONITOR_UNACKNOWLEDGED_MS', 1_000, { min: 1 }),
     listenOpus: envBoolean(env, 'RELAY_LISTEN_OPUS', false),

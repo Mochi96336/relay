@@ -11,7 +11,7 @@ const server = parseTypeScriptSource(
 
 test('Robot hello keeps infrastructure and SourceRuntime attach authority in server', () => {
   const hello = objectArrowCallbackCode(server, 'robotLifecycleProtocol', 'robotSourceHello');
-  assert.match(hello, /infrastructureCapability\.authorized\(socket\)/);
+  assert.match(hello, /infrastructureCapability\.authenticated\(socket\)/);
   assert.match(hello, /sourceRuntime\.isActive\(socket\)/);
   assert.match(hello, /sourceRuntime\.attachRobot\(socket\)/);
   assert.match(hello, /robotSourceActivated\(previous, replaced\)/);

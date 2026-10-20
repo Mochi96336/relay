@@ -30,7 +30,6 @@ test('production rejects microphone registration before participant authenticati
   const server = await startRelay({
     ...FAST,
     NODE_ENV: 'production',
-    RELAY_TEST_LEGACY_PARTICIPANTS: '0',
   });
   try {
     const anonymous = await RelayClient.connect(server);

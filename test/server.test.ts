@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test, { after, before, describe } from 'node:test';
 
 import {
-  LEGACY_IDENTITY,
   RelayClient,
   laggedPair,
   primeStreams,
@@ -427,30 +426,6 @@ describe('framed pcm', () => {
     } finally {
       await server.stop();
     }
-  });
-});
-
-describe('publisher takeover', () => {
-  let server: RelayServer;
-  before(async () => { server = await startRelay({ ...FAST, ...LEGACY_IDENTITY }); });
-  after(async () => { await server.stop(); });
-
-  test('retires the old anonymous publisher with a terminal semantic message', async () => {
-    const first = await RelayClient.connect(server);
-    first.send({ type: 'register', role: 'publisher', sampleRate: RATE });
-    await first.waitForType('registered');
-
-    const second = await RelayClient.connect(server);
-    second.send({ type: 'register', role: 'publisher', sampleRate: RATE });
-
-    assert.equal((await second.waitForType('registered')).role, 'publisher');
-    assert.deepEqual(second.errors, []);
-    assert.match((await first.waitForType('mic-revoked')).message, /took over the microphone/i);
-    assert.deepEqual(first.errors, [], 'publisher replacement is protocol state, not a transport error');
-
-    first.close();
-    second.close();
-    await sleep(200);
   });
 });
 

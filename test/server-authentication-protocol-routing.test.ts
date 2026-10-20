@@ -30,7 +30,7 @@ test('server still owns authentication authority and transport effects', () => {
 
   assert.doesNotMatch(
     protocol,
-    /InfrastructureCapabilityRuntime|ParticipantSession|participantIdentityFromAuthentication|participantIdentityFromUpgradeRequest|attachParticipantIdentity|infrastructureCapability|sendJson|\.close\(/,
+    /InfrastructureCapabilityRuntime|ParticipantSession|participantIdentityFromAuthentication|upgradeRequestNamesParticipant|attachParticipantIdentity|infrastructureCapability|sendJson|\.close\(/,
   );
 });
 

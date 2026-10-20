@@ -83,12 +83,11 @@ test('server consumes adapter-owned incarnation without allocating a second iden
   const serverSource = await readFile(new URL('../src/server.ts', import.meta.url), 'utf8');
   const socketSource = await readFile(new URL('../src/relay-socket-server.ts', import.meta.url), 'utf8');
 
-  assert.doesNotMatch(serverSource, /participantConnectionSequence|legacyPlaybackConnectionSequence|legacyPlaybackGeneration/);
+  assert.doesNotMatch(serverSource, /participantConnectionSequence/);
   assert.match(serverSource, /participantConnectionId = .*socket\.connectionIncarnation/);
-  assert.match(serverSource, /playbackGeneration = socket\.connectionIncarnation;/);
 
   assert.match(socketSource, /connectionIncarnation: number;/);
   assert.match(socketSource, /let connectionSequence = 0;/);
   assert.match(socketSource, /connectionSequence \+= 1;\s*socket\.connectionIncarnation = connectionSequence;/);
-  assert.doesNotMatch(socketSource, /ParticipantSession|SongSession|LEGACY_PLAYBACK|participantConnectionId =/);
+  assert.doesNotMatch(socketSource, /ParticipantSession|SongSession|participantConnectionId =/);
 });

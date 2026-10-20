@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { LEGACY_IDENTITY, participantIdFor, RelayClient, startRelay, waitForNewMessage } from './helpers/harness.js';
+import { participantIdFor, RelayClient, startRelay, waitForNewMessage } from './helpers/harness.js';
 
 const RATE = 48_000;
 
@@ -100,49 +100,25 @@ test('shared mix and timing commands belong to the current Mic owner, not an arb
   }
 });
 
-test('only the server-selected anonymous publisher keeps legacy command authority', async () => {
-  const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0', ...LEGACY_IDENTITY });
+test('sockets without a participant identity cannot adjust the room', async () => {
+  const server = await startRelay({ RELAY_AUTO_CALIBRATE: '0' });
   try {
-    const publisher = await RelayClient.connect(server);
-    publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 7 });
-    await publisher.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
-
-    const observer = await RelayClient.connect(server);
-    observer.send({ type: 'register', role: 'monitor' });
-    await observer.waitFor((message) => message.type === 'registered' && message.role === 'monitor');
-
-    let from = observer.messages.length;
-    observer.send({ type: 'set-mix', micGainDb: 1, songLevel: 1 });
-    const rejected = await waitForNewMessage(
-      observer,
-      from,
-      (message) => message.type === 'command-rejected' && message.command === 'set-mix',
-    );
-    assert.equal(rejected.reason, 'no-identity');
-
-    from = observer.messages.length;
-    publisher.send({ type: 'set-mix', micGainDb: 12, songLevel: 33 });
-    const accepted = await waitForNewMessage(
-      observer,
-      from,
-      (message) => message.type === 'mix-settings' && message.songLevel === 100,
-    );
-    assert.equal(accepted.micGainDb, 12);
-    assert.equal(accepted.songLevel, 100);
-
-    const robot = await RelayClient.connect(server);
+    const anonymous = await RelayClient.connect(server);
+    const robot = await RelayClient.connectInfrastructure(server);
     robot.send({ type: 'robot-source-hello' });
-    from = robot.messages.length;
-    robot.send({ type: 'set-mix', micGainDb: 30, songLevel: 99 });
-    const robotRejected = await waitForNewMessage(
-      robot,
-      from,
-      (message) => message.type === 'command-rejected' && message.command === 'set-mix',
-    );
-    assert.equal(robotRejected.reason, 'no-identity');
 
-    publisher.close();
-    observer.close();
+    for (const client of [anonymous, robot]) {
+      const from = client.messages.length;
+      client.send({ type: 'set-mix', micGainDb: 30, songLevel: 99 });
+      const rejected = await waitForNewMessage(
+        client,
+        from,
+        (message) => message.type === 'command-rejected' && message.command === 'set-mix',
+      );
+      assert.equal(rejected.reason, 'no-identity');
+    }
+
+    anonymous.close();
     robot.close();
   } finally {
     await server.stop();

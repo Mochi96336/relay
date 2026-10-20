@@ -27,13 +27,6 @@ export type RelayServer = {
   infrastructureKey: string;
 };
 
-/**
- * Lets anonymous sockets act as a participant or as infrastructure again. Only
- * for the tests of that legacy path itself; they go when the path does.
- * Everything else authenticates (connectAs, connectInfrastructure).
- */
-export const LEGACY_IDENTITY = { RELAY_TEST_LEGACY_PARTICIPANTS: '1', RELAY_TEST_LEGACY_INFRASTRUCTURE: '1' };
-
 /** The infrastructure capability every spawned server accepts unless a test sets its own. */
 const HARNESS_INFRA_KEY = 'c0'.repeat(32);
 

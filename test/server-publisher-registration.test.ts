@@ -12,7 +12,7 @@ const server = parseTypeScriptSource(
 test('publisher registration keeps admission, validation, ownership CAS and role commit in server', () => {
   const publisher = objectArrowCallbackCode(server, 'registrationProtocol', 'publisher');
   assert.match(publisher, /canClaimSocketRole\(socket, 'publisher'\)/);
-  assert.match(publisher, /legacyTestParticipantIdentityEnabled\(\)/);
+  assert.match(publisher, /if \(!socket\.participantId\) \{/);
   assert.match(publisher, /validSampleRate\(payload\.sampleRate\)/);
   assert.match(publisher, /validCaptureGeneration\(payload\.captureGeneration\)/);
   assert.match(publisher, /validAudioPacketVersion\(payload\.audioPacketVersion\)/);

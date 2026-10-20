@@ -11,7 +11,7 @@ const server = parseTypeScriptSource(
 
 test('Backing registration keeps infrastructure admission, validation and role commit in server', () => {
   const backing = objectArrowCallbackCode(server, 'registrationProtocol', 'backing');
-  assert.match(backing, /infrastructureCapability\.authorized\(socket\)/);
+  assert.match(backing, /infrastructureCapability\.authenticated\(socket\)/);
   assert.match(backing, /canClaimSocketRole\(socket, 'backing'\)/);
   assert.match(backing, /validSampleRate\(payload\.sampleRate\)/);
   assert.match(backing, /commitSocketRole\(socket, 'backing'\)/);

@@ -2,17 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  LEGACY_IDENTITY,
   participantIdFor,
   RelayClient,
   sendPcmInChunks,
   startCalibrationCollecting,
   startRelay,
-  statusz,
   tone,
   waitForNewMessage,
 } from './helpers/harness.js';
-import { playingTelemetry } from './support/playing-telemetry.js';
+import { playingRoomSong } from './support/client-commands.js';
 
 const RATE = 48_000;
 const FAST = {
@@ -30,15 +28,14 @@ function registerPublisher(client: RelayClient, captureGeneration: number) {
   client.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration });
 }
 
-test('a Mic without a lease that drops during calibration fails it and gives up its media at once', async () => {
-  // A publisher with no participant identity holds no lease, so there is
-  // nothing to keep for a reconnect. (The lease owner's reconnect grace is
-  // covered in participant-server.test.ts.)
-  const server = await startRelay({ ...FAST, ...LEGACY_IDENTITY });
+test('a Mic that drops during calibration fails it at once', async () => {
+  // The singer's lease outlives the dropped socket for the transport grace,
+  // but a measurement of a capture that stopped arriving is already lost.
+  const server = await startRelay(FAST);
   try {
-    const backing = await RelayClient.connect(server);
-    const monitor = await RelayClient.connect(server);
-    const publisher = await RelayClient.connect(server);
+    const backing = await RelayClient.connectInfrastructure(server);
+    const monitor = await RelayClient.connectAs(server, 'listener', 'Listener');
+    const publisher = await RelayClient.connectAs(server, 'singer', 'Singer');
     backing.send({ type: 'register', role: 'backing', sampleRate: RATE });
     monitor.send({ type: 'register', role: 'monitor' });
     publisher.send({ type: 'register', role: 'publisher', sampleRate: RATE });
@@ -48,8 +45,9 @@ test('a Mic without a lease that drops during calibration fails it and gives up 
       publisher.waitForType('registered'),
     ]);
 
+    const songTelemetry = await playingRoomSong(publisher);
     const prime = async () => {
-      publisher.send(playingTelemetry());
+      publisher.send(songTelemetry());
       await Promise.all([
         sendPcmInChunks(backing, tone(0.5, 0.8)),
         sendPcmInChunks(publisher, tone(0.5, 0.4)),
@@ -59,17 +57,14 @@ test('a Mic without a lease that drops during calibration fails it and gives up 
     await startCalibrationCollecting(publisher, monitor, prime);
 
     const from = monitor.messages.length;
+    const droppedAt = Date.now();
     publisher.close();
 
     const failed = await waitForNewMessage(monitor, from, (message) => (
       message.type === 'timing-calibration-status' && message.state === 'failed'
     ));
     assert.equal(failed.error, 'Microphone disconnected during calibration.');
-    await waitForNewMessage(monitor, from, (message) => (
-      message.type === 'source-status' && message.micConnected === false
-    ));
-    const status = await statusz(server);
-    assert.equal(status.audio.micSampleRate, null, 'no media is kept for a publisher that held no lease');
+    assert.ok(Date.now() - droppedAt < 2_000, 'calibration does not wait out the transport grace');
   } finally {
     await server.stop();
   }

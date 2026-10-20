@@ -2,9 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { RelayClient, sleep, startRelay } from './helpers/harness.js';
-import { playRoomSong, registerPlayback } from './support/client-commands.js';
+import { micPublisher, playRoomSong, registerPlayback } from './support/client-commands.js';
 
-const RATE = 48_000;
 const FAST = {
   RELAY_AUTO_CALIBRATE: '0',
 };
@@ -20,18 +19,11 @@ async function playback(server: Relay, identity: Identity) {
   return client;
 }
 
-async function publisher(server: Relay) {
-  const client = await RelayClient.connectAs(server, 'A');
-  client.send({ type: 'register', role: 'publisher', sampleRate: RATE, captureGeneration: 1 });
-  await client.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
-  return client;
-}
-
 test('a playback tab that comes back on a new socket is asked again for the command it owes', async () => {
   const server = await startRelay(FAST);
   try {
     const first = await playback(server, A);
-    const mic = await publisher(server);
+    const mic = await micPublisher(server, 'A');
     await playRoomSong(first, { prefix: 'continuation' });
 
     first.send({ type: 'room-song-command', commandId: 'continuation-pause', expectedRevision: 2, action: 'pause' });

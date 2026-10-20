@@ -2,10 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { participantIdFor, RelayClient, sleep, startRelay } from './helpers/harness.js';
-import { playRoomSong, registerPlayback } from './support/client-commands.js';
+import { micPublisher, playRoomSong, registerPlayback } from './support/client-commands.js';
 import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
-const RATE = 48_000;
 const VIDEO = 'dQw4w9WgXcQ';
 const FAST = {
   RELAY_AUTO_CALIBRATE: '0',
@@ -22,26 +21,6 @@ async function playback(
 ) {
   const client = await RelayClient.connectAs(server, name);
   await registerPlayback(client, transportId, generation);
-  return client;
-}
-
-async function publisher(
-  server: Awaited<ReturnType<typeof startRelay>>,
-  name: string,
-  takeoverExpectedOwnerId?: string,
-) {
-  const client = await RelayClient.connectAs(server, name);
-  const registration: Record<string, unknown> = {
-    type: 'register',
-    role: 'publisher',
-    sampleRate: RATE,
-    captureGeneration: 1,
-  };
-  if (takeoverExpectedOwnerId !== undefined) {
-    registration.takeoverExpectedOwnerId = takeoverExpectedOwnerId;
-  }
-  client.send(registration);
-  await client.waitFor((message) => message.type === 'registered' && message.role === 'publisher');
   return client;
 }
 
@@ -70,7 +49,7 @@ test('mic takeover prepares the room song before switching playback leader', asy
   const server = await startRelay(FAST);
   try {
     const aPlayback = await playback(server, 'A', 'playback-tab-a');
-    const aPublisher = await publisher(server, 'A');
+    const aPublisher = await micPublisher(server, 'A');
 
     await establishPlayingRoom(aPlayback, 'playback-tab-a', 10, 'handoff-one');
 
@@ -84,7 +63,7 @@ test('mic takeover prepares the room song before switching playback leader', asy
 
     bPlayback.send({ type: 'playback-mic-intent' });
     await bPlayback.waitForType('playback-mic-intent-registered');
-    const bPublisher = await publisher(server, 'B', A_ID);
+    const bPublisher = await micPublisher(server, 'B', A_ID);
 
     const prepare = await bPlayback.waitForType('song-handoff-prepare');
     assert.equal(prepare.videoId, VIDEO);
@@ -148,7 +127,7 @@ test('multi-tab Mic takeover targets only the playback transport that expressed 
   const server = await startRelay(FAST);
   try {
     const aPlayback = await playback(server, 'A', 'playback-tab-a');
-    const aPublisher = await publisher(server, 'A');
+    const aPublisher = await micPublisher(server, 'A');
     await establishPlayingRoom(aPlayback, 'playback-tab-a', 20, 'handoff-two');
 
     const bOtherTab = await playback(server, 'B', 'playback-tab-b-other');
@@ -156,7 +135,7 @@ test('multi-tab Mic takeover targets only the playback transport that expressed 
 
     bMicTab.send({ type: 'playback-mic-intent' });
     await bMicTab.waitForType('playback-mic-intent-registered');
-    const bPublisher = await publisher(server, 'B', A_ID);
+    const bPublisher = await micPublisher(server, 'B', A_ID);
 
     const prepare = await bMicTab.waitForType('song-handoff-prepare');
     assert.equal(prepare.videoId, VIDEO);
@@ -194,12 +173,12 @@ test('closing the tab a handoff is waiting for gives the room song back', async 
   const server = await startRelay(FAST);
   try {
     const aPlayback = await playback(server, 'A', 'playback-tab-a');
-    const aPublisher = await publisher(server, 'A');
+    const aPublisher = await micPublisher(server, 'A');
 
     await establishPlayingRoom(aPlayback, 'playback-tab-a', 10, 'handoff-frozen');
 
     const bPlayback = await playback(server, 'B', 'playback-tab-b');
-    const bPublisher = await publisher(server, 'B', A_ID);
+    const bPublisher = await micPublisher(server, 'B', A_ID);
     await bPlayback.waitForType('song-handoff-prepare');
 
     // B's YouTube tab goes away before it ever takes over. B still holds the
@@ -248,13 +227,13 @@ test('client-reported commit failure returns the handoff to preparation without 
   const server = await startRelay(FAST);
   try {
     const aPlayback = await playback(server, 'A', 'playback-tab-a');
-    const aPublisher = await publisher(server, 'A');
+    const aPublisher = await micPublisher(server, 'A');
     await establishPlayingRoom(aPlayback, 'playback-tab-a', 30, 'handoff-failure');
 
     const bPlayback = await playback(server, 'B', 'playback-tab-b');
     bPlayback.send({ type: 'playback-mic-intent' });
     await bPlayback.waitForType('playback-mic-intent-registered');
-    const bPublisher = await publisher(server, 'B', A_ID);
+    const bPublisher = await micPublisher(server, 'B', A_ID);
 
     const prepare = await bPlayback.waitForType('song-handoff-prepare');
     bPlayback.send({ type: 'song-handoff-ready', handoffId: prepare.handoffId });

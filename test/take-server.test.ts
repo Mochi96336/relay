@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import { RelayClient, sleep, startRelay, waitForNewMessage, type RelayServer } from './helpers/harness.js';
 import { uplinkHealthReport } from './support/uplink-health.js';
+import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
 const RATE = 48_000;
 const FRAME_SAMPLES = 960;
@@ -30,15 +31,7 @@ function backingQuery(key?: string) {
 }
 
 function telemetry(currentTime: number, state = 5) {
-  return {
-    type: 'youtube-telemetry',
-    videoId: VIDEO,
-    state,
-    currentTime,
-    duration: 200,
-    playbackRate: 1,
-    bufferedFraction: 0.8,
-  };
+  return { type: 'youtube-telemetry', ...youtubeTelemetry({ state, currentTime }) };
 }
 
 function pcmFrame(value: number) {

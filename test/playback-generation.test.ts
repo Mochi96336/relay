@@ -3,19 +3,12 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { SongSession, normalizePlaybackGeneration } from '../src/song-session.js';
+import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
-const VIDEO = 'dQw4w9WgXcQ';
 const UINT32_MAX = 0xffff_ffff;
 
 function telemetry(currentTime = 10) {
-  return {
-    videoId: VIDEO,
-    state: 1,
-    currentTime,
-    duration: 200,
-    playbackRate: 1,
-    bufferedFraction: 0.5,
-  };
+  return youtubeTelemetry({ currentTime, bufferedFraction: 0.5 });
 }
 
 test('playback generations use the JS safe-integer range instead of wrapping at uint32', () => {

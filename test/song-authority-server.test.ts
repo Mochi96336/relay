@@ -3,20 +3,16 @@ import test from 'node:test';
 
 import { RelayClient, sleep, startRelay } from './helpers/harness.js';
 import { registerPlayback } from './support/client-commands.js';
+import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
 const VIDEO = 'dQw4w9WgXcQ';
 
 function telemetry(currentTime: number, transportId = 'playback-transport-a', generation = 1, state = 1) {
   return {
     type: 'youtube-telemetry',
-    videoId: VIDEO,
-    state,
-    currentTime,
-    duration: 200,
-    playbackRate: 1,
-    bufferedFraction: 0.5,
-    playbackTransportId: transportId,
-    playbackGeneration: generation,
+    ...youtubeTelemetry({
+      state, currentTime, bufferedFraction: 0.5, playbackTransportId: transportId, playbackGeneration: generation,
+    }),
   };
 }
 

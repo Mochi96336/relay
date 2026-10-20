@@ -3,19 +3,11 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { RoomSongCommandSession } from '../src/room-song-command-session.js';
-import { A, VIDEO, command, room } from './support/room-song-fixtures.js';
+import { A, command, room } from './support/room-song-fixtures.js';
+import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
 function telemetry(overrides: Record<string, unknown> = {}) {
-  return {
-    videoId: VIDEO,
-    state: 2,
-    currentTime: 10,
-    duration: 200,
-    playbackRate: 1,
-    bufferedFraction: 0.8,
-    timelineDeltaSeconds: 0,
-    ...overrides,
-  };
+  return youtubeTelemetry({ state: 2, timelineDeltaSeconds: 0, ...overrides });
 }
 
 test('state-only Play stays pending across the observed +813ms / -833ms iframe correction', () => {

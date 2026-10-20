@@ -10,6 +10,7 @@ import {
   toInt16,
   waitForNewMessage,
 } from './helpers/harness.js';
+import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
 const RATE = 48_000;
 const VIDEO = 'dQw4w9WgXcQ';
@@ -158,15 +159,7 @@ test('a Robot source that closes mid probe abandons the probe and says it is gon
 });
 
 function songTelemetry(currentTime: number, state = 1) {
-  return {
-    type: 'youtube-telemetry',
-    videoId: VIDEO,
-    state,
-    currentTime,
-    duration: 200,
-    playbackRate: 1,
-    bufferedFraction: 0.8,
-  };
+  return { type: 'youtube-telemetry', ...youtubeTelemetry({ state, currentTime }) };
 }
 
 function participantQuery(id: string, name: string) {

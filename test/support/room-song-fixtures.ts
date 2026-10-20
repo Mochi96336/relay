@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 
 import { parseRoomSongCommand } from '../../src/room-song-command.js';
+import { VIDEO, youtubeTelemetry } from './youtube-telemetry.js';
 
 // Fixtures several Room Song command tests share: one playback tab and one video.
 export const A = { participantId: 'participant-a', transportId: 'playback-tab-a', generation: 1 };
 
-export const VIDEO = 'dQw4w9WgXcQ';
+export { VIDEO };
 
 export function command(commandId: string, expectedRevision: number, action: string, extra: Record<string, unknown> = {}) {
   const parsed = parseRoomSongCommand({ commandId, expectedRevision, action, ...extra });
@@ -35,14 +36,5 @@ export function room(overrides: Record<string, unknown> = {}) {
 }
 
 export function telemetry(overrides: Record<string, unknown> = {}) {
-  return {
-    videoId: VIDEO,
-    state: 1,
-    currentTime: 10,
-    duration: 200,
-    playbackRate: 1,
-    bufferedFraction: 0.8,
-    timelineDeltaSeconds: 0,
-    ...overrides,
-  };
+  return youtubeTelemetry({ timelineDeltaSeconds: 0, ...overrides });
 }

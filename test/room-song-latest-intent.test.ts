@@ -3,6 +3,7 @@ import test, { describe } from 'node:test';
 
 import { parseRoomSongCommand } from '../src/room-song-command.js';
 import { RoomSongCommandSession } from '../src/room-song-command-session.js';
+import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
 const A = { participantId: 'participant-a', transportId: 'playback-tab-a', generation: 1 };
 const VIDEO = 'dQw4w9WgXcQ';
@@ -39,15 +40,7 @@ function room(overrides: Record<string, unknown> = {}) {
 }
 
 function telemetry(overrides: Record<string, unknown> = {}) {
-  return {
-    videoId: VIDEO,
-    state: 2,
-    currentTime: 10,
-    duration: 200,
-    playbackRate: 1,
-    bufferedFraction: 0.8,
-    ...overrides,
-  };
+  return youtubeTelemetry({ state: 2, ...overrides });
 }
 
 describe('room song latest-intent convergence', () => {

@@ -6,6 +6,7 @@ import { parseRoomSongCommand } from '../src/room-song-command.js';
 import { RoomSongCommandSession } from '../src/room-song-command-session.js';
 import { SongSession } from '../src/song-session.js';
 import { RelayClient, startRelay } from './helpers/harness.js';
+import { youtubeTelemetry } from './support/youtube-telemetry.js';
 
 const RATE = 48_000;
 const VIDEO = 'dQw4w9WgXcQ';
@@ -40,16 +41,7 @@ function room(overrides: Record<string, unknown> = {}) {
 }
 
 function telemetry(currentTime = 12, overrides: Record<string, unknown> = {}) {
-  return {
-    type: 'youtube-telemetry',
-    videoId: VIDEO,
-    state: 1,
-    currentTime,
-    duration: 200,
-    playbackRate: 1,
-    bufferedFraction: 0.8,
-    ...overrides,
-  };
+  return { type: 'youtube-telemetry', ...youtubeTelemetry({ currentTime, ...overrides }) };
 }
 
 function query(participantId: string, name: string) {

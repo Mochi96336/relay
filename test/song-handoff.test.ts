@@ -278,4 +278,38 @@ describe('prepared song handoff', () => {
     assert.equal(status.handoffState, 'preparing');
     assert.equal(status.playbackLeaderParticipantId, A.participantId);
   });
+
+  test('says why a Mic owner\'s tab was not asked to take over', () => {
+    const songs = new SongSession();
+    assert.equal(songs.handoffRefusal(B, B.participantId), 'no-leader', 'no song has played yet');
+    songs.update(telemetry(10), A, null, 0);
+    assert.equal(songs.handoffRefusal(B, null), 'target-not-mic-owner');
+    assert.equal(songs.handoffRefusal(B, C.participantId), 'target-not-mic-owner');
+    assert.equal(songs.handoffRefusal(A, A.participantId), 'target-is-leader');
+    assert.equal(songs.handoffRefusal({ ...B, transportId: '' }, B.participantId), 'invalid-target');
+    assert.equal(songs.handoffRefusal(B, B.participantId), null);
+    assert.deepEqual(songs.leaderIdentity(), A);
+    assert.equal(songs.handoffId(), null);
+    const plan = songs.beginHandoff(B, B.participantId, 100);
+    assert.equal(songs.handoffId(), plan?.handoffId);
+  });
+
+  test('says why a handoff was abandoned, matching when the sweep gives up', () => {
+    const songs = new SongSession();
+    songs.update(telemetry(10), A, null, 0);
+    assert.equal(songs.handoffSweepReason(false, 100), null, 'no handoff, nothing to abandon');
+    const plan = songs.beginHandoff(B, B.participantId, 100)!;
+
+    assert.equal(songs.handoffSweepReason(true, 200), null);
+    assert.equal(songs.handoffSweepReason(false, 200), 'target-gone');
+    assert.equal(songs.handoffSweepReason(true, 100 + 21_000), 'prepare-timeout');
+
+    songs.markHandoffReady(B, plan.handoffId, B.participantId, 150);
+    assert.equal(songs.handoffSweepReason(true, 150 + 5_001), 'commit-timeout');
+    songs.deferHandoff(B, plan.handoffId);
+    assert.equal(songs.handoffSweepReason(true, 100 + 29_000), null, 'a deferred retry waits');
+    assert.equal(songs.handoffSweepReason(true, 100 + 31_000), 'total-timeout');
+    assert.equal(songs.sweepHandoff(true, 100 + 31_000), true);
+    assert.equal(songs.handoffSweepReason(true, 100 + 31_000), null);
+  });
 });

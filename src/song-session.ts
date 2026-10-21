@@ -80,6 +80,21 @@ type Handoff = {
   targetTimeline: YouTubeTimelineTracker;
 };
 
+/** Why a Mic owner's playback tab was not asked to take over the song. */
+export type HandoffRefusal =
+  | 'invalid-target'
+  | 'target-not-mic-owner'
+  | 'no-leader'
+  | 'no-telemetry'
+  | 'target-is-leader';
+
+/** Why a handoff in flight was abandoned. */
+export type HandoffSweepReason =
+  | 'target-gone'
+  | 'total-timeout'
+  | 'commit-timeout'
+  | 'prepare-timeout';
+
 type FailedHandoffHoldover = {
   leader: PlaybackIdentity;
   micOwnerId: string;
@@ -135,9 +150,8 @@ export class SongSession {
     micOwnerId: string | null,
     nowMs = performance.now(),
   ): SongHandoffPlan | null {
-    const target = this.normalizeIdentity(targetInput);
-    if (!target || micOwnerId === null || target.participantId !== micOwnerId) return null;
-    if (!this.leader || !this.hasTelemetry || this.sameIdentity(this.leader, target)) return null;
+    if (this.handoffRefusal(targetInput, micOwnerId)) return null;
+    const target = this.normalizeIdentity(targetInput)!;
 
     if (this.handoff && this.sameIdentity(this.handoff.target, target)) {
       return this.handoffPlan(nowMs);
@@ -148,6 +162,17 @@ export class SongSession {
     this.handoff = this.newHandoff(`song-handoff-${this.handoffSequence}`, target, nowMs);
     this.bump();
     return this.handoffPlan(nowMs);
+  }
+
+  /** Why beginHandoff would not start for this target, or null if it would. */
+  handoffRefusal(targetInput: PlaybackIdentity, micOwnerId: string | null): HandoffRefusal | null {
+    const target = this.normalizeIdentity(targetInput);
+    if (!target) return 'invalid-target';
+    if (micOwnerId === null || target.participantId !== micOwnerId) return 'target-not-mic-owner';
+    if (!this.leader) return 'no-leader';
+    if (!this.hasTelemetry) return 'no-telemetry';
+    if (this.sameIdentity(this.leader, target)) return 'target-is-leader';
+    return null;
   }
 
   handoffPlanForTarget(identityInput: PlaybackIdentity, nowMs = performance.now()) {
@@ -246,6 +271,11 @@ export class SongSession {
     return this.handoff ? { ...this.handoff.target } : null;
   }
 
+  /** The live handoff's id, for the journal. */
+  handoffId(): string | null {
+    return this.handoff?.id ?? null;
+  }
+
   /**
    * Abandons a handoff whose target is never going to answer.
    *
@@ -261,29 +291,25 @@ export class SongSession {
     nowMs = performance.now(),
     micOwnerId: string | null = this.handoff?.target.participantId ?? null,
   ) {
-    if (!this.handoff) return false;
-    if (!targetPresent) return this.cancelFailedHandoff(micOwnerId);
+    if (!this.handoffSweepReason(targetPresent, nowMs)) return false;
+    return this.cancelFailedHandoff(micOwnerId);
+  }
 
-    if (nowMs - this.handoff.startedAtMs > HANDOFF_TOTAL_TIMEOUT_MS) {
-      return this.cancelFailedHandoff(micOwnerId);
-    }
-
+  /** Why sweepHandoff would abandon the live handoff now, or null if it would wait. */
+  handoffSweepReason(targetPresent: boolean, nowMs = performance.now()): HandoffSweepReason | null {
+    if (!this.handoff) return null;
+    if (!targetPresent) return 'target-gone';
+    if (nowMs - this.handoff.startedAtMs > HANDOFF_TOTAL_TIMEOUT_MS) return 'total-timeout';
     if (
       this.handoff.state === 'committing'
       && this.handoff.commitStartedAtMs !== null
       && nowMs - this.handoff.commitStartedAtMs > HANDOFF_COMMIT_TIMEOUT_MS
-    ) {
-      return this.cancelFailedHandoff(micOwnerId);
-    }
-
+    ) return 'commit-timeout';
     if (
       !this.handoff.readyAcknowledged
       && nowMs - this.handoff.startedAtMs > HANDOFF_PREPARE_TIMEOUT_MS
-    ) {
-      return this.cancelFailedHandoff(micOwnerId);
-    }
-
-    return false;
+    ) return 'prepare-timeout';
+    return null;
   }
 
   update(
@@ -681,7 +707,8 @@ export class SongSession {
       && timeline.connected === true;
   }
 
-  private leaderIdentity(): PlaybackIdentity | null {
+  /** The playback tab whose telemetry drives the room song. */
+  leaderIdentity(): PlaybackIdentity | null {
     return this.leader ? {
       participantId: this.leader.participantId,
       transportId: this.leader.transportId,

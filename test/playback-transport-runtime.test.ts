@@ -45,6 +45,21 @@ describe('PlaybackTransportRuntime', () => {
     assert.equal(client.playbackMicIntentAtMs, 120);
   });
 
+  test('counts a participant\'s open playback tabs', () => {
+    const first = socket();
+    const second = socket();
+    const closed = socket(false);
+    const other = socket();
+    const transport = runtime([first, second, closed, other, socket()]);
+    transport.register(first, aliceOne);
+    transport.register(second, aliceTwo);
+    transport.register(closed, aliceOne);
+    transport.register(other, bobOne);
+    assert.equal(transport.openTabCount(aliceOne.participantId), 2);
+    assert.equal(transport.openTabCount(bobOne.participantId), 1);
+    assert.equal(transport.openTabCount('participant-carol'), 0);
+  });
+
   test('routes only to open sockets with the exact participant, transport and generation', () => {
     const exact = socket();
     const staleGeneration = socket();

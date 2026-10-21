@@ -263,6 +263,50 @@ function describeMicInput(status, t) {
   return row('input', label, value, t('diag.mic.input.okNote'), 'ok');
 }
 
+const VOICE_PROCESSING_KEYS = ['echoCancellation', 'noiseSuppression', 'autoGainControl'];
+
+/**
+ * Names that can only be a Bluetooth headset. Its microphone runs as
+ * narrowband call audio: on 2026-10-16 AirPods took the voice that way and
+ * failed every timing probe. iOS names a wired headset "Headphones", which
+ * could be either, so it stays unflagged.
+ */
+const BLUETOOTH_INPUT = /airpods|bluetooth|藍牙|蓝牙|hands-?free|\bbuds/i;
+
+/**
+ * Which microphone and device the Mic is singing through, and whether the
+ * browser kept voice processing on. Both come from the phone's own capture
+ * report; the name is display-only and may be missing (see AudioTransport).
+ */
+function describeCaptureDevice(status, t) {
+  const capture = status?.audio?.captureAndSender?.capture;
+  if (!status?.source?.micConnected || !capture) return unknown(t, 'device', 'diag.mic.device');
+
+  const inputLabel = typeof capture.inputLabel === 'string' ? capture.inputLabel : '';
+  const parts = [inputLabel, capture.device].filter((part) => typeof part === 'string' && part);
+  const value = parts.length > 0 ? parts.join(' · ') : t('diag.unknown');
+  const processing = VOICE_PROCESSING_KEYS.filter((key) => capture[key] === true);
+  const bluetooth = BLUETOOTH_INPUT.test(inputLabel);
+
+  const notes = [];
+  if (bluetooth) notes.push(t('diag.mic.device.bluetoothNote'));
+  if (processing.length > 0) {
+    notes.push(t('diag.mic.device.processingNote', {
+      features: processing.map((key) => t(`diag.mic.device.feature.${key}`)).join(t('diag.listSeparator')),
+    }));
+  } else if (capture.echoCancellation === false) {
+    notes.push(t('diag.mic.device.okNote'));
+  }
+  if (!inputLabel) notes.push(t('diag.mic.device.unnamedNote'));
+  return row(
+    'device',
+    t('diag.mic.device'),
+    value,
+    notes.join(t('diag.sentenceGap')),
+    bluetooth || processing.length > 0 ? 'warn' : 'neutral',
+  );
+}
+
 /**
  * The Mic gain's effect, from the server's level monitor: the last second's
  * peak after gain but before the limiter, and how long the limiter held the
@@ -387,12 +431,14 @@ export function describeMicTransport(status, t = english) {
   // Without a Mic every other row could only say "—".
   if (status?.source && !status.source.micConnected) return [describeMicAudio(status, t)];
   // The microphone's own level sits beside the level after gain: they are
-  // one signal measured on either side of the gain.
+  // one signal measured on either side of the gain. Which microphone that
+  // was follows them.
   return [
     describeMicAudio(status, t),
     describeProblems(status, t),
     describeMicInput(status, t),
     describeLevel(status, t),
+    describeCaptureDevice(status, t),
     describePath(status, t),
     describeEncoding(status, t),
     describeLossRepair(status, t),

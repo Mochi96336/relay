@@ -88,7 +88,7 @@ describe('Mic diagnostics model', () => {
     // The microphone's own level sits beside the level after gain.
     assert.deepEqual(
       describeMicTransport(liveStatus()).map((row) => row.key),
-      ['audio', 'input', 'level', 'path', 'encoding', 'repair', 'buffer', 'send', 'drift'],
+      ['audio', 'input', 'level', 'device', 'path', 'encoding', 'repair', 'buffer', 'send', 'drift'],
     );
     assert.deepEqual(
       describeMicTransport(liveStatus((s) => {
@@ -97,6 +97,63 @@ describe('Mic diagnostics model', () => {
       ['audio', 'problems', 'input'],
       'a current problem comes straight after the verdict',
     );
+  });
+
+  it('names the microphone and device the Mic is singing through', () => {
+    const device = rows(liveStatus(s => {
+      s.audio.captureAndSender.capture = {
+        echoCancellation: false, noiseSuppression: null, autoGainControl: null,
+        inputLabel: 'iPhone Microphone', device: 'iPhone iOS 18.7 · Safari 26.6',
+      };
+    })).device;
+    assert.equal(device.label, 'Microphone');
+    assert.equal(device.value, 'iPhone Microphone · iPhone iOS 18.7 · Safari 26.6');
+    assert.equal(device.note, 'Voice processing is off, as singing needs.');
+    assert.equal(device.tone, 'neutral');
+  });
+
+  it('warns about a Bluetooth headset microphone but not a wired one', () => {
+    // 2026-10-16: AirPods carried the voice as call audio and failed every probe;
+    // 2026-10-21: a Philips headset cut the voice at 8 kHz.
+    const withInput = (inputLabel: string) => rows(liveStatus(s => {
+      s.audio.captureAndSender.capture = { echoCancellation: false, inputLabel, device: 'iPhone iOS 18.7 · Safari 26.6' };
+    })).device;
+    for (const name of [
+      'AirPods', 'AirPods Pro', 'Galaxy Buds2 Pro', 'Headset (Philips Fidelio L3) (Bluetooth)', 'Headset (Bluetooth Hands-Free)', '藍牙耳機',
+    ]) {
+      const device = withInput(name);
+      assert.equal(device.tone, 'warn', name);
+      assert.match(device.note, /^A Bluetooth headset microphone/, name);
+    }
+    assert.equal(withInput('Headphones').tone, 'neutral', 'iOS names a wired headset "Headphones"');
+    assert.equal(withInput('麥克風 (HyperX SoloCast) (03f0:078b)').tone, 'neutral');
+  });
+
+  it('warns when the browser kept voice processing on', () => {
+    const status = liveStatus(s => {
+      s.audio.captureAndSender.capture = {
+        echoCancellation: true, noiseSuppression: true, autoGainControl: false, inputLabel: 'Default', device: 'Android 10 · Chrome 139',
+      };
+    });
+    const device = rows(status).device;
+    assert.equal(device.tone, 'warn');
+    assert.equal(
+      device.note,
+      'Voice processing is on (echo cancellation, noise suppression): singing can sound muffled or robotic.',
+    );
+    const zh = describeMicTransport(status, diagnosticsTranslator('zh-Hant')).find(r => r.key === 'device')!;
+    assert.equal(zh.label, '麥克風');
+    assert.equal(zh.note, '語音處理開著（回音消除、降噪）：唱歌可能變悶或像機器人。');
+  });
+
+  it('says so when the browser left the microphone unnamed', () => {
+    // An oversized health report drops the name first (AudioTransport).
+    const device = rows(liveStatus(s => {
+      s.audio.captureAndSender.capture = { echoCancellation: false, inputLabel: null, device: null };
+    })).device;
+    assert.equal(device.value, '—');
+    assert.equal(device.note, 'Voice processing is off, as singing needs. The browser did not name the microphone.');
+    assert.equal(rows(liveStatus()).device.value, '—', 'no capture report yet');
   });
 
   it('distinguishes no Mic, a Mic that stopped delivering, and a silent capture', () => {

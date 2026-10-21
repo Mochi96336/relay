@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { PlaybackHandoff, HANDOFF_COMMIT_TIMEOUT_MS, type HandoffPlayer, type HandoffMutation } from '../public/playback-handoff.js';
+import { PlaybackHandoff, HANDOFF_COMMIT_TIMEOUT_MS, HANDOFF_STALL_REPORT_MS, type HandoffPlayer, type HandoffMutation } from '../public/playback-handoff.js';
 import { FakeClock } from './support/fake-clock.js';
 import { deferred } from './support/deferred.js';
 
@@ -8,7 +8,7 @@ const VIDEO = 'dQw4w9WgXcQ';
 function fixture(ensure: (video: string, current: () => boolean) => Promise<unknown> = async () => {}) {
   const clock = new FakeClock();
   const effects: unknown[][] = [], failures: unknown[][] = [], ready: string[] = [], notes: string[] = [];
-  const mutations: HandoffMutation[] = [];
+  const mutations: HandoffMutation[] = [], stalled: unknown[][] = [];
   let readFails = false, muteFails = false;
   const player = {
     videoId: VIDEO as string | null, state: 1, position: 40, buffer: 0.5, rate: 1, muted: false,
@@ -33,14 +33,14 @@ function fixture(ensure: (video: string, current: () => boolean) => Promise<unkn
     getPlayer: () => currentPlayer, ensurePlayer: ensure,
     onMutation: mutation => mutations.push(mutation), onTimelineBoundary: video => effects.push(['boundary', video]),
     onNote: key => notes.push(key), onReady: id => ready.push(id),
-    onFailure: (...args) => failures.push(args), sampleNow: () => { samples++; },
+    onFailure: (...args) => failures.push(args), onStalled: (...args) => stalled.push(args), sampleNow: () => { samples++; },
     now: () => clock.now, setTimer: clock.setTimeout, clearTimer: clock.clearTimeout, warn() {},
   });
   const prepare = (id = 'h1', overrides = {}, preparation = {}) => owner.prepare({
     handoffId: id, videoId: VIDEO, targetTime: 40, desiredState: 1, playbackRate: 1, ...overrides,
   }, preparation);
   const commit = (id = 'h1', overrides = {}) => owner.commit({ handoffId: id, serverTime: 41, state: 1, ...overrides });
-  return { owner, player, effects, failures, ready, notes, mutations, clock, prepare, commit,
+  return { owner, player, effects, failures, ready, notes, mutations, stalled, clock, prepare, commit,
     get samples() { return samples; },
     setPlayer(value: HandoffPlayer | null) { currentPlayer = value; },
     failReads(value = true) { readFails = value; }, failMute(value = true) { muteFails = value; },
@@ -52,7 +52,7 @@ test('cold preparation requests media muted, owns its polling and suppresses com
   assert.equal(f.owner.pending?.phase, 'preparing');
   assert.deepEqual(f.effects, [['boundary', VIDEO], ['mute'], ['load', { videoId: VIDEO, startSeconds: 40 }], ['rate', 1]]);
   assert.deepEqual(f.mutations, [{ source: 'handoff-prepare', action: 'load', suppressTelemetry: true, expiresAt: 3000 }]);
-  assert.equal(f.clock.timers.size, 10);
+  assert.equal(f.clock.timers.size, 11, 'ten readiness checks and one stall report');
   assert.equal(f.player.muted, true);
   assert.equal(f.effects.some(effect => effect[0] === 'play'), false);
 });
@@ -83,9 +83,10 @@ test('readiness read failure stays pending and polling reaches the late readines
   assert.deepEqual(f.ready, ['h1']);
 });
 
-test('terminal media prepares just before the end and observes PAUSED before readiness', async () => {
-  const f = fixture(); await f.prepare('h1', { targetTime: 200, desiredState: 0 });
-  assert.equal(f.player.position, 199.75);
+test('a dormant plan prepares exactly where the server put it and observes PAUSED before readiness', async () => {
+  // The server keeps an ended song clear of its end (HANDOFF_END_LEAD_SECONDS).
+  const f = fixture(); await f.prepare('h1', { targetTime: 195, desiredState: 2 });
+  assert.equal(f.player.position, 195);
   f.owner.observeState(1);
   assert.equal(f.player.state, 2); assert.deepEqual(f.ready, ['h1']);
 });
@@ -272,11 +273,18 @@ test('failed provenance reads leave untouched media alone even on cancellation',
 });
 
 
-test('a reused ENDED player seeks just inside media even within ordinary seek tolerance', async () => {
+test('a reused ENDED player seeks back to the dormant plan position', async () => {
   const f = fixture(); f.player.position = 200; f.player.state = 0;
-  await f.prepare('h1', { desiredState: 0, targetTime: 200 }, { reusePreparedPlayer: true });
-  assert.equal(f.player.position, 199.75);
+  await f.prepare('h1', { desiredState: 2, targetTime: 195 }, { reusePreparedPlayer: true });
+  assert.equal(f.player.position, 195);
   assert.equal(f.effects.some(effect => effect[0] === 'seek'), true);
+});
+
+test('a dormant commit is not realigned to the room\'s raw position at the end', async () => {
+  const f = fixture(); await f.prepare('h1', { targetTime: 195, desiredState: 2 });
+  f.owner.observeState(1); f.commit('h1', { serverTime: 195, state: 2 });
+  assert.equal(f.owner.realign({ handoffState: 'committing', handoffId: 'h1', serverTime: 200 }), false);
+  assert.equal(f.player.position, 195);
 });
 
 
@@ -291,4 +299,49 @@ test('repeated realignment bounds pending samples without renewing the commit de
   assert.equal(f.samples, 0);
   f.clock.advance(HANDOFF_COMMIT_TIMEOUT_MS);
   assert.equal(f.samples, 2); assert.deepEqual(f.failures, [['h1', 'commit-timeout']]);
+});
+
+test('a preparation still not ready after the stall window says why, once', async () => {
+  const f = fixture(); await f.prepare('h1', { desiredState: 2 });
+  f.player.state = 3; f.player.buffer = 0;
+  f.clock.advance(HANDOFF_STALL_REPORT_MS - 1);
+  assert.deepEqual(f.stalled, []);
+  f.clock.advance(1);
+  assert.deepEqual(f.stalled, [['h1', { blocker: 'state-3', playerState: 3, buffered: 0, muted: true }]]);
+  f.clock.advance(60_000);
+  assert.equal(f.stalled.length, 1);
+});
+
+test('a player that never becomes ready is reported even though cue never ran', async () => {
+  const f = fixture(); f.setPlayer(null); await f.prepare();
+  assert.equal(f.clock.timers.size, 1, 'no readiness polling without a player, only the stall report');
+  f.clock.advance(HANDOFF_STALL_REPORT_MS);
+  assert.deepEqual(f.stalled, [['h1', { blocker: 'player-not-ready', playerState: null, buffered: null, muted: null }]]);
+});
+
+test('readiness names the first unmet condition', async () => {
+  const f = fixture(); await f.prepare('h1', { desiredState: 2 });
+  f.player.videoId = 'other-video';
+  assert.equal(f.owner.readiness().blocker, 'video-not-loaded');
+  f.player.videoId = VIDEO; f.player.muted = false;
+  assert.equal(f.owner.readiness().blocker, 'not-muted');
+  f.player.muted = true; f.player.state = -1;
+  assert.equal(f.owner.readiness().blocker, 'state--1');
+  f.player.state = 2; f.player.buffer = 0;
+  assert.equal(f.owner.readiness().blocker, 'not-buffered');
+  f.player.buffer = 0.4;
+  assert.equal(f.owner.readiness().blocker, null);
+  f.failReads();
+  assert.equal(f.owner.readiness().blocker, 'player-unreadable');
+});
+
+test('a ready, replaced or cancelled preparation never reports a stall', async () => {
+  const ready = fixture(); await ready.prepare('h1', { desiredState: 2 });
+  ready.player.state = 2; assert.equal(ready.owner.announceReady(), true);
+  const replaced = fixture(); await replaced.prepare('h1'); await replaced.prepare('h2'); replaced.player.state = 3;
+  const cancelled = fixture(); await cancelled.prepare(); cancelled.owner.cancel();
+  for (const f of [ready, replaced, cancelled]) f.clock.advance(HANDOFF_STALL_REPORT_MS);
+  assert.deepEqual(ready.stalled, []);
+  assert.deepEqual(replaced.stalled.map(([id]) => id), ['h2']);
+  assert.deepEqual(cancelled.stalled, []);
 });

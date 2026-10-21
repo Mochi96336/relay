@@ -14,6 +14,7 @@ test('command protocol selects the extracted low-risk control-plane messages and
     roomSongCommandFailed: (nextSocket, payload) => seen.push({ handler: 'room-song-command-failed', socket: nextSocket, payload }),
     songHandoffReady: (nextSocket, payload) => seen.push({ handler: 'song-handoff-ready', socket: nextSocket, payload }),
     songHandoffFailed: (nextSocket, payload) => seen.push({ handler: 'song-handoff-failed', socket: nextSocket, payload }),
+    songHandoffStalled: (nextSocket, payload) => seen.push({ handler: 'song-handoff-stalled', socket: nextSocket, payload }),
     participantRename: (nextSocket, payload) => seen.push({ handler: 'rename', socket: nextSocket, payload }),
     rejectMicReservation: (nextSocket, payload) => seen.push({ handler: 'mic-reservation', socket: nextSocket, payload }),
     playbackMicIntent: (nextSocket, payload) => seen.push({ handler: 'playback-intent', socket: nextSocket, payload }),
@@ -34,6 +35,7 @@ test('command protocol selects the extracted low-risk control-plane messages and
   const roomSongCommandFailed = { type: 'room-song-command-failed', commandId: 'command-a' };
   const songHandoffReady = { type: 'song-handoff-ready', handoffId: 'handoff-a' };
   const songHandoffFailed = { type: 'song-handoff-failed', handoffId: 'handoff-a' };
+  const songHandoffStalled = { type: 'song-handoff-stalled', handoffId: 'handoff-a', blocker: 'state-3' };
   const rename = { type: 'participant-rename', nickname: 'Mochi' };
   const acquire = { type: 'acquire-mic' };
   const forceAcquire = { type: 'force-acquire-mic' };
@@ -66,6 +68,7 @@ test('command protocol selects the extracted low-risk control-plane messages and
   assert.equal(protocol.dispatch(socket, startCalibration), true);
   assert.equal(protocol.dispatch(socket, uplinkHealth), true);
   assert.equal(protocol.dispatch(socket, micPresence), true);
+  assert.equal(protocol.dispatch(socket, songHandoffStalled), true);
 
   assert.deepEqual(seen.map((entry) => entry.handler), [
     'start-take',
@@ -87,6 +90,7 @@ test('command protocol selects the extracted low-risk control-plane messages and
     'start-timing-calibration',
     'audio-uplink-health',
     'mic-presence-telemetry',
+    'song-handoff-stalled',
   ]);
   assert.equal(seen[0]?.socket, socket);
   assert.equal(seen[0]?.payload, startTake);
@@ -108,6 +112,7 @@ test('command protocol selects the extracted low-risk control-plane messages and
   assert.equal(seen[16]?.payload, startCalibration);
   assert.equal(seen[17]?.payload, uplinkHealth);
   assert.equal(seen[18]?.payload, micPresence);
+  assert.equal(seen[19]?.payload, songHandoffStalled);
 });
 
 test('command protocol leaves unextracted messages and malformed envelopes to later routing', () => {
@@ -120,6 +125,7 @@ test('command protocol leaves unextracted messages and malformed envelopes to la
     roomSongCommandFailed: () => { calls += 1; },
     songHandoffReady: () => { calls += 1; },
     songHandoffFailed: () => { calls += 1; },
+    songHandoffStalled: () => { calls += 1; },
     participantRename: () => { calls += 1; },
     rejectMicReservation: () => { calls += 1; },
     playbackMicIntent: () => { calls += 1; },

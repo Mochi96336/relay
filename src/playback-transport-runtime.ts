@@ -78,6 +78,15 @@ export class PlaybackTransportRuntime<Socket extends PlaybackTransportSocket> {
     return false;
   }
 
+  /** How many open playback tabs a participant has: why no handoff target was chosen. */
+  openTabCount(participantId: string) {
+    let count = 0;
+    for (const socket of this.options.clients()) {
+      if (this.options.isOpen(socket) && this.identity(socket)?.participantId === participantId) count += 1;
+    }
+    return count;
+  }
+
   selectHandoffTarget(participantId: string, nowMs: number) {
     const candidates: Array<{ identity: PlaybackIdentity; intentAtMs: number }> = [];
     for (const socket of this.options.clients()) {

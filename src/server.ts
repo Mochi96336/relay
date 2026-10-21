@@ -1299,12 +1299,15 @@ function sendHandoffPlan(type: 'song-handoff-prepare' | 'song-handoff-commit', p
 function sweepPreparedSongHandoff(nowMs: number) {
   const target = youtubeTimeline.handoffTarget();
   if (!target) return false;
+  const handoffId = youtubeTimeline.handoffId();
+  const reason = youtubeTimeline.handoffSweepReason(playbackTransport.connected(target), nowMs);
   if (!youtubeTimeline.sweepHandoff(
     playbackTransport.connected(target),
     nowMs,
     participants.micOwnerId,
   )) return false;
 
+  logSongHandoff('abandoned', { handoffId, to: playbackLogLabel(target), reason });
   playbackTransport.send(target, { type: 'song-handoff-cancelled' });
   broadcastJson(youtubeTimeline.statusPayload(nowMs));
   broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
@@ -1313,9 +1316,36 @@ function sweepPreparedSongHandoff(nowMs: number) {
 
 function beginPreparedSongHandoff(participantId: string, nowMs = performance.now()) {
   const target = playbackTransport.selectHandoffTarget(participantId, nowMs);
-  if (!target) return false;
+  if (!target) {
+    // With no recent Mic intent, several tabs are ambiguous and none is guessed.
+    const tabs = playbackTransport.openTabCount(participantId);
+    logSongHandoff('not-started', {
+      to: participantLogLabel(participantId),
+      reason: tabs === 0 ? 'no-playback-tab' : 'several-playback-tabs',
+      tabs,
+    });
+    return false;
+  }
   const plan = youtubeTimeline.beginHandoff(target, participants.micOwnerId, nowMs);
-  if (!plan) return false;
+  if (!plan) {
+    logSongHandoff('not-started', {
+      to: playbackLogLabel(target),
+      reason: youtubeTimeline.handoffRefusal(target, participants.micOwnerId),
+    });
+    return false;
+  }
+  const room = youtubeTimeline.roomStatusPayload(nowMs);
+  logSongHandoff('prepare', {
+    handoffId: plan.handoffId,
+    from: playbackLogLabel(youtubeTimeline.leaderIdentity()),
+    to: playbackLogLabel(plan.target),
+    videoId: plan.videoId,
+    state: plan.state,
+    position: plan.serverTime,
+    roomState: room.state,
+    roomTime: room.serverTime,
+    duration: room.duration,
+  });
   sendHandoffPlan('song-handoff-prepare', plan);
   broadcastJson(youtubeTimeline.statusPayload(nowMs));
   broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
@@ -1342,7 +1372,12 @@ function applyMicOwnerEffects(
       options.afterQualityEvent?.();
     },
     cancelRoomSongCommand: (reason) => cancelPendingRoomSongCommand(reason, nowMs),
-    cancelSongHandoff: () => youtubeTimeline.cancelHandoff(),
+    cancelSongHandoff: () => {
+      const handoffId = youtubeTimeline.handoffId();
+      const cancelled = youtubeTimeline.cancelHandoff();
+      if (handoffId) logSongHandoff('cancelled', { handoffId, reason: 'mic-released' });
+      return cancelled;
+    },
     publishSongHandoffCancellation: () => {
       if (options.publishFullHandoffStatus !== false) {
         broadcastJson(youtubeTimeline.statusPayload(nowMs));
@@ -2233,6 +2268,27 @@ function participantLogLabel(participantId: string) {
   return { id: participantId.replace(/^participant-/, '').slice(0, 8), nickname };
 }
 
+/** A playback tab in a diagnostic line: its participant plus a transport id prefix. */
+function playbackLogLabel(identity: PlaybackIdentity | null) {
+  if (!identity) return null;
+  return { ...participantLogLabel(identity.participantId), tab: identity.transportId.replace(/^playback-/, '').slice(0, 8) };
+}
+
+/**
+ * One journal line per step of a song handoff, the move of the room song's
+ * playback to a new Mic owner's tab. Without it, a singer left with no player
+ * and no Change song button could not be told apart from a handoff that never
+ * started, timed out, or is still waiting on another tab.
+ */
+function logSongHandoff(event: string, fields: Record<string, unknown>) {
+  console.warn('[song-handoff]', JSON.stringify({ event, ...fields }));
+}
+
+/** A client-supplied reason, kept only if it is a short kebab-case token. */
+function journalToken(value: unknown) {
+  return typeof value === 'string' && /^[a-z0-9-]{1,40}$/.test(value) ? value : null;
+}
+
 let micRecoveryLogGeneration: number | null = null;
 let micRecoveryLogSequence = 0;
 function reportMicRecovery(health: AudioUplinkHealth) {
@@ -2526,18 +2582,53 @@ function roomSongCommandAccepted(
 function songHandoffReady(identity: PlaybackIdentity, handoffId: unknown) {
   const plan = youtubeTimeline.markHandoffReady(identity, handoffId, participants.micOwnerId);
   if (!plan) return;
+  logSongHandoff('commit', { handoffId: plan.handoffId, to: playbackLogLabel(identity) });
 
   sendHandoffPlan('song-handoff-commit', plan);
   broadcastJson(youtubeTimeline.statusPayload());
   broadcastJson(youtubeTimeline.roomStatusPayload());
 }
 
-/** A playback tab could not take the handoff; SongSession defers it. */
-function songHandoffFailed(identity: PlaybackIdentity, handoffId: unknown) {
-  if (!youtubeTimeline.deferHandoff(identity, handoffId)) return;
+/**
+ * A playback tab could not take the handoff; SongSession defers it. A target
+ * that fails while still preparing is not deferred, because it is already
+ * preparing. Its reason (for example youtube-error-150) is still journaled.
+ */
+function songHandoffFailed(identity: PlaybackIdentity, handoffId: unknown, reason: unknown) {
+  const liveTarget = handoffId === youtubeTimeline.handoffId()
+    && youtubeTimeline.handoffTarget()?.transportId === identity.transportId;
+  const deferred = youtubeTimeline.deferHandoff(identity, handoffId);
+  if (liveTarget) {
+    logSongHandoff(deferred ? 'target-retry' : 'target-failed', {
+      handoffId,
+      to: playbackLogLabel(identity),
+      reason: journalToken(reason),
+    });
+  }
+  if (!deferred) return;
 
   broadcastJson(youtubeTimeline.statusPayload());
   broadcastJson(youtubeTimeline.roomStatusPayload());
+}
+
+/**
+ * The handoff target says why it is still not ready. Journal only: the
+ * watchdog still decides when the handoff ends. Only the live handoff's
+ * target is heard, and every field is bounded before it reaches the log.
+ */
+function songHandoffStalled(identity: PlaybackIdentity, payload: Record<string, unknown>) {
+  const target = youtubeTimeline.handoffTarget();
+  const handoffId = youtubeTimeline.handoffId();
+  if (!target || payload.handoffId !== handoffId || target.transportId !== identity.transportId) return;
+  const finiteOrNull = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : null;
+  logSongHandoff('target-stalled', {
+    handoffId,
+    to: playbackLogLabel(identity),
+    blocker: journalToken(payload.blocker),
+    playerState: finiteOrNull(payload.playerState),
+    buffered: finiteOrNull(payload.buffered),
+    muted: typeof payload.muted === 'boolean' ? payload.muted : null,
+  });
 }
 
 /**
@@ -2604,6 +2695,11 @@ function youtubeTelemetryAccepted(input: {
   }
 
   if (input.handoffCompleted && input.handoffId) {
+    logSongHandoff('complete', {
+      handoffId: input.handoffId,
+      from: playbackLogLabel(input.previousLeader ?? null),
+      to: playbackLogLabel(input.acceptedIdentity),
+    });
     if (input.previousLeader) {
       playbackTransport.send(input.previousLeader, {
         type: 'song-handoff-release',
@@ -2744,7 +2840,12 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
   songHandoffFailed: (socket, payload) => {
     const playbackIdentity = playbackTransport.identity(socket);
     if (!playbackIdentity) return;
-    songHandoffFailed(playbackIdentity, payload.handoffId);
+    songHandoffFailed(playbackIdentity, payload.handoffId, payload.reason);
+  },
+  songHandoffStalled: (socket, payload) => {
+    const playbackIdentity = playbackTransport.identity(socket);
+    if (!playbackIdentity) return;
+    songHandoffStalled(playbackIdentity, payload);
   },
   participantRename: (socket, payload) => {
     if (!socket.participantId) return;

@@ -113,11 +113,14 @@ describe('Mic diagnostics model', () => {
   });
 
   it('warns about a Bluetooth headset microphone but not a wired one', () => {
-    // 2026-10-16: AirPods carried the voice as call audio and failed every probe.
+    // 2026-10-16: AirPods carried the voice as call audio and failed every probe;
+    // 2026-10-21: a Philips headset cut the voice at 8 kHz.
     const withInput = (inputLabel: string) => rows(liveStatus(s => {
       s.audio.captureAndSender.capture = { echoCancellation: false, inputLabel, device: 'iPhone iOS 18.7 · Safari 26.6' };
     })).device;
-    for (const name of ['AirPods', 'AirPods Pro', 'Galaxy Buds2 Pro', 'Headset (Bluetooth Hands-Free)', '藍牙耳機']) {
+    for (const name of [
+      'AirPods', 'AirPods Pro', 'Galaxy Buds2 Pro', 'Headset (Philips Fidelio L3) (Bluetooth)', 'Headset (Bluetooth Hands-Free)', '藍牙耳機',
+    ]) {
       const device = withInput(name);
       assert.equal(device.tone, 'warn', name);
       assert.match(device.note, /^A Bluetooth headset microphone/, name);

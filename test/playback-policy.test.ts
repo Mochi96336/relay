@@ -72,13 +72,13 @@ test('Mic owner can change the Song after the exact playback transport disappear
   }), false);
 });
 
-test('Mic ownership does not bypass a healthy playback holder or active handoff', () => {
+test('Mic owner can choose a replacement song while the previous media is unavailable', () => {
   assert.equal(canChangeRoomSong({
     role: 'observer',
     timeline: timeline({ videoId: 'abcdefghijk' }),
     isMicOwner: true,
     isMicFree: false,
-  }), false);
+  }), true);
   assert.equal(canChangeRoomSong({
     role: 'preparing',
     timeline: timeline({
@@ -89,7 +89,7 @@ test('Mic ownership does not bypass a healthy playback holder or active handoff'
     }),
     isMicOwner: true,
     isMicFree: false,
-  }), false);
+  }), true);
 });
 
 test('everyone can change the Song while the Mic is free', () => {

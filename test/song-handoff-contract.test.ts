@@ -29,7 +29,7 @@ const PAUSE_SLIDES_WITHIN_S = 3.5;
 const LOAD_MS = 300;
 
 /** A muted YouTube player as far as a handoff can see it. */
-function youtubeLikePlayer(clock: FakeClock, onState: (state: number) => void) {
+function youtubeLikePlayer(clock: FakeClock, onState: (state: number) => void, duration = DURATION) {
   let state = 5;
   let videoId: string | null = null;
   let position = 0;
@@ -52,10 +52,15 @@ function youtubeLikePlayer(clock: FakeClock, onState: (state: number) => void) {
     mute() { muted = true; },
     unMute() { muted = false; },
     setPlaybackRate() {},
+    cueVideoById(input) {
+      videoId = input.videoId; position = 0; playingSince = null; buffered = 0;
+      set(-1);
+      clock.setTimeout(() => set(5), 50);
+    },
     loadVideoById(input) {
       videoId = input.videoId; position = input.startSeconds; playingSince = null; buffered = 0;
       set(-1);
-      if (input.startSeconds > DURATION - LOAD_STALLS_WITHIN_S) return;
+      if (input.startSeconds > duration - LOAD_STALLS_WITHIN_S) return;
       clock.setTimeout(() => set(3), 50);
       clock.setTimeout(() => { buffered = 0.5; set(1); }, LOAD_MS);
     },
@@ -63,7 +68,7 @@ function youtubeLikePlayer(clock: FakeClock, onState: (state: number) => void) {
     playVideo() { set(1); },
     pauseVideo() {
       set(2);
-      if (currentTime() > DURATION - PAUSE_SLIDES_WITHIN_S) clock.setTimeout(() => set(0), 200);
+      if (currentTime() > duration - PAUSE_SLIDES_WITHIN_S) clock.setTimeout(() => set(0), 200);
     },
     buffered: () => buffered,
   };
@@ -71,15 +76,16 @@ function youtubeLikePlayer(clock: FakeClock, onState: (state: number) => void) {
 }
 
 /** One handoff from A's ended, paused or playing room to B, both halves real. */
-async function handOver(room: { state: number; currentTime: number }) {
+async function handOver(room: { state: number; currentTime: number; duration?: number }) {
+  const duration = room.duration ?? DURATION;
   const clock = new FakeClock();
   const songs = new SongSession();
-  songs.update(telemetry(room.currentTime, { state: room.state, duration: DURATION }), A, null, 0);
+  songs.update(telemetry(room.currentTime, { state: room.state, duration }), A, null, 0);
 
   const ready: string[] = [];
   const stalled: unknown[][] = [];
   let handoff: PlaybackHandoff | null = null;
-  const player = youtubeLikePlayer(clock, (state) => handoff?.observeState(state));
+  const player = youtubeLikePlayer(clock, () => handoff?.reconcile(), duration);
   handoff = new PlaybackHandoff({
     getPlayer: () => player,
     ensurePlayer: async () => player,
@@ -105,7 +111,7 @@ async function handOver(room: { state: number; currentTime: number }) {
   handoff.commit({ handoffId: commit.handoffId, serverTime: commit.serverTime, state: commit.state });
   clock.advance(400);
   const proof = songs.update(telemetry(player.getCurrentTime() as number, {
-    state: player.getPlayerState(), duration: DURATION, bufferedFraction: player.buffered(),
+    state: player.getPlayerState(), duration, bufferedFraction: player.buffered(),
   }), B, B.participantId, clock.now);
   return {
     completed: proof.handoffCompleted === true,
@@ -113,22 +119,36 @@ async function handOver(room: { state: number; currentTime: number }) {
     stalled,
     leader: (songs.statusPayload(clock.now) as Record<string, unknown>).playbackLeaderParticipantId,
     targetState: player.getPlayerState(),
+    roomState: songs.statusPayload(clock.now).state,
+    roomPosition: songs.statusPayload(clock.now).serverTime,
   };
 }
 
 describe('song handoff, server plan through the client player', () => {
-  test('an ended song reaches the new singer, paused clear of its end', async () => {
+  test('an ended song reaches the new singer with its logical end intact', async () => {
     const result = await handOver({ state: 0, currentTime: DURATION });
     assert.equal(result.completed, true, JSON.stringify(result.stalled));
     assert.equal(result.leader, B.participantId);
-    assert.equal(result.targetState, 2);
+    assert.equal(result.targetState, 5);
+    assert.equal(result.roomState, 0);
+    assert.equal(result.roomPosition, DURATION);
   });
 
   test('a song paused near its end and mid-song both hand over', async () => {
     for (const currentTime of [DURATION - 1, DURATION - 4, 100]) {
       const result = await handOver({ state: 2, currentTime });
       assert.equal(result.completed, true, `paused at ${currentTime}: ${JSON.stringify(result.stalled)}`);
-      assert.equal(result.targetState, 2);
+      assert.equal(result.targetState, 5);
+    }
+  });
+
+  test('ended short clips and unknown durations need no terminal-media workaround', async () => {
+    for (const duration of [0, 0.5, 4, 5]) {
+      const result = await handOver({ state: 0, currentTime: duration || 70, duration });
+      assert.equal(result.completed, true);
+      assert.equal(result.roomState, 0);
+      assert.equal(result.roomPosition, duration || 70);
+      assert.equal(result.targetState, 5);
     }
   });
 
@@ -143,7 +163,7 @@ describe('song handoff, server plan through the client player', () => {
     const clock = new FakeClock();
     const stalled: unknown[][] = [];
     let handoff: PlaybackHandoff | null = null;
-    const player = youtubeLikePlayer(clock, (state) => handoff?.observeState(state));
+    const player = youtubeLikePlayer(clock, () => handoff?.reconcile());
     handoff = new PlaybackHandoff({
       getPlayer: () => player, ensurePlayer: async () => player,
       onMutation() {}, onTimelineBoundary() {}, onNote() {}, onFailure() {}, sampleNow() {}, onReady() {},

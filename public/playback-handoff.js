@@ -1,3 +1,5 @@
+import { YouTubePlaybackTarget } from './youtube-playback-target.js';
+
 // Server proof expires after 5 s; this later watchdog only contains local damage.
 export const HANDOFF_COMMIT_TIMEOUT_MS = 6_500;
 const REALIGN_THRESHOLD_SECONDS = 0.75;
@@ -13,10 +15,12 @@ export const HANDOFF_STALL_REPORT_MS = 15_000;
  *   getVideoData(): {video_id?: unknown} | null,
  *   getPlayerState(): unknown,
  *   getCurrentTime(): unknown,
+ *   getPlaybackRate?: () => unknown,
  *   getVideoLoadedFraction(): unknown,
  *   isMuted(): boolean,
  *   mute(): void,
  *   unMute(): void,
+ *   cueVideoById?: (input: {videoId: string, startSeconds: number}) => void,
  *   loadVideoById(input: {videoId: string, startSeconds: number}): void,
  *   seekTo(position: number, allowSeekAhead: boolean): void,
  *   setPlaybackRate(rate: number): void,
@@ -31,7 +35,7 @@ export const HANDOFF_STALL_REPORT_MS = 15_000;
  * @typedef {{timers: number[]}} SampleJob
  * @typedef {HandoffState & {
  *   reusePreparedPlayer: boolean, readySent: boolean, timerEpoch: number,
- *   timers: Set<number>, samples: SampleJob | null, stallTimer: number | null,
+ *   timers: Set<number>, samples: SampleJob | null, stallTimer: number | null, media: YouTubePlaybackTarget | null,
  * }} Attempt
  * @typedef {{
  *   source: 'handoff-prepare' | 'handoff-commit', action: 'load' | 'play' | 'pause',
@@ -140,6 +144,7 @@ export class PlaybackHandoff {
     if (previous) {
       this.#clearTimers(previous);
       this.#clearStallReport(previous);
+      previous.media?.retire();
     }
     // The lease survives replacing a preparation, including synchronous player
     // callbacks during retirement. Relay's own mute is never a new preference.
@@ -148,7 +153,7 @@ export class PlaybackHandoff {
     this.#epoch += 1;
     /** @type {Attempt} */
     const attempt = { ...plan, phase: 'preparing', reusePreparedPlayer,
-      readySent: false, timerEpoch: 0, timers: new Set(), samples: null, stallTimer: null };
+      readySent: false, timerEpoch: 0, timers: new Set(), samples: null, stallTimer: null, media: null };
     this.#attempt = attempt;
     this.#ports.onNote('song.preparingHandoff');
     // Outside the attempt's timers: cue() clears those, and a player that never
@@ -183,22 +188,23 @@ export class PlaybackHandoff {
       if (!this.#current(attempt, player)) return false;
       player.mute();
       if (!this.#current(attempt, player)) return false;
-      // The server already keeps a dormant song clear of its end.
-      const position = Math.max(0, attempt.targetTime);
-      if (attempt.reusePreparedPlayer && this.#videoId(player) === attempt.videoId) {
-        const currentTime = Number(player.getCurrentTime());
-        const state = Number(player.getPlayerState());
-        if (!Number.isFinite(currentTime) || Math.abs(currentTime - position) > 0.75
-            || (state === 0 && position < attempt.targetTime)) player.seekTo(position, true);
-      } else {
-        // A muted load requests real media; CUED alone proves only a thumbnail.
-        player.loadVideoById({ videoId: attempt.videoId, startSeconds: position });
-      }
-      if (!this.#current(attempt, player)) return false;
-      try { player.setPlaybackRate(attempt.playbackRate); } catch {}
+      attempt.media?.retire();
+      attempt.media = new YouTubePlaybackTarget(player, {
+        videoId: attempt.videoId, positionSeconds: Math.max(0, attempt.targetTime),
+        state: attempt.desiredState, playbackRate: attempt.playbackRate,
+      }, {
+        mode: attempt.desiredState === 5 ? 'cue'
+          : attempt.reusePreparedPlayer && this.#videoId(player) === attempt.videoId ? 'reuse' : 'load',
+        seek: 'if-drifted',
+        isCurrent: () => this.#current(attempt, player) && attempt.phase === 'preparing',
+      });
+      attempt.media.observe();
       if (!this.#current(attempt, player)) return false;
       this.#clearTimers(attempt);
-      for (const delay of READY_CHECK_DELAYS_MS) this.#later(attempt, delay, () => this.announceReady());
+      for (const delay of READY_CHECK_DELAYS_MS) this.#later(attempt, delay, () => {
+        try { attempt.media?.observe(); } catch {}
+        this.announceReady();
+      });
       return true;
     } catch (error) {
       if (this.#current(attempt)) {
@@ -234,8 +240,8 @@ export class PlaybackHandoff {
     if (this.#videoId(player) !== attempt.videoId) return result('video-not-loaded');
     if (!readings.muted) return result('not-muted');
     const playing = attempt.desiredState === 1 || attempt.desiredState === 3;
-    if (readings.playerState !== (playing ? 1 : 2)) return result(`state-${readings.playerState ?? 'unknown'}`);
-    if (readings.buffered === null || readings.buffered <= 0) return result('not-buffered');
+    if (readings.playerState !== (attempt.desiredState === 5 ? 5 : playing ? 1 : 2)) return result(`state-${readings.playerState ?? 'unknown'}`);
+    if (attempt.desiredState !== 5 && (readings.buffered === null || readings.buffered <= 0)) return result('not-buffered');
     return result(null);
   }
 
@@ -252,17 +258,16 @@ export class PlaybackHandoff {
     return true;
   }
 
-  /** @param {number} state */
-  observeState(state) {
+  /** Reconcile on events and the existing telemetry tick; deadlines stay with the owner. */
+  reconcile() {
     const attempt = this.#attempt;
     const player = this.#ports.getPlayer();
-    if (!attempt || attempt.phase !== 'preparing' || !player) return;
-    try { player.setPlaybackRate(attempt.playbackRate); } catch {}
-    if (!this.#current(attempt, player)) return;
-    if (attempt.desiredState !== 1 && state === 1) {
-      try { player.pauseVideo(); } catch {}
+    if (!attempt || !player) return;
+    try { attempt.media?.observe(); } catch (error) {
+      this.#ports.warn('Could not reconcile handoff playback', error);
+      return;
     }
-    if (this.#current(attempt, player)) this.announceReady();
+    if (attempt.phase === 'preparing' && this.#current(attempt, player)) this.announceReady();
   }
 
   /** @param {{handoffId?: unknown, serverTime?: unknown, state?: unknown}} message */
@@ -278,6 +283,7 @@ export class PlaybackHandoff {
     if (!Number.isFinite(targetTime)) return false;
     this.#clearTimers(attempt);
     this.#clearStallReport(attempt);
+    attempt.media?.retire();
     attempt.phase = 'committing';
     attempt.targetTime = Math.max(0, targetTime);
     attempt.desiredState = Number(message.state);
@@ -288,17 +294,16 @@ export class PlaybackHandoff {
       this.#acquireMuteLease(player);
       player.mute();
       if (!this.#current(attempt, player)) return false;
-      if (this.#videoId(player) !== attempt.videoId) {
-        player.loadVideoById({ videoId: attempt.videoId, startSeconds: attempt.targetTime });
-      }
-      if (!this.#current(attempt, player)) return false;
-      const currentTime = Number(player.getCurrentTime());
-      if (!Number.isFinite(currentTime) || Math.abs(currentTime - attempt.targetTime) > 0.75) {
-        player.seekTo(attempt.targetTime, true);
-      }
-      if (!this.#current(attempt, player)) return false;
-      if (attempt.desiredState === 1) player.playVideo();
-      else player.pauseVideo();
+      attempt.media = new YouTubePlaybackTarget(player, {
+        videoId: attempt.videoId, positionSeconds: attempt.targetTime,
+        state: attempt.desiredState, playbackRate: attempt.playbackRate,
+      }, {
+        mode: attempt.desiredState === 5 ? 'cue'
+          : this.#videoId(player) !== attempt.videoId ? 'load' : 'reuse',
+        seek: 'if-drifted',
+        isCurrent: () => this.#current(attempt, player) && attempt.phase === 'committing',
+      });
+      attempt.media.observe();
       if (!this.#current(attempt, player)) return false;
       this.#later(attempt, HANDOFF_COMMIT_TIMEOUT_MS, () => {
         if (attempt.phase === 'committing') this.rollback('commit-timeout');
@@ -354,12 +359,12 @@ export class PlaybackHandoff {
       this.#ports.onTimelineBoundary(null);
       player.mute();
       if (!this.#current(attempt, player)) return false;
-      player.seekTo(attempt.targetTime, true);
-      if (!this.#current(attempt, player)) return false;
-      player.setPlaybackRate(attempt.playbackRate);
-      if (!this.#current(attempt, player)) return false;
-      if (attempt.desiredState === 1) player.playVideo();
-      else player.pauseVideo();
+      attempt.media?.retire();
+      attempt.media = new YouTubePlaybackTarget(player, {
+        videoId: attempt.videoId, positionSeconds: attempt.targetTime,
+        state: attempt.desiredState, playbackRate: attempt.playbackRate,
+      }, { seek: true, isCurrent: () => this.#current(attempt, player) && attempt.phase === 'committing' });
+      attempt.media.observe();
       if (!this.#current(attempt, player)) return false;
       this.#sampleAfterCommit(attempt);
       return true;
@@ -396,6 +401,7 @@ export class PlaybackHandoff {
     const epoch = ++this.#epoch;
     this.#clearTimers(attempt);
     this.#clearStallReport(attempt);
+    attempt.media?.retire();
     const player = this.#ports.getPlayer();
     const lease = this.#muteLease;
     if (player && lease?.player === player) {
@@ -419,6 +425,7 @@ export class PlaybackHandoff {
     const epoch = ++this.#epoch;
     this.#clearTimers(attempt);
     this.#clearStallReport(attempt);
+    attempt.media?.retire();
     const player = this.#ports.getPlayer();
     const lease = this.#muteLease;
     const restoreAudible = player !== null && player === lease?.player && lease.wasMuted === false;

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 
-import { HANDOFF_END_LEAD_SECONDS, SongSession } from '../src/song-session.js';
+import { SongSession } from '../src/song-session.js';
 import { telemetry } from './support/song-handoff-telemetry.js';
 
 const VIDEO = 'dQw4w9WgXcQ';
@@ -313,38 +313,41 @@ describe('prepared song handoff', () => {
     assert.equal(songs.handoffSweepReason(true, 100 + 31_000), null);
   });
 
-  test('an ended song is handed over clear of its end, where YouTube can hold PAUSED', () => {
-    // 2026-10-22: the plan said PAUSED at the very end; the target loaded the
-    // last second, stayed UNSTARTED with nothing buffered, and timed out.
+  test('an ended song transfers a cued controller and preserves its room state', () => {
     const songs = new SongSession();
     songs.update(telemetry(200, { state: 0 }), A, null, 0);
     const plan = songs.beginHandoff(B, B.participantId, 100)!;
-    assert.equal(plan.state, 2);
-    assert.equal(plan.serverTime, 200 - HANDOFF_END_LEAD_SECONDS);
-
+    assert.equal(plan.state, 5);
+    assert.equal(plan.serverTime, 0, 'the next native Play is a replay');
     const commit = songs.markHandoffReady(B, plan.handoffId, B.participantId, 150)!;
-    assert.equal(commit.serverTime, plan.serverTime, 'the commit asks for the same place');
-    assert.equal(
-      songs.update(telemetry(200, { state: 2 }), B, B.participantId, 200).reason,
-      'handoff-song-mismatch',
-      'paused at the end is not where the target was asked to be',
-    );
-    const completed = songs.update(telemetry(195.2, { state: 2 }), B, B.participantId, 250);
+    assert.equal(commit.serverTime, 0);
+    for (const invalid of [{ state: 2 }, { state: 5, currentTime: Number.NaN },
+      { state: 5, currentTime: -1 }, { state: 5, videoId: 'M7lc1UVf-VE' }, { state: 5, playbackRate: 2 }]) {
+      assert.equal(songs.update(telemetry(0, invalid), B, B.participantId, 200).accepted, false);
+      assert.equal(songs.statusPayload(200).playbackLeaderParticipantId, A.participantId);
+    }
+    const completed = songs.update(telemetry(0, { state: 5, bufferedFraction: 0 }), B, B.participantId, 250);
     assert.equal(completed.handoffCompleted, true);
-    assert.equal((songs.statusPayload(250) as Record<string, any>).playbackLeaderParticipantId, B.participantId);
+    const status = songs.statusPayload(250);
+    assert.equal(status.state, 0);
+    assert.equal(status.serverTime, 200);
+    assert.equal(status.playbackLeaderParticipantId, B.participantId);
   });
 
-  test('only a dormant song near its end moves; mid-song, playing and short songs keep their place', () => {
-    const planAt = (report: Record<string, unknown>, at: number) => {
+  test('all dormant positions, including short and unknown-duration songs, remain logical room state', () => {
+    for (const [state, position, duration] of [[0, 4, 4], [2, 3.9, 4], [2, 198, 200], [2, 100, 200], [0, 70, 0], [5, 20, 200], [-1, 0, 0]]) {
       const songs = new SongSession();
-      songs.update(telemetry(Number(report.currentTime), report), A, null, 0);
-      return songs.beginHandoff(B, B.participantId, at)!;
-    };
-    assert.equal(planAt({ currentTime: 198, state: 2 }, 100).serverTime, 200 - HANDOFF_END_LEAD_SECONDS);
-    assert.equal(planAt({ currentTime: 100, state: 2 }, 100).serverTime, 100);
-    assert.equal(planAt({ currentTime: 3, state: 2, duration: 4 }, 100).serverTime, 3);
-    const playing = planAt({ currentTime: 198, state: 1 }, 100);
-    assert.equal(playing.state, 1);
-    assert.ok(playing.serverTime >= 198, 'a playing song is followed, not rewound');
+      songs.update(telemetry(position, { state, duration }), A, null, 0);
+      const plan = songs.beginHandoff(B, B.participantId, 100)!;
+      assert.equal(plan.state, 5);
+      assert.equal(plan.serverTime, state === 0 ? 0 : position);
+      songs.markHandoffReady(B, plan.handoffId, B.participantId, 150);
+      assert.equal(songs.update(telemetry(0, { state: 5, bufferedFraction: 0 }), B, B.participantId, 200).handoffCompleted, true);
+      assert.equal(songs.statusPayload(200).state, state);
+      assert.equal(songs.statusPayload(200).serverTime, position);
+      assert.equal(songs.update(telemetry(0, { state: 5, bufferedFraction: 0 }), B, B.participantId, 300).accepted, true);
+      assert.equal(songs.statusPayload(300).state, state);
+      assert.equal(songs.statusPayload(300).serverTime, position);
+    }
   });
 });

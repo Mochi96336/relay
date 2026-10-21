@@ -1290,12 +1290,19 @@ function sendHandoffPlan(type: 'song-handoff-prepare' | 'song-handoff-commit', p
 /**
  * Ends a handoff that has stopped being able to complete.
  *
- * A live handoff intentionally holds the room song still, so it must not be
- * able to outlive the transport it is waiting for. A page reload also lands
- * here rather than resuming: the playback generation changes on load, so the
- * reloaded tab is a different transport and the prepared target is genuinely
- * gone.
+ * A live handoff must not outlive its target or proof deadline. Registration
+ * can resume it on a newer generation of the same logical transport while
+ * preserving the original total deadline; a missing target is abandoned.
  */
+function refreshPreparedSongHandoff(nowMs: number) {
+  const target = youtubeTimeline.handoffTarget();
+  if (!target || youtubeTimeline.handoffSweepReason(playbackTransport.connected(target), nowMs)) return;
+  const refreshed = youtubeTimeline.refreshHandoff(nowMs);
+  if (!refreshed) return;
+  logSongHandoff('target-updated', { handoffId: refreshed.plan.handoffId, state: refreshed.plan.state });
+  sendHandoffPlan(refreshed.phase === 'committing' ? 'song-handoff-commit' : 'song-handoff-prepare', refreshed.plan);
+}
+
 function sweepPreparedSongHandoff(nowMs: number) {
   const target = youtubeTimeline.handoffTarget();
   if (!target) return false;
@@ -2473,6 +2480,7 @@ const youtubeTimelineTimer = setInterval(() => {
   choir?.tick(nowMs);
   if (relayConfig.sampleSongFallback !== 'rtt') refreshLiveMicNetworkCompensation();
 
+  refreshPreparedSongHandoff(nowMs);
   if (
     youtubeTimeline.hasTelemetry
     && nowMs - lastTelemetryTimelineBroadcastAtMs >= TIMELINE_STATUS_REFRESH_MS
@@ -2681,6 +2689,7 @@ function youtubeTelemetryAccepted(input: {
   }
 
   choir?.sweep(input.nowMs);
+  refreshPreparedSongHandoff(input.nowMs);
   lastTelemetryTimelineBroadcastAtMs = performance.now();
   broadcastJson(input.timelineStatus);
   broadcastJson(youtubeTimeline.roomStatusPayload(input.nowMs));
@@ -2816,6 +2825,20 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
       return;
     }
 
+    if (!decision.duplicate && decision.command.body.action === 'load'
+        && decision.command.issuedByParticipantId === participants.micOwnerId) {
+      const handoffId = youtubeTimeline.handoffId();
+      const target = youtubeTimeline.handoffTarget();
+      if (youtubeTimeline.cancelHandoff()) {
+        logSongHandoff('cancelled', { handoffId, reason: 'song-replaced' });
+        if (target) playbackTransport.send(target, { type: 'song-handoff-cancelled' });
+        broadcastJson(youtubeTimeline.statusPayload(nowMs));
+        broadcastJson(youtubeTimeline.roomStatusPayload(nowMs));
+      }
+      if (decision.replacedCommandId) {
+        broadcastRoomSongCommandFailure(decision.replacedCommandId, 'song-replaced', nowMs);
+      }
+    }
     roomSongCommandAccepted(socket, decision.command, decision.duplicate, nowMs);
   },
   roomSongCommandFailed: (socket, payload) => {
@@ -2903,8 +2926,13 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
       generation: playbackGeneration,
     };
     const nowMs = performance.now();
+    const pendingMedia = roomSongCommands.pendingForTarget(acceptedIdentity, nowMs);
+    const activatesPlayback = pendingMedia && (pendingMedia.body.desired.mustApplyPosition
+      || pendingMedia.body.desired.state === 1);
+    const roomTelemetry = activatesPlayback ? payload
+      : youtubeTimeline.projectTelemetry(payload, acceptedIdentity, nowMs);
     const commandGate = roomSongCommands.gateTelemetry(
-      payload,
+      roomTelemetry,
       acceptedIdentity,
       youtubeTimeline.statusPayload(nowMs) as Record<string, unknown>,
       nowMs,
@@ -2914,6 +2942,11 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
       return;
     }
 
+    // Acceptance requests media; actual proof activates its clock. A failed Play
+    // must leave the dormant room representation available for retry.
+    if (activatesPlayback && (commandGate.completesCommandId || [1, 3].includes(Number(payload.state)))) {
+      youtubeTimeline.activatePlayback(acceptedIdentity);
+    }
     const result = youtubeTimeline.update(
       payload,
       acceptedIdentity,

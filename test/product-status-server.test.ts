@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { RelayClient, participantIdFor, sleep, startRelay, statusz } from './helpers/harness.js';
+import { requestProductStatus } from './support/client-commands.js';
 
 const RATE = 48_000;
 const FAST = {
@@ -29,8 +30,8 @@ test('/statusz, /readyz and product-status agree that a completely unarmed room 
     assert.ok(readiness.sessionReasons.includes('mic-not-connected'));
 
     const client = await RelayClient.connectAs(server, 'product-user-123', 'Mochi');
-    client.send({ type: 'product-status-request' });
-    const product = await client.waitForType('product-status');
+    // Ignore an unsolicited idle snapshot queued before this participant joined.
+    const product = await requestProductStatus(client, message => message.room?.participantCount === 1);
 
     assert.equal(product.lifecycle, 'idle');
     assert.equal(product.health, 'healthy');

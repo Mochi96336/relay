@@ -67,6 +67,8 @@ export function canRecoverPlayback({ role, timeline }) {
  */
 export function canChangeRoomSong({ role, timeline, isMicOwner, isMicFree }) {
   if (!timeline || typeof timeline !== 'object') return false;
+  // Choosing a new song is an explicit replacement, including a stalled handoff.
+  if (isMicOwner === true) return true;
   if (timeline.handoffState && timeline.handoffState !== 'idle') return false;
 
   const hasSong = typeof timeline.videoId === 'string' && timeline.videoId.length > 0;

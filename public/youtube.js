@@ -1,7 +1,7 @@
 import './playback-prewarm-trigger.js';
 import { playbackContinuationDecision, reloadDesiredFromRoom } from './playback-continuation.js';
-import { shouldSetPlaybackRate } from './room-song-seek-policy.js';
 import { PlaybackHandoff } from './playback-handoff.js';
+import { YouTubePlaybackTarget } from './youtube-playback-target.js';
 import { shouldRestoreRoomAfterCommandTerminal } from './room-song-command-terminal.js';
 import {
   ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS,
@@ -63,6 +63,17 @@ let latestPlaybackRoom = null;
 let speculativePrewarm = null;
 let outgoingHandoffId = null;
 let autoplayRecoveryRequired = false;
+let localPlaybackTarget = null;
+
+function applyLocalPlayback(desired, { mode = 'reuse', seek = false, isCurrent = () => true } = {}) {
+  localPlaybackTarget?.retire();
+  const target = new YouTubePlaybackTarget(player, desired, {
+    mode, seek, isCurrent: () => localPlaybackTarget === target && isCurrent(),
+  });
+  localPlaybackTarget = target;
+  target.observe();
+}
+
 
 // Player construction and presentation are adapters; the handoff owns its
 // identity, mutation sequence, mute provenance and delayed work.
@@ -339,7 +350,8 @@ function snapshotConvergence(snapshot, mutation) {
     desired: mutation.desired,
     observed: snapshot,
     projectedPositionSeconds,
-    requirePosition: mutation.desired.mustApplyPosition !== false,
+    requirePosition: mutation.source === 'restore' && mutation.desired.state === 5
+      ? false : mutation.desired.mustApplyPosition !== false,
   });
 
   // A state/rate command can create a one-off media-clock discontinuity while
@@ -494,6 +506,7 @@ function renderSnapshot(snapshot) {
   // until the latest local intent has a server apply.
   const mutations = localMutationsForSnapshot(snapshot);
   if (mutations.length > 0) {
+    localPlaybackTarget?.retire();
     for (const mutation of mutations) requestRoomSongCommand(mutation);
     return;
   }
@@ -526,6 +539,8 @@ function renderSnapshot(snapshot) {
 }
 
 function sampleNow() {
+  try { localPlaybackTarget?.observe(); } catch {}
+  playbackHandoff.reconcile();
   const snapshot = readSnapshot();
   if (!snapshot) return;
   if (snapshot.state === 1 && autoplayRecoveryRequired) clearAutoplayRecovery();
@@ -626,14 +641,11 @@ function primeSpeculativePrewarm() {
     player.mute();
     loadedVideoId = prewarm.videoId;
     previousSnapshot = null;
-    // cueVideoById only loads a thumbnail. A muted load is deliberate here: it
-    // makes YouTube request and decode the actual media while the confirmation
-    // is open, without becoming audible or gaining any room authority.
-    player.loadVideoById({
-      videoId: prewarm.videoId,
-      startSeconds: targetTime,
+    applyLocalPlayback({ videoId: prewarm.videoId, positionSeconds: targetTime,
+      state: prewarm.desiredState === 1 ? 1 : 5, playbackRate: prewarm.playbackRate }, {
+      mode: prewarm.desiredState === 1 ? 'load' : 'cue',
+      isCurrent: () => speculativePrewarm === prewarm && !playbackHandoff.pending,
     });
-    try { player.setPlaybackRate(prewarm.playbackRate); } catch {}
     return true;
   } catch (error) {
     console.warn('Could not prewarm room song playback', error);
@@ -727,24 +739,10 @@ function applyAuthoritativeRestore() {
   mutation.desired = { ...desired, positionSeconds: targetPosition };
   mutation.appliedAtPerformanceMs = performance.now();
 
-  if (desired.state === 5) {
-    player.cueVideoById({
-      videoId: desired.videoId,
-      startSeconds: targetPosition,
-    });
-    player.setPlaybackRate(desired.playbackRate);
-  } else {
-    if (reportedVideoId() !== desired.videoId) {
-      player.cueVideoById({
-        videoId: desired.videoId,
-        startSeconds: targetPosition,
-      });
-    }
-    player.seekTo(targetPosition, true);
-    applyPlaybackRate(desired.playbackRate);
-    if (desired.state === 1) player.playVideo();
-    else player.pauseVideo();
-  }
+  applyLocalPlayback({ ...desired, positionSeconds: targetPosition }, {
+    mode: desired.state === 5 ? 'cue' : reportedVideoId() !== desired.videoId ? 'load' : 'reuse',
+    seek: true, isCurrent: () => serverMutation === mutation,
+  });
 
   noteNode.textContent = 'Restoring this playback after reload…';
   setTimeout(sampleNow, 100);
@@ -805,19 +803,10 @@ function handleStateChange(event) {
   if (event.data === 1 && autoplayRecoveryRequired) clearAutoplayRecovery();
   setPlayerState(event.data);
   sampleNow();
-  if (speculativePrewarm && !playbackHandoff.pending) {
-    try { player.setPlaybackRate(speculativePrewarm.playbackRate); } catch {}
-    // A paused/cued authoritative room still benefits from forcing one real
-    // media request. Stop as soon as the muted player proves it can play so the
-    // speculative copy does not drift away from the fixed room position.
-    if (speculativePrewarm.desiredState !== 1 && event.data === 1) {
-      try { player.pauseVideo(); } catch {}
-    }
-  }
-  playbackHandoff.observeState(Number(event.data));
 }
 
 function handlePlaybackRateChange(event) {
+  try { localPlaybackTarget?.observe(); } catch {}
   setPlayerState(player?.getPlayerState?.() ?? -1, `${event.data}×`);
   sampleNow();
 }
@@ -904,30 +893,6 @@ async function ensurePlayer(videoId, isCurrent = () => true) {
   return player;
 }
 
-/**
- * Reading the player is not free of risk: the IFrame answers these before it is
- * fully ready and can throw. A failed read is not evidence that the current rate
- * already matches, so the policy treats null as "act".
- */
-function safePlaybackRate() {
-  try {
-    const value = Number(player.getPlaybackRate());
-    return Number.isFinite(value) ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-function applyPlaybackRate(rate) {
-  if (!shouldSetPlaybackRate({
-    currentRate: safePlaybackRate(),
-    desiredRate: rate,
-  })) return;
-  try {
-    player.setPlaybackRate(Number(rate));
-  } catch {}
-}
-
 async function applyRoomSongCommand(message) {
   const commandId = typeof message.commandId === 'string' ? message.commandId : null;
   const action = typeof message.action === 'string' ? message.action : null;
@@ -949,6 +914,7 @@ async function applyRoomSongCommand(message) {
     && serverMutation.revision > revision
   ) return;
 
+  if (action === 'load') playbackHandoff.cancel();
   clearAutoplayRecovery();
   retireOutgoingReleaseBarrier();
   cancelPlaybackPrewarm();
@@ -973,17 +939,15 @@ async function applyRoomSongCommand(message) {
     expiresAt: Number.POSITIVE_INFINITY,
   };
 
+  const mutation = serverMutation;
   try {
-    await ensurePlayer(desired.videoId);
+    await ensurePlayer(desired.videoId, () => serverMutation === mutation);
     // A newer apply may have arrived while the YouTube API/player was loading.
     // Never let the older async continuation mutate playback afterward.
     if (serverMutation?.source !== 'room-command' || serverMutation.commandId !== commandId) return;
     if (!playerReady || !player) {
-      if (desired.state === 5) {
-        noteNode.textContent = `Preparing room ${action}…`;
-        return;
-      }
-      throw new Error('player not ready');
+      noteNode.textContent = `Preparing room ${action}…`;
+      return;
     }
 
     // Keep the previous sample across a command apply. The convergence policy
@@ -992,29 +956,11 @@ async function applyRoomSongCommand(message) {
     loadedVideoId = desired.videoId;
     serverMutation.appliedAtPerformanceMs = performance.now();
 
-    if (desired.state === 5) {
-      player.cueVideoById({
-        videoId: desired.videoId,
-        startSeconds: Math.max(0, desired.positionSeconds),
-      });
-    } else {
-      const videoChanged = reportedVideoId() !== desired.videoId;
-      if (videoChanged) {
-        player.cueVideoById({
-          videoId: desired.videoId,
-          startSeconds: Math.max(0, desired.positionSeconds),
-        });
-      }
-      // Position is a command dimension, not a distance heuristic.
-      if (videoChanged || desired.mustApplyPosition) {
-        player.seekTo(Math.max(0, desired.positionSeconds), true);
-      }
-      applyPlaybackRate(desired.playbackRate);
-      if (desired.state === 1) player.playVideo();
-      else player.pauseVideo();
-    }
-
-    if (desired.state === 5) player.setPlaybackRate(desired.playbackRate);
+    applyLocalPlayback(desired, {
+      mode: desired.state === 5 ? 'cue' : reportedVideoId() !== desired.videoId ? 'load' : 'reuse',
+      seek: desired.mustApplyPosition === true,
+      isCurrent: () => serverMutation === mutation,
+    });
     noteNode.textContent = `Applying latest room ${action}…`;
     setTimeout(() => {
       if (serverMutation?.commandId === commandId) sampleNow();
@@ -1067,7 +1013,9 @@ async function restoreAuthoritativeRoom(room) {
       suppressTelemetry: false,
       expiresAt: Number.POSITIVE_INFINITY,
     };
-    await ensurePlayer(videoId);
+    const mutation = serverMutation;
+    await ensurePlayer(videoId, () => serverMutation === mutation);
+    if (serverMutation !== mutation) return;
     if (!playerReady || !player) {
       noteNode.textContent = 'Restoring this playback after reload…';
       return;

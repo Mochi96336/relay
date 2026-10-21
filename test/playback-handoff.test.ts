@@ -19,6 +19,9 @@ function fixture(ensure: (video: string, current: () => boolean) => Promise<unkn
     isMuted() { if (readFails) throw Error('unknown mute provenance'); return this.muted; },
     mute() { if (muteFails) throw Error('mute failed'); this.muted = true; effects.push(['mute']); },
     unMute() { this.muted = false; effects.push(['unmute']); },
+    cueVideoById(input: { videoId: string; startSeconds: number }) {
+      this.videoId = input.videoId; this.position = 0; this.state = 5; this.buffer = 0; effects.push(['cue', input]);
+    },
     loadVideoById(input: { videoId: string; startSeconds: number }) {
       this.videoId = input.videoId; this.position = input.startSeconds; effects.push(['load', input]);
     },
@@ -60,12 +63,12 @@ test('cold preparation requests media muted, owns its polling and suppresses com
 for (const desiredState of [1, 2, 3, 5, 0, -1]) {
   test(`readiness proves exact video, renderable state and buffer for desired ${desiredState}`, async () => {
     const f = fixture(); await f.prepare('h1', { desiredState });
-    const expected = [1, 3].includes(desiredState) ? 1 : 2;
+    const expected = desiredState === 5 ? 5 : [1, 3].includes(desiredState) ? 1 : 2;
     for (const state of [-1, 0, 1, 2, 3, 5]) {
       f.player.state = state; f.player.videoId = 'other-video';
       assert.equal(f.owner.announceReady(), false);
       f.player.videoId = VIDEO; f.player.buffer = 0;
-      assert.equal(f.owner.announceReady(), false);
+      if (desiredState !== 5 || state !== 5) assert.equal(f.owner.announceReady(), false);
       f.player.buffer = 0.5;
       if (state !== expected) assert.equal(f.owner.announceReady(), false);
     }
@@ -83,12 +86,13 @@ test('readiness read failure stays pending and polling reaches the late readines
   assert.deepEqual(f.ready, ['h1']);
 });
 
-test('a dormant plan prepares exactly where the server put it and observes PAUSED before readiness', async () => {
-  // The server keeps an ended song clear of its end (HANDOFF_END_LEAD_SECONDS).
-  const f = fixture(); await f.prepare('h1', { targetTime: 195, desiredState: 2 });
-  assert.equal(f.player.position, 195);
-  f.owner.observeState(1);
-  assert.equal(f.player.state, 2); assert.deepEqual(f.ready, ['h1']);
+test('a dormant plan cues its intended start without treating the setup clock as room time', async () => {
+  const f = fixture(); await f.prepare('h1', { targetTime: 198, desiredState: 5 });
+  assert.ok(f.effects.some(effect => effect[0] === 'cue' && (effect[1] as {startSeconds: number}).startSeconds === 198));
+  assert.equal(f.player.position, 0, 'a cued iframe does not expose the logical paused position');
+  assert.equal(f.player.buffer, 0);
+  f.owner.reconcile();
+  assert.deepEqual(f.ready, ['h1']);
 });
 
 test('matching speculative media is reused with its original mute provenance', async () => {
@@ -273,20 +277,22 @@ test('failed provenance reads leave untouched media alone even on cancellation',
 });
 
 
-test('a reused ENDED player seeks back to the dormant plan position', async () => {
+test('a reused ENDED player becomes a replay controller without requesting terminal media', async () => {
   const f = fixture(); f.player.position = 200; f.player.state = 0;
-  await f.prepare('h1', { desiredState: 2, targetTime: 195 }, { reusePreparedPlayer: true });
-  assert.equal(f.player.position, 195);
-  assert.equal(f.effects.some(effect => effect[0] === 'seek'), true);
+  await f.prepare('h1', { desiredState: 5, targetTime: 0 }, { reusePreparedPlayer: true });
+  assert.equal(f.player.position, 0);
+  assert.equal(f.player.state, 5);
+  assert.equal(f.effects.some(effect => effect[0] === 'cue'), true);
+  assert.equal(f.effects.some(effect => effect[0] === 'load' || effect[0] === 'seek'), false);
 });
 
-test('a dormant commit is not realigned to the room\'s raw position at the end', async () => {
-  const f = fixture(); await f.prepare('h1', { targetTime: 195, desiredState: 2 });
-  f.owner.observeState(1); f.commit('h1', { serverTime: 195, state: 2 });
+test('a dormant commit cannot realign its controller to the room end', async () => {
+  const f = fixture(); await f.prepare('h1', { targetTime: 0, desiredState: 5 });
+  f.owner.reconcile(); f.commit('h1', { serverTime: 0, state: 5 });
   assert.equal(f.owner.realign({ handoffState: 'committing', handoffId: 'h1', serverTime: 200 }), false);
-  assert.equal(f.player.position, 195);
+  assert.equal(f.player.position, 0);
+  assert.equal(f.player.state, 5);
 });
-
 
 test('repeated realignment bounds pending samples without renewing the commit deadline', async () => {
   const f = fixture(); await f.prepare(); f.commit();

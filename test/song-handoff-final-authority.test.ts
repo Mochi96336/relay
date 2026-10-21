@@ -79,3 +79,41 @@ test('a target that resumes behind after BUFFERING cannot rewind the authoritati
   assert.equal(status.playbackLeaderParticipantId, B.participantId);
   assert.ok(Number(status.serverTime) >= 14, 'promotion must not rewind room time to the stale candidate');
 });
+
+for (const phase of ['preparing', 'committing']) {
+  test(`a song ending during ${phase} refreshes the target without extending its deadline`, () => {
+    const songs = new SongSession();
+    songs.update(telemetry(199.5, { state: 1 }), A, null, 0);
+    const plan = songs.beginHandoff(B, B.participantId, 0)!;
+    if (phase === 'committing') songs.markHandoffReady(B, plan.handoffId, B.participantId, 10);
+    assert.equal(songs.update(telemetry(200, { state: 0 }), A, B.participantId, 500).accepted, true);
+    const refreshed = songs.refreshHandoff(500)!;
+    assert.equal(refreshed.phase, phase);
+    assert.equal(refreshed.plan.handoffId, plan.handoffId);
+    assert.equal(refreshed.plan.state, 5);
+    assert.equal(refreshed.plan.serverTime, 0);
+    assert.equal(songs.refreshHandoff(501), null);
+    if (phase === 'committing') assert.equal(songs.handoffSweepReason(true, 5011), 'commit-timeout');
+    else songs.markHandoffReady(B, plan.handoffId, B.participantId, 550);
+    const completed = songs.update(telemetry(0, { state: 5, bufferedFraction: 0 }), B, B.participantId, 600);
+    assert.equal(completed.handoffCompleted, true);
+    assert.equal(songs.statusPayload(600).state, 0);
+    assert.equal(songs.statusPayload(600).serverTime, 200);
+  });
+}
+
+test('holdover distinguishes transport buffering, natural completion and unauthorized input', () => {
+  const songs = new SongSession();
+  songs.update(telemetry(10), A, null, 0);
+  songs.beginHandoff(B, B.participantId, 0);
+  assert.equal(songs.update(telemetry(10.1, { state: 3 }), A, B.participantId, 100).accepted, true);
+  assert.equal(songs.update(telemetry(10.2, { state: 1 }), A, B.participantId, 200).accepted, true);
+  assert.equal(songs.update(telemetry(10.3, { state: 0 }), A, B.participantId, 300).accepted, false);
+  assert.equal(songs.update(telemetry(10.3, { state: 2 }), A, B.participantId, 300).accepted, false);
+  assert.equal(songs.refreshHandoff(300), null);
+  const paused = new SongSession();
+  paused.update(telemetry(10, { state: 2 }), A, null, 0);
+  paused.beginHandoff(B, B.participantId, 0);
+  assert.equal(paused.update(telemetry(10.1, { state: 3 }), A, B.participantId, 100).accepted, false);
+  assert.equal(paused.refreshHandoff(100), null);
+});

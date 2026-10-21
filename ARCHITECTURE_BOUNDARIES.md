@@ -247,6 +247,51 @@ revive an old commit watchdog. Fresh timeline samples replace pending samples
 without extending the proof deadline. DOM, API construction, room commands and
 outgoing-release authority remain adapters with their own boundaries.
 
+### Room song intent and iframe preparation have separate clocks
+
+`shared/song-playback-target.js` is the common handoff/reload target policy.
+PLAYING/BUFFERING rooms transfer only with a real PLAYING media clock. Dormant
+rooms transfer a CUED controller: preparing an iframe does not require decoding
+the terminal seconds, restarting an ended song or changing PAUSED into ENDED.
+If a song naturally ends during preparation or commit, the server refreshes the
+target to CUED inside the original deadline. Moving holdover can buffer and
+resume, while a dormant holdover cannot turn buffering into a new Play intent.
+The next Play on an ended song prepares Replay from zero. Paused positions,
+including short clips and positions near the end, keep their logical value.
+
+SongSession retains the logical room state while the exact promoted transport is
+parked. Its setup telemetry is projected before the room command gate; raw media
+still proves a moving handoff. A parked iframe's zero-second CUED reading never
+rewinds the room. Play applies the logical position explicitly; only authorized media proof
+retires the dormant representation. A failed Play keeps it available for retry. Only a newer generation of the same
+logical transport can use dormant reload continuation.
+
+`YouTubePlaybackTarget` owns the physical load/cue/seek/rate/play/pause sequence
+for preparation, prewarm, commands and reload. Commands request state; subsequent
+observations establish it. Outstanding requests are bounded, phase retirement
+invalidates future work, and state-only commands have no implicit seek authority. Observed convergence
+releases native Pause/rate changes and natural completion; a newer user intent
+retires the older target before its next callback can apply anything.
+Audibility, authority and deadlines stay with their owners. Player construction
+checks the operation's identity after API loading, and cold commands wait for
+`onReady` instead of treating an initializing iframe as a failure.
+
+The Mic owner may replace the song during or after a failed transfer. Load still
+checks identity, revision and causal command ordering. Only acceptance cancels
+the old handoff, and cancellation precedes the new apply on the target socket.
+Other participants and ordinary playback mutations keep their authority gates.
+Choosing a replacement remains visible while the old video is preparing.
+
+The deterministic contract tests exercise both domain and browser owners. The
+opt-in `test/browser/youtube-playback.spec.mjs` checks the physical adapter against
+YouTube's real iframe, including a one-second clip and autoplay recovery through
+the visible native Play button. It requires `RELAY_REAL_YOUTUBE=1` and browser tools.
+
+The server and browser must be updated together for CUED dormant handoffs.
+Reload pages carrying the previous build before exercising this protocol change;
+the existing build notification identifies them. No active Mic is interrupted
+automatically.
+
 ### Evidence length is not evidence
 
 Capture collectors keep missing PCM as zeros so sample positions stay truthful.

@@ -1,29 +1,22 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { playbackHandoffFixture, SONG } from './support/playback-handoff-fixture.js';
 
-test('visible YouTube controls emit room intent and server apply performs media mutations', async () => {
-  const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
-
-  const loadStart = source.indexOf('function loadVideo()');
-  const loadEnd = source.indexOf('function trackedRoomCommandId()', loadStart);
-  assert.ok(loadStart >= 0 && loadEnd > loadStart, 'load command boundary is missing');
-  const loadSection = source.slice(loadStart, loadEnd);
-  assert.match(loadSection, /requestRoomSongCommand\(\{ action: 'load'/);
-  assert.doesNotMatch(loadSection, /cueVideoById|playVideo\s*\(/, 'user load must not mutate playback before server acceptance');
-
-  const applyStart = source.indexOf('async function applyRoomSongCommand');
-  const applyEnd = source.indexOf('async function restoreAuthoritativeRoom', applyStart);
-  assert.ok(applyStart >= 0 && applyEnd > applyStart, 'server apply helper is missing');
-  const applySection = source.slice(applyStart, applyEnd);
-  assert.match(applySection, /normalizedDesiredState\(message\.desired\)/);
-  assert.match(applySection, /serverMutation\.revision > revision/);
-  assert.match(applySection, /serverMutation\.commandId !== commandId/);
-  assert.match(applySection, /cueVideoById/);
-  assert.match(applySection, /playVideo\s*\(/);
-  assert.match(applySection, /pauseVideo\s*\(/);
-  assert.match(applySection, /seekTo\s*\(/);
-  assert.match(applySection, /setPlaybackRate\s*\(/);
+test('load remains an intent until the server authorizes the player mutation', async t => {
+  const f = await playbackHandoffFixture(t);
+  f.elements.get('#youtube-url')!.value = SONG;
+  f.elements.get('#load-youtube')!.dispatchEvent(new Event('click'));
+  assert.equal(f.commands.length, 0);
+  assert.equal(f.events.find(e => e.type === 'relay:room-song-command-intent')?.detail.action, 'load');
+  f.send('room-song-command-apply', {
+    commandId: 'server-load', revision: 1, action: 'load',
+    desired: { videoId: SONG, positionSeconds: 0, state: 5, playbackRate: 1, mustApplyPosition: true },
+  });
+  await f.flush();
+  assert.equal(f.player.state, 5);
+  assert.ok(f.commands.some(c => c[0] === 'cue'));
+  assert.equal(f.commands.some(c => c[0] === 'play'), false);
 });
 
 test('youtube sync owns command ids, revision and causal predecessor instead of trusting page state', async () => {
@@ -147,7 +140,7 @@ test('a state-only command ignores room position but a large native jump still e
   const convergenceEnd = source.indexOf('function snapshotMatchesDesired', convergenceStart);
   assert.ok(convergenceStart >= 0 && convergenceEnd > convergenceStart);
   const convergenceSection = source.slice(convergenceStart, convergenceEnd);
-  assert.match(convergenceSection, /requirePosition: mutation\.desired\.mustApplyPosition !== false/);
+  assert.match(convergenceSection, /mutation\.desired\.mustApplyPosition !== false/);
   assert.match(convergenceSection, /roomSongCommandLocalDeltaEvidence/);
 
   const mutationStart = source.indexOf('function localMutationsForSnapshot');
@@ -177,18 +170,59 @@ test('state-only clock correction authority comes from an observed command trans
   assert.match(applySection, /observedCommandTransitions/);
 });
 
-test('the apply path moves the player only when the command says to', async () => {
-  const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
-  const applyStart = source.indexOf('async function applyRoomSongCommand');
-  const applyEnd = source.indexOf('async function restoreAuthoritativeRoom', applyStart);
-  const applySection = source.slice(applyStart, applyEnd);
+test('state-only apply preserves position; explicit seek applies even a small delta', async t => {
+  const f = await playbackHandoffFixture(t);
+  await f.prepare();
+  f.send('song-handoff-cancelled');
+  f.player.position = 20;
+  const apply = async (id: string, action: string, positionSeconds: number, mustApplyPosition: boolean) => {
+    f.send('room-song-command-apply', { commandId: id, revision: id === 'play' ? 1 : 2, action,
+      desired: { videoId: SONG, positionSeconds, state: 1, playbackRate: 1, mustApplyPosition } });
+    await f.flush();
+  };
+  const before = f.commands.length;
+  await apply('play', 'play', 40, false);
+  assert.equal(f.player.position, 20);
+  assert.equal(f.commands.slice(before).some(c => c[0] === 'seek'), false);
+  await apply('seek', 'seek', 20.1, true);
+  assert.equal(f.player.position, 20.1);
+  assert.ok(f.commands.some(c => c[0] === 'seek' && c[1] === 20.1));
+});
 
-  assert.match(applySection, /videoChanged \|\| desired\.mustApplyPosition/);
-  assert.doesNotMatch(applySection, /shouldSeekForRoomCommand/);
 
-  assert.match(
-    source,
-    /mustApplyPosition = desired\.mustApplyPosition !== false/,
-    'a payload without the flag must keep positioning, as older ones did',
-  );
+test('a cold Play waits for iframe readiness instead of reporting premature failure', async t => {
+  const f = await playbackHandoffFixture(t, { readyDelayMs: 500 });
+  f.send('room-song-command-apply', { commandId: 'cold-play', revision: 1, action: 'play',
+    desired: { videoId: SONG, positionSeconds: 40, state: 1, playbackRate: 1, mustApplyPosition: true } });
+  await f.flush();
+  assert.equal(f.commands.length, 0);
+  f.clock.advance(500); await f.flush();
+  assert.equal(f.player.state, 1);
+  assert.equal(f.player.position, 40);
+  assert.equal(f.events.some(e => e.type === 'relay:room-song-command-failed'), false);
+});
+
+test('retired room commands cannot create an iframe when a delayed API finally loads', async t => {
+  const f = await playbackHandoffFixture(t); f.deferApi();
+  f.send('room-song-command-apply', { commandId: 'retired-load', revision: 1, action: 'load',
+    desired: { videoId: SONG, positionSeconds: 0, state: 5, playbackRate: 1, mustApplyPosition: true } });
+  await f.flush();
+  f.send('room-song-command-failed-ack', { commandId: 'retired-load', room: {} });
+  f.resolveApi(); await f.flush();
+  assert.equal(f.players.length, 0);
+});
+
+
+test('a converged apply cannot override a native Pause while its server acknowledgment is pending', async t => {
+  const f = await playbackHandoffFixture(t);
+  await f.prepare(); f.send('song-handoff-cancelled');
+  f.send('playback-view', { role: 'holder' });
+  f.send('room-song-command-apply', { commandId: 'pending-play', revision: 1, action: 'play',
+    desired: { videoId: SONG, positionSeconds: 40, state: 1, playbackRate: 1, mustApplyPosition: false } });
+  await f.flush(); f.clock.advance(250);
+  assert.equal(f.player.state, 1);
+  const from = f.events.length;
+  f.player.emit(2);
+  assert.equal(f.player.state, 2);
+  assert.ok(f.events.slice(from).some(e => e.type === 'relay:room-song-command-intent' && e.detail.action === 'pause'));
 });

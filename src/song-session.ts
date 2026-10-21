@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks';
 
 import { YouTubeTimelineTracker } from './youtube-timeline.js';
+import { playbackTargetState, playbackStartPosition } from '../shared/song-playback-target.js';
 
 const LEADER_STALE_AFTER_MS = 1_500;
 const HANDOFF_TIME_TOLERANCE_SECONDS = 1.5;
@@ -22,24 +23,10 @@ const HANDOFF_TOTAL_TIMEOUT_MS = 30_000;
  */
 const HANDOFF_COMMIT_TIMEOUT_MS = 5_000;
 const HOLDOVER_TIME_TOLERANCE_SECONDS = 0.9;
-/**
- * How far before a video's end a dormant (paused or ended) room song is
- * prepared and proved on the handoff target.
- *
- * At the very end YouTube never starts loading, and a pause just before the
- * end slides on into ENDED. Either way the target never shows the PAUSED
- * proof. Measured 2026-10-22, muted loadVideoById then pause on first PLAYING:
- * - the end, and 0.25 s or 0.5 s before it: stayed UNSTARTED, nothing buffered;
- * - 1-3 s before it: paused, then ENDED;
- * - 5 s and 10 s before it: settled PAUSED.
- * An ended room handed to a new singer therefore stalled until the prepare
- * timeout, leaving the new Mic owner with no player and no Change song.
- */
-export const HANDOFF_END_LEAD_SECONDS = 5;
 /** YT.PlayerState.BUFFERING: transport progress, not playback proof. */
 const BUFFERING_STATE = 3;
 const PLAYING_STATE = 1;
-const PAUSED_STATE = 2;
+const CUED_STATE = 5;
 
 export type PlaybackIdentity = {
   participantId: string;
@@ -69,7 +56,7 @@ export type SongHandoffPlan = {
   revision: number;
   target: PlaybackIdentity;
   videoId: string;
-  state: number;
+  state: 1 | 5;
   serverTime: number;
   playbackRate: number;
 };
@@ -86,6 +73,7 @@ type Handoff = {
   startedAtMs: number;
   commitStartedAtMs: number | null;
   readyAcknowledged: boolean;
+  announcedState: 1 | 5;
   /**
    * Candidate-only clock evidence. BUFFERING reports may advance this tracker
    * so a real PLAYING proof can be judged against the target's own recent
@@ -135,7 +123,7 @@ export function normalizePlaybackGeneration(value: unknown) {
  * it measures one accepted media clock. SongSession decides which playback
  * transport is allowed to feed that clock and, when microphone ownership moves,
  * keeps the old clock alive until the new owner's exact playback transport is
- * prepared and actually producing the same song.
+ * ready to control a dormant song or actually rendering a moving song.
  *
  * The playback leader remains an implementation detail, not a visible DJ role.
  * A prepared handoff is also intentionally not triggered by presence alone:
@@ -147,6 +135,9 @@ export class SongSession {
   private readonly timeline = new YouTubeTimelineTracker();
   private leader: Leader | null = null;
   private handoff: Handoff | null = null;
+  // A dormant controller is cued, not a second media clock. Keep the room's
+  // semantic state/position until an authorized playback action starts media.
+  private parked: { identity: PlaybackIdentity; mediaPosition: number } | null = null;
   private failedHandoffHoldover: FailedHandoffHoldover | null = null;
   private handoffSequence = 0;
   private revisionValue = 0;
@@ -239,7 +230,19 @@ export class SongSession {
       this.handoff.commitStartedAtMs = nowMs;
       this.bump();
     }
-    return this.handoffPlan(nowMs);
+    const plan = this.handoffPlan(nowMs);
+    if (plan) this.handoff.announcedState = plan.state;
+    return plan;
+  }
+
+  /** Refresh the physical target when the song naturally finishes in flight. */
+  refreshHandoff(nowMs = performance.now()) {
+    if (!this.handoff) return null;
+    const plan = this.handoffPlan(nowMs);
+    if (!plan || plan.state === this.handoff.announcedState) return null;
+    this.handoff.announcedState = plan.state;
+    this.handoff.targetTimeline = new YouTubeTimelineTracker();
+    return { phase: this.handoff.state, plan };
   }
 
   deferHandoff(identityInput: PlaybackIdentity, handoffId: unknown) {
@@ -337,7 +340,10 @@ export class SongSession {
       return { accepted: false, reason: 'invalid-identity', leaderChanged: false };
     }
 
-    const authority = this.canWrite(payload, identity, micOwnerId, nowMs);
+    if (!Number.isFinite(Number(payload.currentTime)) || Number(payload.currentTime) < 0) {
+      return { accepted: false, reason: 'invalid-telemetry', leaderChanged: false };
+    }
+    const authority = this.canWrite(this.projectTelemetry(payload, identity, nowMs), identity, micOwnerId, nowMs);
     if (!authority.ok) {
       return { accepted: false, reason: authority.reason, leaderChanged: false };
     }
@@ -360,11 +366,27 @@ export class SongSession {
       return { accepted: true, leaderChanged: false };
     }
 
-    // Validate the media payload before granting authority. A malformed packet
-    // must never be able to steal the room clock merely by arriving first.
+    // A cued dormant target proves that its controls are ready, not that a
+    // stopped song started playing. Promotion preserves the authoritative room.
     const before = this.timeline.statusPayload(nowMs) as Record<string, unknown>;
-    if (!this.timeline.update(payload, nowMs)) {
+    const dormantContinuation = this.leader
+      && this.leader.participantId === identity.participantId
+      && this.leader.transportId === identity.transportId
+      && identity.generation > this.leader.generation
+      && payload.videoId === before.videoId && Number(payload.state) === CUED_STATE;
+    const dormantPromotion = (targetDuringCommit || dormantContinuation)
+      && playbackTargetState(Number(before.state)) === CUED_STATE;
+    const roomPayload = dormantPromotion ? {
+      ...payload, state: before.state, currentTime: before.serverTime,
+      duration: before.duration, playbackRate: before.playbackRate, timelineDeltaSeconds: 0,
+    } : this.projectTelemetry(payload, identity, nowMs);
+    if (!this.timeline.update(roomPayload, nowMs)) {
       return { accepted: false, reason: 'invalid-telemetry', leaderChanged: false };
+    }
+    if (dormantPromotion) {
+      this.parked = { identity: { ...identity }, mediaPosition: Number(payload.currentTime) };
+    } else if (Number(payload.state) === PLAYING_STATE || this.parked && !this.sameIdentity(this.parked.identity, identity)) {
+      this.parked = null;
     }
 
     const completingHandoff = targetDuringCommit;
@@ -405,6 +427,23 @@ export class SongSession {
     };
   }
 
+  /** Project a dormant iframe's setup readings without inventing room input. */
+  projectTelemetry(payload: Record<string, unknown>, identity: PlaybackIdentity, nowMs = performance.now()) {
+    if (!this.parked || !this.sameIdentity(this.parked.identity, identity)) return payload;
+    const room = this.timeline.statusPayload(nowMs) as Record<string, unknown>;
+    const state = Number(payload.state);
+    const time = Number(payload.currentTime);
+    if (payload.videoId !== room.videoId || !(state === CUED_STATE
+        || state === 2 && Number.isFinite(time) && Math.abs(time - this.parked.mediaPosition) <= 0.1)) return payload;
+    return { ...payload, state: room.state, currentTime: room.serverTime,
+      duration: room.duration, timelineDeltaSeconds: 0 };
+  }
+
+  /** Authorized media proof ends the dormant controller representation. */
+  activatePlayback(identity: PlaybackIdentity) {
+    if (this.parked && this.sameIdentity(this.parked.identity, identity)) this.parked = null;
+  }
+
   detach(identityInput: PlaybackIdentity) {
     const identity = this.normalizeIdentity(identityInput);
     if (!identity || !this.leader || !this.sameIdentity(this.leader, identity)) return false;
@@ -426,6 +465,7 @@ export class SongSession {
       playbackGeneration: this.leader?.generation ?? null,
       leaderConnected: this.leader?.connected ?? false,
       leaderFresh,
+      playbackParked: this.parked !== null,
       handoffState: this.handoff?.state ?? 'idle',
       handoffId: this.handoff?.id ?? null,
       handoffTargetParticipantId: this.handoff?.target.participantId ?? null,
@@ -577,8 +617,15 @@ export class SongSession {
     // Buffering is not a decision the singer made, so it is not a semantic
     // change. Demanding the exact room state meant the outgoing leader lost
     // its own holdover the moment its network hiccuped.
-    const stateHeld = Number(payload.state) === Number(room.state)
-      || Number(payload.state) === BUFFERING_STATE;
+    const roomState = Number(room.state);
+    const incomingState = Number(payload.state);
+    const moving = [PLAYING_STATE, BUFFERING_STATE].includes(roomState);
+    const duration = Number(room.duration);
+    const naturalEnd = moving && incomingState === 0 && duration > 0
+      && Number(payload.currentTime) >= duration - HOLDOVER_TIME_TOLERANCE_SECONDS;
+    const stateHeld = incomingState === roomState
+      || moving && [PLAYING_STATE, BUFFERING_STATE].includes(incomingState)
+      || naturalEnd;
 
     return typeof room.videoId === 'string'
       && payload.videoId === room.videoId
@@ -598,7 +645,7 @@ export class SongSession {
     const incomingState = Number(payload.state);
     const roomRate = Number(room.playbackRate);
     const incomingRate = Number(payload.playbackRate ?? 1);
-    const targetState = this.handoffTargetState(Number(room.state));
+    const targetState = playbackTargetState(Number(room.state));
     const stateRelevant = incomingState === BUFFERING_STATE || incomingState === targetState;
 
     if (
@@ -615,9 +662,10 @@ export class SongSession {
     // different: after a long stall the client is expected to seek forward to
     // the live room position, so that intentional realignment may jump relative
     // to the frozen candidate clock, but it must be near authoritative serverTime.
+    if (targetState === CUED_STATE) return incomingState === CUED_STATE;
     return incomingState === BUFFERING_STATE
       ? this.withinOwnReport(reference, payload, HANDOFF_TIME_TOLERANCE_SECONDS)
-      : this.nearAuthoritativeRoom(this.handoffPosition(room), payload, HANDOFF_TIME_TOLERANCE_SECONDS);
+      : this.nearAuthoritativeRoom(playbackStartPosition(room), payload, HANDOFF_TIME_TOLERANCE_SECONDS);
   }
 
   private targetTelemetryCompletes(payload: Record<string, unknown>, nowMs: number) {
@@ -625,37 +673,7 @@ export class SongSession {
     const room = this.timeline.statusPayload(nowMs) as Record<string, unknown>;
     const incomingState = Number(payload.state);
     if (incomingState === BUFFERING_STATE) return false;
-    return incomingState === this.handoffTargetState(Number(room.state));
-  }
-
-  /**
-   * Handoff proof is intentionally narrower than the room's historical player
-   * state space. PLAYING/BUFFERING room intent transfers as PLAYING. Every
-   * dormant state (PAUSED, CUED, ENDED, unstarted) transfers as PAUSED. CUED is
-   * useful as an iframe setup state but is never proof that the target can
-   * render the handoff position, and ENDED is not needed to prove audibility.
-   */
-  private handoffTargetState(roomState: number) {
-    return roomState === PLAYING_STATE || roomState === BUFFERING_STATE
-      ? PLAYING_STATE
-      : PAUSED_STATE;
-  }
-
-  /**
-   * Where the target prepares, commits and proves the room song: the room's
-   * own position, except that a dormant song keeps HANDOFF_END_LEAD_SECONDS
-   * clear of its end. The plan and the proof check both read this, so a
-   * target paused where it was asked to be is accepted.
-   */
-  private handoffPosition(room: Record<string, unknown>) {
-    const serverTime = Number(room.serverTime);
-    const duration = Number(room.duration);
-    if (
-      this.handoffTargetState(Number(room.state)) !== PAUSED_STATE
-      || !Number.isFinite(duration)
-      || duration <= HANDOFF_END_LEAD_SECONDS
-    ) return serverTime;
-    return Math.min(serverTime, duration - HANDOFF_END_LEAD_SECONDS);
+    return incomingState === playbackTargetState(Number(room.state));
   }
 
   private handoffPlan(nowMs: number): SongHandoffPlan | null {
@@ -674,8 +692,8 @@ export class SongSession {
       revision: this.revisionValue,
       target: { ...this.handoff.target },
       videoId: room.videoId,
-      state: this.handoffTargetState(roomState),
-      serverTime: this.handoffPosition(room),
+      state: playbackTargetState(roomState),
+      serverTime: playbackStartPosition(room),
       playbackRate: Number(room.playbackRate),
     };
   }
@@ -693,6 +711,7 @@ export class SongSession {
       startedAtMs,
       commitStartedAtMs: null,
       readyAcknowledged: false,
+      announcedState: playbackTargetState(this.timeline.statusPayload(nowMs).state),
       targetTimeline: new YouTubeTimelineTracker(),
     };
   }

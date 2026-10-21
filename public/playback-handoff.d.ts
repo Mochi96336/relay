@@ -1,4 +1,9 @@
 export declare const HANDOFF_COMMIT_TIMEOUT_MS = 6500;
+/**
+ * A preparation still not ready this long after it began says why, once.
+ * The server gives up at 20 s; before this report a stuck tab was silent.
+ */
+export declare const HANDOFF_STALL_REPORT_MS = 15000;
 export type HandoffPlayer = {
     getVideoData(): {
         video_id?: unknown;
@@ -28,6 +33,12 @@ export type HandoffPlan = {
 export type HandoffState = HandoffPlan & {
     phase: 'preparing' | 'committing';
 };
+export type HandoffReadiness = {
+    blocker: string | null;
+    playerState: number | null;
+    buffered: number | null;
+    muted: boolean | null;
+};
 export type SampleJob = {
     timers: number[];
 };
@@ -37,6 +48,7 @@ export type Attempt = HandoffState & {
     timerEpoch: number;
     timers: Set<number>;
     samples: SampleJob | null;
+    stallTimer: number | null;
 };
 export type HandoffMutation = {
     source: 'handoff-prepare' | 'handoff-commit';
@@ -52,6 +64,7 @@ export type HandoffPorts = {
     onNote: (key: string) => void;
     onReady: (handoffId: string) => void;
     onFailure: (handoffId: string, reason: string) => void;
+    onStalled?: (handoffId: string, readiness: HandoffReadiness) => void;
     sampleNow: () => void;
     now?: () => number;
     setTimer?: (callback: () => void, delayMs: number) => number;
@@ -75,10 +88,13 @@ export type HandoffPorts = {
  * }} HandoffPlayer
  * @typedef {{handoffId: string, videoId: string, targetTime: number, desiredState: number, playbackRate: number}} HandoffPlan
  * @typedef {HandoffPlan & {phase: 'preparing' | 'committing'}} HandoffState
+ * @typedef {{
+ *   blocker: string | null, playerState: number | null, buffered: number | null, muted: boolean | null,
+ * }} HandoffReadiness
  * @typedef {{timers: number[]}} SampleJob
  * @typedef {HandoffState & {
  *   reusePreparedPlayer: boolean, readySent: boolean, timerEpoch: number,
- *   timers: Set<number>, samples: SampleJob | null,
+ *   timers: Set<number>, samples: SampleJob | null, stallTimer: number | null,
  * }} Attempt
  * @typedef {{
  *   source: 'handoff-prepare' | 'handoff-commit', action: 'load' | 'play' | 'pause',
@@ -92,6 +108,7 @@ export type HandoffPorts = {
  *   onNote: (key: string) => void,
  *   onReady: (handoffId: string) => void,
  *   onFailure: (handoffId: string, reason: string) => void,
+ *   onStalled?: (handoffId: string, readiness: HandoffReadiness) => void,
  *   sampleNow: () => void,
  *   now?: () => number,
  *   setTimer?: (callback: () => void, delayMs: number) => number,
@@ -116,6 +133,12 @@ export declare class PlaybackHandoff {
         wasMuted?: boolean | null;
     }): Promise<boolean>;
     cue(): boolean;
+    /**
+     * What still keeps the preparing player from being ready, with the player
+     * readings behind it. `blocker` is null once announceReady would succeed.
+     * @returns {HandoffReadiness}
+     */
+    readiness(): HandoffReadiness;
     announceReady(): boolean;
     /** @param {number} state */
     observeState(state: number): void;

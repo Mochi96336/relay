@@ -26,7 +26,7 @@ export const HANDOFF_STALL_REPORT_MS = 15_000;
  * @typedef {{handoffId: string, videoId: string, targetTime: number, desiredState: number, playbackRate: number}} HandoffPlan
  * @typedef {HandoffPlan & {phase: 'preparing' | 'committing'}} HandoffState
  * @typedef {{
- *   blocker: string, playerState: number | null, buffered: number | null, muted: boolean | null,
+ *   blocker: string | null, playerState: number | null, buffered: number | null, muted: boolean | null,
  * }} HandoffReadiness
  * @typedef {{timers: number[]}} SampleJob
  * @typedef {HandoffState & {
@@ -212,12 +212,14 @@ export class PlaybackHandoff {
   /**
    * What still keeps the preparing player from being ready, with the player
    * readings behind it. `blocker` is null once announceReady would succeed.
-   * @returns {HandoffReadiness & {blocker: string | null}}
+   * @returns {HandoffReadiness}
    */
   readiness() {
     const attempt = this.#attempt;
     const player = this.#ports.getPlayer();
+    /** @type {Omit<HandoffReadiness, 'blocker'>} */
     const readings = { playerState: null, buffered: null, muted: null };
+    /** @param {string | null} blocker @returns {HandoffReadiness} */
     const result = (blocker) => ({ blocker, ...readings });
     if (!attempt || attempt.phase !== 'preparing') return result('no-preparation');
     if (!player) return result('player-not-ready');

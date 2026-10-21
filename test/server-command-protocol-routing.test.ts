@@ -66,7 +66,7 @@ test('the server composition boundary owns transport and room command effects', 
   assert.match(server, /roomSongCommands\.fail\(playbackIdentity, pendingCommand\.commandId\)/);
   assert.match(server, /broadcastRoomSongCommandFailure\(pendingCommand\.commandId, 'playback-failed', nowMs\)/);
   assert.match(server, /songHandoffReady\(playbackIdentity, payload\.handoffId\)/);
-  assert.match(server, /songHandoffFailed\(playbackIdentity, payload\.handoffId\)/);
+  assert.match(server, /songHandoffFailed\(playbackIdentity, payload\.handoffId, payload\.reason\)/);
   assert.match(server, /youtubeTimeline\.markHandoffReady\(identity, handoffId, participants\.micOwnerId\)/);
   assert.match(server, /youtubeTimeline\.deferHandoff\(identity, handoffId\)/);
   assert.match(server, /sendHandoffPlan\('song-handoff-commit', plan\)/);

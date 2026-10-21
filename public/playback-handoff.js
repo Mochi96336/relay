@@ -1,5 +1,3 @@
-import { handoffPreparationPosition } from './playback-handoff-timing.js';
-
 // Server proof expires after 5 s; this later watchdog only contains local damage.
 export const HANDOFF_COMMIT_TIMEOUT_MS = 6_500;
 const REALIGN_THRESHOLD_SECONDS = 0.75;
@@ -185,7 +183,8 @@ export class PlaybackHandoff {
       if (!this.#current(attempt, player)) return false;
       player.mute();
       if (!this.#current(attempt, player)) return false;
-      const position = handoffPreparationPosition(attempt.targetTime, attempt.desiredState);
+      // The server already keeps a dormant song clear of its end.
+      const position = Math.max(0, attempt.targetTime);
       if (attempt.reusePreparedPlayer && this.#videoId(player) === attempt.videoId) {
         const currentTime = Number(player.getCurrentTime());
         const state = Number(player.getPlayerState());
@@ -339,6 +338,10 @@ export class PlaybackHandoff {
     if (!attempt || attempt.phase !== 'committing' || !timeline || !player
         || timeline.handoffState !== 'committing' || timeline.handoffId !== attempt.handoffId
         || this.#videoId(player) !== attempt.videoId) return false;
+    // A dormant room does not move, and the commit already carries where the
+    // server wants it: the room's raw position may be the very end, which
+    // YouTube cannot hold as PAUSED.
+    if (attempt.desiredState !== 1) return false;
     const target = Number(timeline.serverTime);
     try {
       const currentTime = Number(player.getCurrentTime());

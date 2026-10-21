@@ -1334,12 +1334,17 @@ function beginPreparedSongHandoff(participantId: string, nowMs = performance.now
     });
     return false;
   }
+  const room = youtubeTimeline.roomStatusPayload(nowMs);
   logSongHandoff('prepare', {
     handoffId: plan.handoffId,
     from: playbackLogLabel(youtubeTimeline.leaderIdentity()),
     to: playbackLogLabel(plan.target),
     videoId: plan.videoId,
     state: plan.state,
+    position: plan.serverTime,
+    roomState: room.state,
+    roomTime: room.serverTime,
+    duration: room.duration,
   });
   sendHandoffPlan('song-handoff-prepare', plan);
   broadcastJson(youtubeTimeline.statusPayload(nowMs));
@@ -2279,6 +2284,11 @@ function logSongHandoff(event: string, fields: Record<string, unknown>) {
   console.warn('[song-handoff]', JSON.stringify({ event, ...fields }));
 }
 
+/** A client-supplied reason, kept only if it is a short kebab-case token. */
+function journalToken(value: unknown) {
+  return typeof value === 'string' && /^[a-z0-9-]{1,40}$/.test(value) ? value : null;
+}
+
 let micRecoveryLogGeneration: number | null = null;
 let micRecoveryLogSequence = 0;
 function reportMicRecovery(health: AudioUplinkHealth) {
@@ -2579,10 +2589,23 @@ function songHandoffReady(identity: PlaybackIdentity, handoffId: unknown) {
   broadcastJson(youtubeTimeline.roomStatusPayload());
 }
 
-/** A playback tab could not take the handoff; SongSession defers it. */
-function songHandoffFailed(identity: PlaybackIdentity, handoffId: unknown) {
-  if (!youtubeTimeline.deferHandoff(identity, handoffId)) return;
-  logSongHandoff('target-retry', { handoffId, to: playbackLogLabel(identity) });
+/**
+ * A playback tab could not take the handoff; SongSession defers it. A target
+ * that fails while still preparing is not deferred, because it is already
+ * preparing. Its reason (for example youtube-error-150) is still journaled.
+ */
+function songHandoffFailed(identity: PlaybackIdentity, handoffId: unknown, reason: unknown) {
+  const liveTarget = handoffId === youtubeTimeline.handoffId()
+    && youtubeTimeline.handoffTarget()?.transportId === identity.transportId;
+  const deferred = youtubeTimeline.deferHandoff(identity, handoffId);
+  if (liveTarget) {
+    logSongHandoff(deferred ? 'target-retry' : 'target-failed', {
+      handoffId,
+      to: playbackLogLabel(identity),
+      reason: journalToken(reason),
+    });
+  }
+  if (!deferred) return;
 
   broadcastJson(youtubeTimeline.statusPayload());
   broadcastJson(youtubeTimeline.roomStatusPayload());
@@ -2601,7 +2624,7 @@ function songHandoffStalled(identity: PlaybackIdentity, payload: Record<string, 
   logSongHandoff('target-stalled', {
     handoffId,
     to: playbackLogLabel(identity),
-    blocker: typeof payload.blocker === 'string' && /^[a-z0-9-]{1,32}$/.test(payload.blocker) ? payload.blocker : null,
+    blocker: journalToken(payload.blocker),
     playerState: finiteOrNull(payload.playerState),
     buffered: finiteOrNull(payload.buffered),
     muted: typeof payload.muted === 'boolean' ? payload.muted : null,
@@ -2817,7 +2840,7 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
   songHandoffFailed: (socket, payload) => {
     const playbackIdentity = playbackTransport.identity(socket);
     if (!playbackIdentity) return;
-    songHandoffFailed(playbackIdentity, payload.handoffId);
+    songHandoffFailed(playbackIdentity, payload.handoffId, payload.reason);
   },
   songHandoffStalled: (socket, payload) => {
     const playbackIdentity = playbackTransport.identity(socket);

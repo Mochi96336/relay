@@ -17,6 +17,6 @@ test('server keeps playback identity authority and leaves the handoff result to 
   assert.match(ready, /songHandoffReady\(playbackIdentity, payload\.handoffId\)/);
   assert.doesNotMatch(ready, /youtubeTimeline\.markHandoffReady|sendHandoffPlan|broadcastJson/);
 
-  assert.match(failed, /songHandoffFailed\(playbackIdentity, payload\.handoffId\)/);
+  assert.match(failed, /songHandoffFailed\(playbackIdentity, payload\.handoffId, payload\.reason\)/);
   assert.doesNotMatch(failed, /youtubeTimeline\.deferHandoff|broadcastJson/);
 });

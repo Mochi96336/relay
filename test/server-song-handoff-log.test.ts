@@ -19,10 +19,14 @@ test('every step of a song handoff leaves one [song-handoff] journal line', () =
   const begin = functionCode('beginPreparedSongHandoff');
   assert.match(begin, /logSongHandoff\('not-started', \{[\s\S]*?'no-playback-tab' : 'several-playback-tabs'/);
   assert.match(begin, /logSongHandoff\('not-started', \{[\s\S]*?youtubeTimeline\.handoffRefusal\(target, participants\.micOwnerId\)/);
-  assert.match(begin, /logSongHandoff\('prepare', \{[\s\S]*?from: playbackLogLabel\(youtubeTimeline\.leaderIdentity\(\)\)/);
+  assert.match(begin, /logSongHandoff\('prepare', \{[\s\S]*?from: playbackLogLabel\(youtubeTimeline\.leaderIdentity\(\)\)[\s\S]*?position: plan\.serverTime,[\s\S]*?duration: room\.duration/);
 
   assert.match(functionCode('songHandoffReady'), /logSongHandoff\('commit'/);
-  assert.match(functionCode('songHandoffFailed'), /logSongHandoff\('target-retry'/);
+  assert.match(
+    functionCode('songHandoffFailed'),
+    /logSongHandoff\(deferred \? 'target-retry' : 'target-failed', \{[\s\S]*?reason: journalToken\(reason\)/,
+    'a failure while still preparing used to vanish without a trace',
+  );
   assert.match(
     functionCode('sweepPreparedSongHandoff'),
     /youtubeTimeline\.handoffSweepReason\([\s\S]*?logSongHandoff\('abandoned', \{ handoffId, to: playbackLogLabel\(target\), reason \}\)/,
@@ -33,5 +37,6 @@ test('every step of a song handoff leaves one [song-handoff] journal line', () =
   const stalled = functionCode('songHandoffStalled');
   assert.match(stalled, /payload\.handoffId !== handoffId \|\| target\.transportId !== identity\.transportId\) return;/,
     'only the live handoff\'s target is heard');
-  assert.match(stalled, /logSongHandoff\('target-stalled', \{[\s\S]*?\/\^\[a-z0-9-\]\{1,32\}\$\/\.test\(payload\.blocker\)/);
+  assert.match(stalled, /logSongHandoff\('target-stalled', \{[\s\S]*?blocker: journalToken\(payload\.blocker\)/);
+  assert.match(functionCode('journalToken'), /\/\^\[a-z0-9-\]\{1,40\}\$\/\.test\(value\)/);
 });

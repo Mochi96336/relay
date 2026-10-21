@@ -83,9 +83,10 @@ test('readiness read failure stays pending and polling reaches the late readines
   assert.deepEqual(f.ready, ['h1']);
 });
 
-test('terminal media prepares just before the end and observes PAUSED before readiness', async () => {
-  const f = fixture(); await f.prepare('h1', { targetTime: 200, desiredState: 0 });
-  assert.equal(f.player.position, 199.75);
+test('a dormant plan prepares exactly where the server put it and observes PAUSED before readiness', async () => {
+  // The server keeps an ended song clear of its end (HANDOFF_END_LEAD_SECONDS).
+  const f = fixture(); await f.prepare('h1', { targetTime: 195, desiredState: 2 });
+  assert.equal(f.player.position, 195);
   f.owner.observeState(1);
   assert.equal(f.player.state, 2); assert.deepEqual(f.ready, ['h1']);
 });
@@ -272,11 +273,18 @@ test('failed provenance reads leave untouched media alone even on cancellation',
 });
 
 
-test('a reused ENDED player seeks just inside media even within ordinary seek tolerance', async () => {
+test('a reused ENDED player seeks back to the dormant plan position', async () => {
   const f = fixture(); f.player.position = 200; f.player.state = 0;
-  await f.prepare('h1', { desiredState: 0, targetTime: 200 }, { reusePreparedPlayer: true });
-  assert.equal(f.player.position, 199.75);
+  await f.prepare('h1', { desiredState: 2, targetTime: 195 }, { reusePreparedPlayer: true });
+  assert.equal(f.player.position, 195);
   assert.equal(f.effects.some(effect => effect[0] === 'seek'), true);
+});
+
+test('a dormant commit is not realigned to the room\'s raw position at the end', async () => {
+  const f = fixture(); await f.prepare('h1', { targetTime: 195, desiredState: 2 });
+  f.owner.observeState(1); f.commit('h1', { serverTime: 195, state: 2 });
+  assert.equal(f.owner.realign({ handoffState: 'committing', handoffId: 'h1', serverTime: 200 }), false);
+  assert.equal(f.player.position, 195);
 });
 
 

@@ -2942,16 +2942,15 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
       return;
     }
 
-    // Acceptance requests media; actual proof activates its clock. A failed Play
-    // must leave the dormant room representation available for retry.
-    if (activatesPlayback && (commandGate.completesCommandId || [1, 3].includes(Number(payload.state)))) {
-      youtubeTimeline.activatePlayback(acceptedIdentity);
-    }
+    // Activate only in the same transaction that accepts the media proof. A
+    // rejected packet must leave the dormant representation available for retry.
     const result = youtubeTimeline.update(
       payload,
       acceptedIdentity,
       participants.micOwnerId,
       nowMs,
+      { activatePlayback: Boolean(activatesPlayback
+        && (commandGate.completesCommandId || [1, 3].includes(Number(payload.state)))) },
     );
     if (result.accepted) {
       const timelineStatus = youtubeTimeline.statusPayload(nowMs);

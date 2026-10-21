@@ -334,6 +334,7 @@ export class SongSession {
     identityInput: PlaybackIdentity,
     micOwnerId: string | null,
     nowMs = performance.now(),
+    { activatePlayback = false }: { activatePlayback?: boolean } = {},
   ): SongTelemetryResult {
     const identity = this.normalizeIdentity(identityInput);
     if (!identity) {
@@ -343,7 +344,8 @@ export class SongSession {
     if (!Number.isFinite(Number(payload.currentTime)) || Number(payload.currentTime) < 0) {
       return { accepted: false, reason: 'invalid-telemetry', leaderChanged: false };
     }
-    const authority = this.canWrite(this.projectTelemetry(payload, identity, nowMs), identity, micOwnerId, nowMs);
+    const projectedPayload = activatePlayback ? payload : this.projectTelemetry(payload, identity, nowMs);
+    const authority = this.canWrite(projectedPayload, identity, micOwnerId, nowMs);
     if (!authority.ok) {
       return { accepted: false, reason: authority.reason, leaderChanged: false };
     }
@@ -374,18 +376,19 @@ export class SongSession {
       && this.leader.transportId === identity.transportId
       && identity.generation > this.leader.generation
       && payload.videoId === before.videoId && Number(payload.state) === CUED_STATE;
-    const dormantPromotion = (targetDuringCommit || dormantContinuation)
+    const dormantPromotion = !activatePlayback && (targetDuringCommit || dormantContinuation)
       && playbackTargetState(Number(before.state)) === CUED_STATE;
     const roomPayload = dormantPromotion ? {
       ...payload, state: before.state, currentTime: before.serverTime,
       duration: before.duration, playbackRate: before.playbackRate, timelineDeltaSeconds: 0,
-    } : this.projectTelemetry(payload, identity, nowMs);
+    } : projectedPayload;
     if (!this.timeline.update(roomPayload, nowMs)) {
       return { accepted: false, reason: 'invalid-telemetry', leaderChanged: false };
     }
     if (dormantPromotion) {
       this.parked = { identity: { ...identity }, mediaPosition: Number(payload.currentTime) };
-    } else if (Number(payload.state) === PLAYING_STATE || this.parked && !this.sameIdentity(this.parked.identity, identity)) {
+    } else if (activatePlayback || Number(payload.state) === PLAYING_STATE
+        || this.parked && !this.sameIdentity(this.parked.identity, identity)) {
       this.parked = null;
     }
 
@@ -437,11 +440,6 @@ export class SongSession {
         || state === 2 && Number.isFinite(time) && Math.abs(time - this.parked.mediaPosition) <= 0.1)) return payload;
     return { ...payload, state: room.state, currentTime: room.serverTime,
       duration: room.duration, timelineDeltaSeconds: 0 };
-  }
-
-  /** Authorized media proof ends the dormant controller representation. */
-  activatePlayback(identity: PlaybackIdentity) {
-    if (this.parked && this.sameIdentity(this.parked.identity, identity)) this.parked = null;
   }
 
   detach(identityInput: PlaybackIdentity) {

@@ -539,13 +539,16 @@ function renderSnapshot(snapshot) {
 }
 
 function sampleNow() {
+  const snapshot = readSnapshot();
+  if (snapshot) {
+    if (snapshot.state === 1 && autoplayRecoveryRequired) clearAutoplayRecovery();
+    setPlayerState(snapshot.state);
+    // Detect newer native input before the old target can erase its evidence.
+    // renderSnapshot retires that target when it requests a successor command.
+    renderSnapshot(snapshot);
+  }
   try { localPlaybackTarget?.observe(); } catch {}
   playbackHandoff.reconcile();
-  const snapshot = readSnapshot();
-  if (!snapshot) return;
-  if (snapshot.state === 1 && autoplayRecoveryRequired) clearAutoplayRecovery();
-  setPlayerState(snapshot.state);
-  renderSnapshot(snapshot);
 }
 
 function startTelemetry() {
@@ -806,7 +809,6 @@ function handleStateChange(event) {
 }
 
 function handlePlaybackRateChange(event) {
-  try { localPlaybackTarget?.observe(); } catch {}
   setPlayerState(player?.getPlayerState?.() ?? -1, `${event.data}×`);
   sampleNow();
 }

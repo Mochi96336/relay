@@ -124,3 +124,48 @@ for (const phase of ['preparing', 'committing']) {
     assert.equal(completed.serverTime, 200);
   });
 }
+
+test('rejected media proof cannot consume a parked controller before a failed Play', async t => {
+  const { a, b, acquire } = await setup(t);
+  const endFrom = a.messages.length;
+  a.send(report(0, 200));
+  await waitForNewMessage(a, endFrom, m => m.type === 'youtube-timeline-status' && m.state === 0);
+  const plan = await acquire();
+  b.send({ type: 'song-handoff-ready', handoffId: plan.handoffId });
+  await b.waitForType('song-handoff-commit');
+  b.send(report(5, 0));
+  await b.waitForType('song-handoff-complete');
+  b.send({ type: 'room-song-command', commandId: 'malformed-replay', expectedRevision: 2, action: 'play' });
+  await b.waitFor(m => m.type === 'room-song-command-apply' && m.commandId === 'malformed-replay');
+  const invalid = report(3, 0) as Record<string, unknown>;
+  delete invalid.currentTime;
+  b.send(invalid);
+  await b.waitFor(m => m.type === 'youtube-telemetry-rejected' && m.reason === 'invalid-telemetry');
+  b.send({ type: 'room-song-command-failed', commandId: 'malformed-replay', reason: 'autoplay-blocked' });
+  await b.waitFor(m => m.type === 'room-song-command-failed-ack' && m.commandId === 'malformed-replay');
+  const from = b.messages.length;
+  // Accepted dormant polling must still work after the rejected intermediate.
+  b.send(report(5, 0));
+  const retained = await waitForNewMessage(b, from, m => m.type === 'youtube-timeline-status');
+  assert.equal(retained.playbackParked, true);
+  assert.equal(retained.state, 0);
+  assert.equal(retained.serverTime, 200);
+});
+
+test('an explicit same-song Load after reload supersedes dormant continuation', async t => {
+  const { a } = await setup(t);
+  const endFrom = a.messages.length;
+  a.send(report(0, 200));
+  await waitForNewMessage(a, endFrom, m => m.type === 'youtube-timeline-status' && m.state === 0);
+  await registerPlayback(a, 'playback-replacement-a', 2);
+  a.send({ type: 'room-song-command', commandId: 'reload-same-song', expectedRevision: 2,
+    action: 'load', videoId: VIDEO, positionSeconds: 0 });
+  await a.waitFor(m => m.type === 'room-song-command-apply' && m.commandId === 'reload-same-song');
+  const from = a.messages.length;
+  a.send(report(5, 0));
+  await a.waitFor(m => m.type === 'room-song-command-complete' && m.commandId === 'reload-same-song');
+  const loaded = await waitForNewMessage(a, from, m => m.type === 'youtube-timeline-status');
+  assert.equal(loaded.state, 5);
+  assert.equal(loaded.serverTime, 0);
+  assert.equal(loaded.playbackParked, false);
+});

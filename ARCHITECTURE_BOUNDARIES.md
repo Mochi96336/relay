@@ -263,7 +263,10 @@ SongSession retains the logical room state while the exact promoted transport is
 parked. Its setup telemetry is projected before the room command gate; raw media
 still proves a moving handoff. A parked iframe's zero-second CUED reading never
 rewinds the room. Play applies the logical position explicitly; only authorized media proof
-retires the dormant representation. A failed Play keeps it available for retry. Only a newer generation of the same
+retires the dormant representation in the same accepted update; rejected telemetry
+cannot consume it. An explicit position-bearing command supersedes reload
+continuation, including reloading the same video. A failed Play keeps the dormant
+representation available for retry. Only a newer generation of the same
 logical transport can use dormant reload continuation.
 
 `YouTubePlaybackTarget` owns the physical load/cue/seek/rate/play/pause sequence
@@ -271,7 +274,9 @@ for preparation, prewarm, commands and reload. Commands request state; subsequen
 observations establish it. Outstanding requests are bounded, phase retirement
 invalidates future work, and state-only commands have no implicit seek authority. Observed convergence
 releases native Pause/rate changes and natural completion; a newer user intent
-retires the older target before its next callback can apply anything.
+retires the older target before its next callback can apply anything. Sampling
+detects native mutations before reconciliation can overwrite their evidence,
+including gestures while the older target has not yet converged.
 Audibility, authority and deadlines stay with their owners. Player construction
 checks the operation's identity after API loading, and cold commands wait for
 `onReady` instead of treating an initializing iframe as a failure.

@@ -81,6 +81,9 @@ const playbackHandoff = new PlaybackHandoff({
   onFailure: (handoffId, reason) => window.dispatchEvent(new CustomEvent('relay:song-handoff-failed', {
     detail: { handoffId, reason },
   })),
+  onStalled: (handoffId, readiness) => window.dispatchEvent(new CustomEvent('relay:song-handoff-stalled', {
+    detail: { handoffId, ...readiness },
+  })),
   sampleNow,
 });
 

@@ -555,6 +555,12 @@ window.addEventListener('relay:song-handoff-failed', (event) => {
   }
 });
 
+// Diagnostic only: the server journals why this tab is not ready yet.
+window.addEventListener('relay:song-handoff-stalled', (event) => {
+  const { handoffId, blocker, playerState, buffered, muted } = event.detail ?? {};
+  if (typeof handoffId === 'string') send({ type: 'song-handoff-stalled', handoffId, blocker, playerState, buffered, muted });
+});
+
 // Bind the Mic action to this exact visible playback tab without changing the
 // publisher protocol. Presence-driven takeover emits the custom event; the
 // ordinary Microphone button is captured directly. Reconnects do not create a

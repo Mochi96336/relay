@@ -4,6 +4,11 @@ import { handoffPreparationPosition } from './playback-handoff-timing.js';
 export const HANDOFF_COMMIT_TIMEOUT_MS = 6_500;
 const REALIGN_THRESHOLD_SECONDS = 0.75;
 const READY_CHECK_DELAYS_MS = [80, 220, 500, 900, 1_500, 2_400, 4_000, 7_000, 11_000, 16_000];
+/**
+ * A preparation still not ready this long after it began says why, once.
+ * The server gives up at 20 s; before this report a stuck tab was silent.
+ */
+export const HANDOFF_STALL_REPORT_MS = 15_000;
 
 /**
  * @typedef {{
@@ -22,10 +27,13 @@ const READY_CHECK_DELAYS_MS = [80, 220, 500, 900, 1_500, 2_400, 4_000, 7_000, 11
  * }} HandoffPlayer
  * @typedef {{handoffId: string, videoId: string, targetTime: number, desiredState: number, playbackRate: number}} HandoffPlan
  * @typedef {HandoffPlan & {phase: 'preparing' | 'committing'}} HandoffState
+ * @typedef {{
+ *   blocker: string, playerState: number | null, buffered: number | null, muted: boolean | null,
+ * }} HandoffReadiness
  * @typedef {{timers: number[]}} SampleJob
  * @typedef {HandoffState & {
  *   reusePreparedPlayer: boolean, readySent: boolean, timerEpoch: number,
- *   timers: Set<number>, samples: SampleJob | null,
+ *   timers: Set<number>, samples: SampleJob | null, stallTimer: number | null,
  * }} Attempt
  * @typedef {{
  *   source: 'handoff-prepare' | 'handoff-commit', action: 'load' | 'play' | 'pause',
@@ -39,6 +47,7 @@ const READY_CHECK_DELAYS_MS = [80, 220, 500, 900, 1_500, 2_400, 4_000, 7_000, 11
  *   onNote: (key: string) => void,
  *   onReady: (handoffId: string) => void,
  *   onFailure: (handoffId: string, reason: string) => void,
+ *   onStalled?: (handoffId: string, readiness: HandoffReadiness) => void,
  *   sampleNow: () => void,
  *   now?: () => number,
  *   setTimer?: (callback: () => void, delayMs: number) => number,
@@ -69,6 +78,7 @@ export class PlaybackHandoff {
       setTimer: ports.setTimer ?? globalThis.setTimeout.bind(globalThis),
       clearTimer: ports.clearTimer ?? globalThis.clearTimeout.bind(globalThis),
       warn: ports.warn ?? ((message, error) => console.warn(message, error)),
+      onStalled: ports.onStalled ?? (() => {}),
     };
   }
 
@@ -103,6 +113,12 @@ export class PlaybackHandoff {
     return timer;
   }
 
+  /** @param {Attempt} attempt */
+  #clearStallReport(attempt) {
+    if (attempt.stallTimer !== null) this.#ports.clearTimer(attempt.stallTimer);
+    attempt.stallTimer = null;
+  }
+
   /** @param {HandoffPlayer} player */
   #videoId(player) {
     try {
@@ -125,6 +141,7 @@ export class PlaybackHandoff {
     const player = this.#ports.getPlayer();
     if (previous) {
       this.#clearTimers(previous);
+      this.#clearStallReport(previous);
     }
     // The lease survives replacing a preparation, including synchronous player
     // callbacks during retirement. Relay's own mute is never a new preference.
@@ -133,9 +150,16 @@ export class PlaybackHandoff {
     this.#epoch += 1;
     /** @type {Attempt} */
     const attempt = { ...plan, phase: 'preparing', reusePreparedPlayer,
-      readySent: false, timerEpoch: 0, timers: new Set(), samples: null };
+      readySent: false, timerEpoch: 0, timers: new Set(), samples: null, stallTimer: null };
     this.#attempt = attempt;
     this.#ports.onNote('song.preparingHandoff');
+    // Outside the attempt's timers: cue() clears those, and a player that never
+    // becomes ready never reaches cue() at all.
+    attempt.stallTimer = this.#ports.setTimer(() => {
+      attempt.stallTimer = null;
+      if (!this.#current(attempt) || attempt.phase !== 'preparing' || attempt.readySent) return;
+      this.#ports.onStalled(attempt.handoffId, this.readiness());
+    }, HANDOFF_STALL_REPORT_MS);
     try {
       await this.#ports.ensurePlayer(plan.videoId, () => this.#current(attempt));
       if (!this.#current(attempt) || attempt.phase !== 'preparing') return false;
@@ -186,21 +210,42 @@ export class PlaybackHandoff {
     }
   }
 
-  announceReady() {
+  /**
+   * What still keeps the preparing player from being ready, with the player
+   * readings behind it. `blocker` is null once announceReady would succeed.
+   * @returns {HandoffReadiness & {blocker: string | null}}
+   */
+  readiness() {
     const attempt = this.#attempt;
     const player = this.#ports.getPlayer();
-    if (!attempt || attempt.phase !== 'preparing' || attempt.readySent || !player
-        || this.#muteLease?.player !== player || this.#videoId(player) !== attempt.videoId) return false;
+    const readings = { playerState: null, buffered: null, muted: null };
+    const result = (blocker) => ({ blocker, ...readings });
+    if (!attempt || attempt.phase !== 'preparing') return result('no-preparation');
+    if (!player) return result('player-not-ready');
     try {
       const state = Number(player.getPlayerState());
       const buffered = Number(player.getVideoLoadedFraction());
-      const playing = attempt.desiredState === 1 || attempt.desiredState === 3;
-      if (!player.isMuted()) return false;
-      if ((playing ? state !== 1 : state !== 2) || !Number.isFinite(buffered) || buffered <= 0) return false;
-    } catch { return false; }
+      readings.playerState = Number.isFinite(state) ? state : null;
+      readings.buffered = Number.isFinite(buffered) ? buffered : null;
+      readings.muted = Boolean(player.isMuted());
+    } catch { return result('player-unreadable'); }
+    if (this.#muteLease?.player !== player) return result('mute-lease-missing');
+    if (this.#videoId(player) !== attempt.videoId) return result('video-not-loaded');
+    if (!readings.muted) return result('not-muted');
+    const playing = attempt.desiredState === 1 || attempt.desiredState === 3;
+    if (readings.playerState !== (playing ? 1 : 2)) return result(`state-${readings.playerState ?? 'unknown'}`);
+    if (readings.buffered === null || readings.buffered <= 0) return result('not-buffered');
+    return result(null);
+  }
+
+  announceReady() {
+    const attempt = this.#attempt;
+    const player = this.#ports.getPlayer();
+    if (!attempt || attempt.readySent || !player || this.readiness().blocker !== null) return false;
     if (!this.#current(attempt, player)) return false;
     attempt.readySent = true;
     this.#clearTimers(attempt);
+    this.#clearStallReport(attempt);
     this.#ports.onNote('song.handoffPrepared');
     this.#ports.onReady(attempt.handoffId);
     return true;
@@ -231,6 +276,7 @@ export class PlaybackHandoff {
     const targetTime = Number(message.serverTime);
     if (!Number.isFinite(targetTime)) return false;
     this.#clearTimers(attempt);
+    this.#clearStallReport(attempt);
     attempt.phase = 'committing';
     attempt.targetTime = Math.max(0, targetTime);
     attempt.desiredState = Number(message.state);
@@ -344,6 +390,7 @@ export class PlaybackHandoff {
     this.#attempt = null;
     const epoch = ++this.#epoch;
     this.#clearTimers(attempt);
+    this.#clearStallReport(attempt);
     const player = this.#ports.getPlayer();
     const lease = this.#muteLease;
     if (player && lease?.player === player) {
@@ -366,6 +413,7 @@ export class PlaybackHandoff {
     this.#attempt = null;
     const epoch = ++this.#epoch;
     this.#clearTimers(attempt);
+    this.#clearStallReport(attempt);
     const player = this.#ports.getPlayer();
     const lease = this.#muteLease;
     const restoreAudible = player !== null && player === lease?.player && lease.wasMuted === false;

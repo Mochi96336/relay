@@ -12,6 +12,8 @@ function functionCode(name: string) {
 }
 
 test('every step of a song handoff leaves one [song-handoff] journal line', () => {
+  assert.match(functionCode('playbackLogLabel'), /identity\.transportId\.replace\(\/\^playback-\/, ''\)\.slice\(0, 8\)/,
+    'every tab id starts with "playback-", so the prefix tells tabs apart only after it');
   assert.match(functionCode('logSongHandoff'), /console\.warn\('\[song-handoff\]', JSON\.stringify\(\{ event, \.\.\.fields \}\)\)/);
 
   const begin = functionCode('beginPreparedSongHandoff');
@@ -27,4 +29,9 @@ test('every step of a song handoff leaves one [song-handoff] journal line', () =
   );
   assert.match(functionCode('youtubeTelemetryAccepted'), /logSongHandoff\('complete', \{[\s\S]*?from: playbackLogLabel\(input\.previousLeader/);
   assert.match(functionCode('applyMicOwnerEffects'), /logSongHandoff\('cancelled', \{ handoffId, reason: 'mic-released' \}\)/);
+
+  const stalled = functionCode('songHandoffStalled');
+  assert.match(stalled, /payload\.handoffId !== handoffId \|\| target\.transportId !== identity\.transportId\) return;/,
+    'only the live handoff\'s target is heard');
+  assert.match(stalled, /logSongHandoff\('target-stalled', \{[\s\S]*?\/\^\[a-z0-9-\]\{1,32\}\$\/\.test\(payload\.blocker\)/);
 });

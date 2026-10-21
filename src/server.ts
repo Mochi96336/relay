@@ -2266,7 +2266,7 @@ function participantLogLabel(participantId: string) {
 /** A playback tab in a diagnostic line: its participant plus a transport id prefix. */
 function playbackLogLabel(identity: PlaybackIdentity | null) {
   if (!identity) return null;
-  return { ...participantLogLabel(identity.participantId), tab: identity.transportId.slice(0, 8) };
+  return { ...participantLogLabel(identity.participantId), tab: identity.transportId.replace(/^playback-/, '').slice(0, 8) };
 }
 
 /**
@@ -2589,6 +2589,26 @@ function songHandoffFailed(identity: PlaybackIdentity, handoffId: unknown) {
 }
 
 /**
+ * The handoff target says why it is still not ready. Journal only: the
+ * watchdog still decides when the handoff ends. Only the live handoff's
+ * target is heard, and every field is bounded before it reaches the log.
+ */
+function songHandoffStalled(identity: PlaybackIdentity, payload: Record<string, unknown>) {
+  const target = youtubeTimeline.handoffTarget();
+  const handoffId = youtubeTimeline.handoffId();
+  if (!target || payload.handoffId !== handoffId || target.transportId !== identity.transportId) return;
+  const finiteOrNull = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : null;
+  logSongHandoff('target-stalled', {
+    handoffId,
+    to: playbackLogLabel(identity),
+    blocker: typeof payload.blocker === 'string' && /^[a-z0-9-]{1,32}$/.test(payload.blocker) ? payload.blocker : null,
+    playerState: finiteOrNull(payload.playerState),
+    buffered: finiteOrNull(payload.buffered),
+    muted: typeof payload.muted === 'boolean' ? payload.muted : null,
+  });
+}
+
+/**
  * A playback tab's identity is registered. It gets the room as it is, then
  * anything still waiting on it: a prepared handoff, and a room command.
  */
@@ -2798,6 +2818,11 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     const playbackIdentity = playbackTransport.identity(socket);
     if (!playbackIdentity) return;
     songHandoffFailed(playbackIdentity, payload.handoffId);
+  },
+  songHandoffStalled: (socket, payload) => {
+    const playbackIdentity = playbackTransport.identity(socket);
+    if (!playbackIdentity) return;
+    songHandoffStalled(playbackIdentity, payload);
   },
   participantRename: (socket, payload) => {
     if (!socket.participantId) return;

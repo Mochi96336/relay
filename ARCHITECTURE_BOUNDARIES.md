@@ -66,11 +66,13 @@ Missing song progress is timing uncertainty, not proof of inaudible or unplayabl
 media. PLAYING/BUFFERING needs continuing clock reports, including during handoff;
 paused, cued, ended and unstarted songs do not become failed playback when the
 controller leaves. Existing long-gap checks still protect new synchronized Takes
-during a live performance. Clock issues affect timing and ask users to check the
-playback page; they do not promise an unobserved automatic repair. System
+during a live performance. Clock warnings affect timing; critical clock gaps also declare the restriction
+on starting new recordings. Both ask users to check the playback page; they do not promise an unobserved automatic repair. System
 summaries aggregate all declared issue impacts rather than infer audio failure
 from the highest-priority scope. Missing current progress takes precedence over
-a stored alignment result in the timing summary.
+a stored alignment result in the timing summary. The legacy room Song value
+`unavailable` denotes missing clock observations; readable diagnostics describe
+progress uncertainty rather than failed audio.
 
 Hero and System issue titles share `product-issue-copy.js` and use the reported
 cause before the broad compatibility code. A Robot page that is not connected, a rejected

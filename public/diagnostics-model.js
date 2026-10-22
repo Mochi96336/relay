@@ -107,7 +107,7 @@ export function describeSession({ product, readiness } = {}, t = english) {
   }
 
   const song = room.song?.state;
-  const songTones = { playing: 'ok', unavailable: 'bad' };
+  const songTones = { playing: 'ok', unavailable: 'warn' };
   if (song === 'ready' && Number(readiness?.components?.player?.state) === 0) {
     // "Paused or not started" misdescribed a Song that has simply finished.
     rows.push(row('song', t('diag.session.song'), t('diag.session.song.ended')));

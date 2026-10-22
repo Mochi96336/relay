@@ -16,6 +16,7 @@ export function deriveRoomMicState(facts: RoomMicFacts): RoomMicState {
   return 'interrupted';
 }
 
+/** `unavailable` is the legacy value for missing moving-clock observations, not audio failure. */
 export type RoomSongState = 'empty' | 'ready' | 'playing' | 'handoff' | 'unavailable';
 
 export type RoomSongFacts = {

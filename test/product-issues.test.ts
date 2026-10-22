@@ -149,6 +149,13 @@ describe('product issue contract', () => {
     }]);
   });
 
+  test('critical missing song progress declares the new-recording restriction without song impact', () => {
+    const issue = buildProductIssues({ ...HEALTHY_ISSUES, songClockSeverity: 'critical' })[0];
+    assert.equal(issue.scope, 'timing');
+    assert.deepEqual(issue.affects, ['timing', 'recording']);
+    assert.equal(issue.recovery, 'check-playback');
+  });
+
   test('surfaces recent Mic input clipping as a non-blocking input-adjustment warning', () => {
     const issues = buildProductIssues({
       ...HEALTHY_ISSUES,

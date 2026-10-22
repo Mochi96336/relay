@@ -226,7 +226,7 @@ export function buildProductIssues(facts: ProductIssueFacts): ProductIssue[] {
       // whether a playback holder ever established the clock in this lifecycle.
       cause: 'song-clock-unavailable',
       // Missing observations establish timing uncertainty, not inaudible media.
-      affects: ['timing'],
+      affects: facts.songClockSeverity === 'critical' ? ['timing', 'recording'] : ['timing'],
       recovery: 'check-playback',
     });
   }

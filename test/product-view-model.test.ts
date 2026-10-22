@@ -333,6 +333,10 @@ describe('product lifecycle and health', () => {
     assert.equal(model.health, 'blocked');
     assert.equal(model.attention?.code, 'song-clock-unavailable');
     assert.equal(model.room.song.state, 'unavailable');
+    assert.deepEqual(model.issues.find(issue => issue.code === 'song-clock-unavailable')?.affects,
+      ['timing', 'recording']);
+    assert.equal(model.actions.canStartTake, false);
+    assert.equal(model.actions.startTakeBlockedReason, 'room-blocked');
   });
 
   test('an offline paused controller is not a playback failure even after a long gap', () => {

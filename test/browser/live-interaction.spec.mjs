@@ -2023,6 +2023,16 @@ for (const [cause, title] of [
       await expect(page.locator('#system-audio')).toHaveText('未知');
       await expect(page.locator('#system-timing')).toHaveText(title);
       await expect(page.locator('.system-issue-recovery')).toHaveText('請確認播放歌曲的頁面是否仍開啟並連線。');
+      await expect(page.locator('.system-issue-meta > span').first()).not.toContainText('錄音');
+      await page.evaluate(() => {
+        const status = window.__warningStatus;
+        const issue = { ...status.issues[0], severity: 'critical', affects: ['timing', 'recording'] };
+        window.__relayInteractionHarness.setProduct({ ...status, health: 'blocked',
+          attention: { code: issue.code, scope: issue.scope, severity: issue.severity }, issues: [issue] });
+      });
+      await expect(page.locator('.system-issue-meta > span').first()).toContainText('錄音');
+      await expect(page.locator('.system-issue-meta > span').first()).not.toContainText('歌曲');
+      await expect(page.locator('#system-audio')).toHaveText('未知');
     }
     await testInfo.attach(`warning-${cause}`, { body: await page.screenshot(), contentType: 'image/png' });
     // A new healthy paused snapshot must withdraw the old warning everywhere.

@@ -222,6 +222,13 @@ test('OPEN status socket expires stale ProductStatus truth and a fresh snapshot 
     assert.equal(nodes.get('#system-robot')?.textContent, 'system.needsAttention');
     assert.equal(nodes.get('#system-audio')?.textContent, 'system.needsAttention',
       'independent audio faults remain visible even when attention names another issue');
+    const micIssue = { code: 'mic-audio-stalled', scope: 'mic', severity: 'warning',
+      cause: 'mic-uplink-delayed', affects: ['voice', 'recording'], recovery: 'automatic' };
+    socket.emit({ ...productStatus(), attention: clockIssue, issues: [clockIssue, micIssue] });
+    assert.equal(nodes.get('#system-audio')?.textContent, 'system.needsAttention',
+      'Mic media degradation must affect Audio even when timing owns primary attention');
+    assert.equal(nodes.get('#system-robot')?.textContent, 'system.ok',
+      'Mic audio degradation must not imply Robot failure');
     socket.emit({ ...productStatus(), attention: { scope: 'mic', code: 'mic-audio-stalled' } });
     assert.equal(nodes.get('#system-audio')?.textContent, 'system.needsAttention',
       'legacy attention-only messages retain their fallback');

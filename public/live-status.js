@@ -278,10 +278,16 @@ if (
 
   function renderSystem(status) {
     const attention = status.attention;
-    const robotProblem = attention?.scope === 'robot';
-    const audioProblem = attention?.scope === 'audio'
-      || attention?.scope === 'song'
-      || attention?.scope === 'mic';
+    const issues = Array.isArray(status.issues) ? status.issues : null;
+    const robotProblem = issues
+      ? issues.some(issue => issue.scope === 'robot')
+      : attention?.scope === 'robot';
+    const audioProblem = issues
+      ? issues.some(issue => issue.affects?.some(impact => impact === 'song' || impact === 'voice'))
+      : attention?.code !== 'song-clock-unavailable'
+        && ['audio', 'song', 'mic'].includes(attention?.scope);
+    const clockIssue = issues?.find(issue => issue.code === 'song-clock-unavailable')
+      ?? (attention?.code === 'song-clock-unavailable' ? attention : null);
     const songState = status.room?.song?.state;
     const micState = status.room?.mic?.state;
 
@@ -305,9 +311,11 @@ if (
             : songState === 'ready' || songState === 'handoff'
             ? t('system.ready')
             : songState === 'unavailable'
-              ? t('system.needsAttention')
+              ? t('system.unknown')
               : t('system.idle');
-    systemTiming.textContent = takeFreezesEstimate(status) || probeUnheardEstimate(status)
+    systemTiming.textContent = clockIssue
+      ? t(productIssueTitleKey(clockIssue))
+      : takeFreezesEstimate(status) || probeUnheardEstimate(status)
       ? t('system.timing.estimated')
       : timingLabels[status.timing?.state]?.() ?? t('system.unknown');
     systemRecording.textContent = takeLabels[status.take?.lifecycle]?.() ?? t('system.unknown');

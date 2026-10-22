@@ -349,6 +349,23 @@ describe('product lifecycle and health', () => {
     }
   });
 
+  test('dormant clock exemption preserves observed backing and video failures', () => {
+    for (const [overrides, cause] of [
+      [{ readiness: readiness({ timelineState: 2, backingStreaming: false }) }, 'backing-stalled'],
+      [{ readiness: readiness({ timelineState: 2, robotSourceConnected: false }) }, 'robot-source-unavailable'],
+      [{ robotVideoUnplayable: true }, 'robot-video-unplayable'],
+    ] as const) {
+      const model = buildProductViewModel(input({
+        ...overrides,
+        roomSong: { videoId: 'abcdefghijk', connected: false, clockAgeMs: 12 * 60_000, state: 2, handoffState: 'idle' },
+      }));
+      assert.ok(!model.issues.some(issue => issue.code === 'song-clock-unavailable'));
+      assert.ok(model.issues.some(issue => issue.cause === cause && issue.severity === 'critical'));
+      assert.equal(model.health, 'blocked');
+      assert.equal(model.actions.canStartTake, false);
+    }
+  });
+
   /**
    * The clock stops being authoritative after 1.5 s, which is right for
    * alignment and wrong as a thing to say to a singer. A phone reports every

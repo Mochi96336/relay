@@ -117,5 +117,9 @@ test('handoff remains a first-class Song state ahead of clock availability', () 
     handoffState: 'preparing',
   };
   assert.equal(deriveRoomSongState(handoff), 'handoff');
-  assert.equal(roomSongClockSeverity(handoff, true), null);
+  assert.equal(roomSongClockLost(handoff), true);
+  assert.equal(roomSongClockSeverity(handoff, false), 'warning');
+  assert.equal(roomSongClockSeverity(handoff, true), 'critical');
+  assert.equal(roomSongClockSeverity({ ...handoff, clockAgeMs: 2_000 }, true), null);
+  assert.equal(roomSongClockSeverity({ ...handoff, state: 2 }, true), null);
 });

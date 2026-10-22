@@ -220,7 +220,7 @@ export function buildProductIssues(facts: ProductIssueFacts): ProductIssue[] {
   if (facts.songClockSeverity) {
     issues.push({
       code: 'song-clock-unavailable',
-      scope: 'song',
+      scope: 'timing',
       severity: facts.songClockSeverity,
       // The product model knows current clock availability and age, but not
       // whether a playback holder ever established the clock in this lifecycle.

@@ -39,8 +39,8 @@ export const SONG_CLOCK_BLOCKING_MS = 15_000;
 
 export function roomSongClockLost(facts: RoomSongFacts): boolean {
   // Only moving media needs a progressing clock. A paused/cued/ended song or
-  // a handoff in preparation is not failed playback when its page stops reporting.
-  if (![1, 3].includes(facts.state ?? -1) || facts.handoffState !== 'idle') return false;
+  // unstarted song is not failed playback when its page stops reporting.
+  if (![1, 3].includes(facts.state ?? -1)) return false;
   return !facts.connected && facts.clockAgeMs > SONG_CLOCK_LOST_MS;
 }
 

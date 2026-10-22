@@ -2007,12 +2007,12 @@ for (const [cause, title] of [
     await page.evaluate(cause => {
       window.relayI18n.setLocale('zh-Hant', { persist: false });
       const issue = { code: cause === 'song-clock-unavailable' ? cause : 'robot-player-unavailable',
-        cause, scope: cause === 'song-clock-unavailable' ? 'song' : 'robot', severity: 'warning',
-        affects: ['timing'], recovery: cause === 'song-clock-unavailable' ? 'check-playback' : 'host-service' };
-      window.__warningStatus = { type: 'product-status', lifecycle: 'ready', health: 'degraded',
+        cause, scope: cause === 'song-clock-unavailable' ? 'timing' : 'robot', severity: cause === 'song-clock-unavailable' ? 'warning' : 'critical',
+        affects: cause === 'song-clock-unavailable' ? ['timing'] : ['song', 'recording'], recovery: cause === 'song-clock-unavailable' ? 'check-playback' : cause === 'robot-video-unplayable' ? 'change-song' : 'host-service' };
+      window.__warningStatus = { type: 'product-status', lifecycle: cause === 'song-clock-unavailable' ? 'live' : 'ready', health: cause === 'song-clock-unavailable' ? 'degraded' : 'blocked',
         attention: { code: issue.code, scope: issue.scope, severity: issue.severity }, issues: [issue],
         room: { participantCount: 1, mic: { state: 'free', ownerId: null, ownerNickname: null },
-          song: { state: 'unavailable', videoId: 'M7lc1UVf-VE', handoffState: 'idle' } },
+          song: { state: cause === 'song-clock-unavailable' ? 'unavailable' : 'ready', videoId: 'M7lc1UVf-VE', handoffState: 'idle' } },
         timing: { state: 'idle' }, take: { lifecycle: 'idle' }, actions: { canStartTake: false, canStartCalibration: false } };
       window.__relayInteractionHarness.setProduct(window.__warningStatus);
     }, cause);
@@ -2020,13 +2020,15 @@ for (const [cause, title] of [
     await page.locator('#system-panel').evaluate(node => { node.open = true; });
     await expect(page.locator('#system-product-issues .system-issue strong')).toHaveText(title);
     if (cause === 'song-clock-unavailable') {
+      await expect(page.locator('#system-audio')).toHaveText('未知');
+      await expect(page.locator('#system-timing')).toHaveText(title);
       await expect(page.locator('.system-issue-recovery')).toHaveText('請確認播放歌曲的頁面是否仍開啟並連線。');
     }
     await testInfo.attach(`warning-${cause}`, { body: await page.screenshot(), contentType: 'image/png' });
     // A new healthy paused snapshot must withdraw the old warning everywhere.
     await page.evaluate(() => {
       const s = window.__warningStatus;
-      window.__relayInteractionHarness.setProduct({ ...s, health: 'healthy', attention: null, issues: [],
+      window.__relayInteractionHarness.setProduct({ ...s, lifecycle: 'ready', health: 'healthy', attention: null, issues: [],
         room: { ...s.room, song: { ...s.room.song, state: 'ready' } } });
     });
     await expect(page.locator('#system-attention')).toBeHidden();

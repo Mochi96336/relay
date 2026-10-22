@@ -141,7 +141,7 @@ describe('product issue contract', () => {
 
     assert.deepEqual(issues, [{
       code: 'song-clock-unavailable',
-      scope: 'song',
+      scope: 'timing',
       severity: 'warning',
       cause: 'song-clock-unavailable',
       affects: ['timing'],

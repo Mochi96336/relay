@@ -206,6 +206,25 @@ test('OPEN status socket expires stale ProductStatus truth and a fresh snapshot 
         issues: [{ code, cause, scope: 'robot', severity: 'warning', recovery: 'automatic' }] });
       assert.equal(nodes.get('#attention-copy')?.textContent, key, 'the actual hero uses cause-specific copy');
     }
+    const clockIssue = { code: 'song-clock-unavailable', scope: 'timing', severity: 'warning',
+      cause: 'song-clock-unavailable', affects: ['timing'], recovery: 'check-playback' };
+    socket.emit({ ...productStatus(), attention: clockIssue, issues: [clockIssue] });
+    assert.equal(nodes.get('#system-audio')?.textContent, 'system.live',
+      'missing progress alone must not mark healthy Mic audio as failed');
+    assert.equal(nodes.get('#system-timing')?.textContent, 'system.attention.song-clock-unavailable',
+      'stored alignment must not conceal missing current song observations');
+    socket.emit({ ...productStatus(), attention: { ...clockIssue, scope: 'song' } });
+    assert.equal(nodes.get('#system-audio')?.textContent, 'system.live',
+      'legacy song-clock attention also describes missing observations, not failed audio');
+    const audioIssue = { code: 'robot-audio-unavailable', scope: 'robot', severity: 'critical',
+      affects: ['song', 'recording'] };
+    socket.emit({ ...productStatus(), attention: clockIssue, issues: [clockIssue, audioIssue] });
+    assert.equal(nodes.get('#system-robot')?.textContent, 'system.needsAttention');
+    assert.equal(nodes.get('#system-audio')?.textContent, 'system.needsAttention',
+      'independent audio faults remain visible even when attention names another issue');
+    socket.emit({ ...productStatus(), attention: { scope: 'mic', code: 'mic-audio-stalled' } });
+    assert.equal(nodes.get('#system-audio')?.textContent, 'system.needsAttention',
+      'legacy attention-only messages retain their fallback');
     socket.emit(productStatus());
 
     clock.advance(1_000);

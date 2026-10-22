@@ -66,7 +66,8 @@ Missing song progress is timing uncertainty, not proof of inaudible or unplayabl
 media. PLAYING/BUFFERING needs continuing clock reports, including during handoff;
 paused, cued, ended and unstarted songs do not become failed playback when the
 controller leaves. Existing long-gap checks still protect new synchronized Takes
-during a live performance. Clock warnings affect timing; critical clock gaps also declare the restriction
+while the mix is active or recording. Handoff may display `preparing`, but
+it cannot downgrade this protection for an active mix. Clock warnings affect timing; critical clock gaps also declare the restriction
 on starting new recordings. Both ask users to check the playback page; they do not promise an unobserved automatic repair. System
 summaries aggregate all declared issue impacts rather than infer audio failure
 from the highest-priority scope. Missing current progress takes precedence over

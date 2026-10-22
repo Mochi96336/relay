@@ -339,6 +339,45 @@ describe('product lifecycle and health', () => {
     assert.equal(model.actions.startTakeBlockedReason, 'room-blocked');
   });
 
+  test('handoff preparation cannot downgrade an active moving-song clock blocker', () => {
+    for (const state of [1, 3]) {
+      for (const handoffState of ['preparing', 'committing']) {
+        const model = buildProductViewModel(input({
+          readiness: readiness({ timelineConnected: false, timelineState: state, sessionActive: true }),
+          roomSong: { videoId: 'abcdefghijk', connected: false, clockAgeMs: 15_001, state, handoffState },
+        }));
+        assert.equal(model.lifecycle, 'preparing');
+        assert.equal(model.room.song.state, 'handoff');
+        assert.equal(model.health, 'blocked');
+        const issue = model.issues.find(issue => issue.code === 'song-clock-unavailable');
+        assert.equal(issue?.severity, 'critical');
+        assert.deepEqual(issue?.affects, ['timing', 'recording']);
+        assert.equal(model.actions.canStartTake, false);
+        assert.equal(model.actions.startTakeBlockedReason, 'room-blocked');
+        assert.deepEqual(model.actions.startTakeBlockingIssue, issue);
+      }
+    }
+  });
+
+  test('handoff clock protection keeps its age, media-state and session boundaries', () => {
+    for (const [state, clockAgeMs, sessionActive, severity] of [
+      [1, 6_000, true, null],
+      [1, 6_001, true, 'warning'],
+      [1, 15_000, true, 'warning'],
+      [1, 15_001, false, 'warning'],
+      [2, 30_000, true, null],
+      [5, 30_000, true, null],
+    ] as const) {
+      const model = buildProductViewModel(input({
+        readiness: readiness({ timelineConnected: false, timelineState: state, sessionActive }),
+        roomSong: { videoId: 'abcdefghijk', connected: false, clockAgeMs, state, handoffState: 'preparing' },
+      }));
+      assert.equal(model.issues.find(issue => issue.code === 'song-clock-unavailable')?.severity ?? null, severity);
+      assert.equal(model.health, severity ? 'degraded' : 'healthy');
+      assert.equal(model.actions.canStartTake, sessionActive);
+    }
+  });
+
   test('an offline paused controller is not a playback failure even after a long gap', () => {
     for (const state of [-1, 0, 2, 5]) {
       const model = buildProductViewModel(input({

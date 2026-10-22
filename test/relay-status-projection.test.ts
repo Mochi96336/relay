@@ -9,6 +9,7 @@ import {
   type ProductStatusFacts,
   type RemoteStatusFacts,
 } from '../src/relay-status-projection.js';
+import { createTakeCommandHandlers } from '../src/take-command-handlers.js';
 import { deriveRemoteStatusHealth } from '../src/remote-status.js';
 
 /** A Robot room playing a Song, with a live Mic and a boot-probe alignment. */
@@ -382,4 +383,31 @@ test('ProductStatus reads the room Song defensively', () => {
   assert.equal(loaded.room.song.videoId, 'song-1');
   assert.equal(loaded.room.song.handoffState, 'committing');
   assert.equal(loaded.lifecycle, 'preparing');
+});
+
+
+test('active handoff clock loss reaches server Take admission as a refusal', () => {
+  const status = projectProductStatus(productFacts({
+    readiness: buildReadiness({ ...ROBOT_ROOM, timelineConnected: false }),
+    room: { videoId: 'song-1', connected: false, state: 1, handoffState: 'preparing' },
+    timelineAgeMs: 15_001,
+  }));
+  assert.equal(status.lifecycle, 'preparing');
+  assert.equal(status.actions.canStartTake, false);
+  assert.equal(status.actions.startTakeBlockingIssue?.cause, 'song-clock-unavailable');
+  const replies: unknown[] = [];
+  const forbidden = (): never => { throw new Error('rejected Take must not reach recording side effects'); };
+  // Same projection -> actions -> handler composition used by server.ts.
+  const handlers = createTakeCommandHandlers({
+    controller: { start: forbidden, stop: forbidden, noteTimingAtStart: forbidden },
+    admission: () => status.actions,
+    frameBoundary: forbidden,
+    songAt: forbidden,
+    timingAtStart: forbidden,
+    onStarted: forbidden,
+    send: (_socket, message) => { replies.push(message); },
+    clock: { wallTime: () => 0, monotonicTime: () => 0 },
+  });
+  handlers.startTake({ participantId: 'participant-a' });
+  assert.deepEqual(replies, [{ type: 'take-command-rejected', command: 'start', reason: 'room-blocked' }]);
 });

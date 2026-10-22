@@ -44,7 +44,9 @@ export type TargetOptions = {
  */
 /**
  * One desired media state, reconciled against asynchronous iframe observations.
- * Owners decide authority, audibility and deadlines. This adapter alone decides
+ * Owners decide authority, audibility, deadlines and iframe lifetime. Before
+ * CUED replaces media they honor needsFreshCuePlayer(); retiring a JS target
+ * cannot recall iframe requests. This adapter alone decides
  * how load/cue/seek/play/pause achieve their desired physical player state.
  *
  * Commands are requests, not observations. A paused reused player needs Play;
@@ -53,6 +55,8 @@ export type TargetOptions = {
  */
 export declare class YouTubePlaybackTarget {
     #private;
+    /** A retired JS target cannot cancel media requests already posted to its iframe. */
+    static needsFreshCuePlayer(player: {getPlayerState(): unknown}): boolean;
     /** @param {YouTubePlaybackPlayer} player @param {PlaybackTarget} desired @param {TargetOptions} [options] */
     constructor(player: YouTubePlaybackPlayer, desired: PlaybackTarget, options?: TargetOptions);
     retire(): void;

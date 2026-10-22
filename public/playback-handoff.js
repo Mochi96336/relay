@@ -43,7 +43,7 @@ export const HANDOFF_STALL_REPORT_MS = 15_000;
  * }} HandoffMutation
  * @typedef {{
  *   getPlayer: () => HandoffPlayer | null,
- *   ensurePlayer: (videoId: string, isCurrent: () => boolean) => Promise<unknown>,
+ *   ensurePlayer: (videoId: string, isCurrent: () => boolean, options?: {cue: boolean}) => Promise<unknown>,
  *   onMutation: (mutation: HandoffMutation) => void,
  *   onTimelineBoundary: (videoId: string | null) => void,
  *   onNote: (key: string) => void,
@@ -133,7 +133,7 @@ export class PlaybackHandoff {
    * @param {HandoffPlayer} player */
   #acquireMuteLease(player) {
     if (this.#muteLease?.player !== player) {
-      this.#muteLease = { player, wasMuted: Boolean(player.isMuted()) };
+      this.#muteLease = { player, wasMuted: this.#muteLease?.wasMuted ?? Boolean(player.isMuted()) };
     }
   }
 
@@ -164,7 +164,19 @@ export class PlaybackHandoff {
       this.#ports.onStalled(attempt.handoffId, this.readiness());
     }, HANDOFF_STALL_REPORT_MS);
     try {
-      await this.#ports.ensurePlayer(plan.videoId, () => this.#current(attempt));
+      // Capture before ensurePlayer can replace the iframe. A mute sent to its
+      // successor is asynchronous and must not redefine the user's preference.
+      if (player && !this.#muteLease) {
+        try { this.#acquireMuteLease(player); }
+        catch (error) {
+          if (this.#current(attempt)) {
+            this.#ports.warn('Could not read handoff mute provenance', error);
+            this.#ports.onFailure(attempt.handoffId, 'prepare-failed');
+          }
+          return false;
+        }
+      }
+      await this.#ports.ensurePlayer(plan.videoId, () => this.#current(attempt), { cue: plan.desiredState === 5 });
       if (!this.#current(attempt) || attempt.phase !== 'preparing') return false;
       this.cue();
       return true;

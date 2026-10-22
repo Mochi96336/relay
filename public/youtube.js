@@ -47,6 +47,7 @@ const OUTGOING_RELEASE_FALLBACK_MS = 2_000;
 
 let player = null;
 let playerReady = false;
+let playerEpoch = 0;
 let loadedVideoId = null;
 let telemetryTimer = null;
 let previousSnapshot = null;
@@ -678,7 +679,11 @@ async function startPlaybackPrewarm() {
     speculativePrewarm.desiredState = desired.state;
     speculativePrewarm.playbackRate = desired.playbackRate;
     speculativePrewarm.startedAtPerformanceMs = performance.now();
-    armSpeculativePrewarmTimeout(speculativePrewarm);
+    const prewarm = speculativePrewarm;
+    armSpeculativePrewarmTimeout(prewarm);
+    await ensurePlayer(desired.videoId, () => speculativePrewarm === prewarm && !playbackHandoff.pending,
+      { cue: desired.state === 5 });
+    if (speculativePrewarm !== prewarm || playbackHandoff.pending) return false;
     if (playerReady) primeSpeculativePrewarm();
     return true;
   }
@@ -696,7 +701,9 @@ async function startPlaybackPrewarm() {
   armSpeculativePrewarmTimeout(prewarm);
 
   try {
-    await ensurePlayer(prewarm.videoId, () => speculativePrewarm === prewarm && !playbackHandoff.pending);
+    if (playerReady && player) prewarm.wasMuted = Boolean(player.isMuted());
+    await ensurePlayer(prewarm.videoId, () => speculativePrewarm === prewarm && !playbackHandoff.pending,
+      { cue: prewarm.desiredState === 5 });
     if (speculativePrewarm !== prewarm || playbackHandoff.pending) return false;
     if (playerReady) primeSpeculativePrewarm();
     return true;
@@ -869,12 +876,37 @@ function handleAutoplayBlocked() {
   }
 }
 
-async function ensurePlayer(videoId, isCurrent = () => true) {
+async function ensurePlayer(videoId, isCurrent = () => true, { cue = false } = {}) {
   const YT = await loadYouTubeApi();
   if (!isCurrent()) return null;
   loadedVideoId = videoId;
 
+  let replacementWasMuted = false;
+  if (player && cue && YouTubePlaybackTarget.needsFreshCuePlayer(player)) {
+    // Generation fences stop callbacks, but cannot cancel a load already posted
+    // to an iframe. Isolate that pipeline before granting a new CUED controller.
+    const retired = player;
+    replacementWasMuted = Boolean(retired.isMuted());
+    retired.mute();
+    localPlaybackTarget?.retire();
+    playerEpoch += 1;
+    player = null;
+    playerReady = false;
+    previousSnapshot = null;
+    if (telemetryTimer) clearInterval(telemetryTimer);
+    telemetryTimer = null;
+    const mount = document.createElement('div');
+    mount.id = 'youtube-player';
+    retired.getIframe().replaceWith(mount);
+    try { retired.destroy(); } catch (error) { console.warn('Could not destroy retired YouTube player', error); }
+    if (!isCurrent()) return null;
+  }
   if (player) return player;
+
+  const epoch = ++playerEpoch;
+  const currentEvent = (handler) => (event) => {
+    if (epoch === playerEpoch) handler(event);
+  };
 
   player = new YT.Player('youtube-player', {
     width: 640,
@@ -885,11 +917,14 @@ async function ensurePlayer(videoId, isCurrent = () => true) {
       origin: location.origin,
     },
     events: {
-      onReady: handleReady,
-      onStateChange: handleStateChange,
-      onPlaybackRateChange: handlePlaybackRateChange,
-      onError: handleError,
-      onAutoplayBlocked: handleAutoplayBlocked,
+      onReady: currentEvent((event) => {
+        if (replacementWasMuted) event.target.mute();
+        handleReady(event);
+      }),
+      onStateChange: currentEvent(handleStateChange),
+      onPlaybackRateChange: currentEvent(handlePlaybackRateChange),
+      onError: currentEvent(handleError),
+      onAutoplayBlocked: currentEvent(handleAutoplayBlocked),
     },
   });
   return player;
@@ -943,7 +978,7 @@ async function applyRoomSongCommand(message) {
 
   const mutation = serverMutation;
   try {
-    await ensurePlayer(desired.videoId, () => serverMutation === mutation);
+    await ensurePlayer(desired.videoId, () => serverMutation === mutation, { cue: desired.state === 5 });
     // A newer apply may have arrived while the YouTube API/player was loading.
     // Never let the older async continuation mutate playback afterward.
     if (serverMutation?.source !== 'room-command' || serverMutation.commandId !== commandId) return;
@@ -1016,7 +1051,7 @@ async function restoreAuthoritativeRoom(room) {
       expiresAt: Number.POSITIVE_INFINITY,
     };
     const mutation = serverMutation;
-    await ensurePlayer(videoId, () => serverMutation === mutation);
+    await ensurePlayer(videoId, () => serverMutation === mutation, { cue: desired.state === 5 });
     if (serverMutation !== mutation) return;
     if (!playerReady || !player) {
       noteNode.textContent = 'Restoring this playback after reload…';
@@ -1054,7 +1089,6 @@ async function prepareRoomSong(message) {
     if (playerReady && player) {
       try { player.pauseVideo(); } catch {}
     }
-    restorePrewarmMute(preparedPrewarm);
   }
 
   localCommandPending = null;
@@ -1068,11 +1102,20 @@ async function prepareRoomSong(message) {
       : 1,
   }, {
     reusePreparedPlayer,
-    wasMuted: reusePreparedPlayer ? preparedPrewarm?.wasMuted ?? null : null,
+    wasMuted: preparedPrewarm?.wasMuted ?? null,
   });
 }
 
 function commitRoomSong(message) {
+  const pending = playbackHandoff.pending;
+  if (pending && pending.handoffId === message.handoffId && Number(message.state) === 5
+      && player && YouTubePlaybackTarget.needsFreshCuePlayer(player)) {
+    // Natural completion can change a moving commit into a dormant one. Prepare
+    // its fresh iframe and acknowledge readiness again inside the server deadline.
+    prepareRoomSong({ ...message, videoId: pending.videoId, playbackRate: pending.playbackRate })
+      .catch(console.error);
+    return;
+  }
   playbackHandoff.commit(message);
 }
 
@@ -1114,6 +1157,7 @@ function completeRoomSong(message) {
   if (!playbackHandoff.pending || message.handoffId !== playbackHandoff.pending.handoffId) return;
   clearAutoplayRecovery();
   const completed = playbackHandoff.complete(message.handoffId);
+  if (completed && serverMutation?.source === 'handoff-commit') serverMutation = null;
   // WebKit can pause media on asynchronous unmute. Only observed PLAYING clears
   // the recovery state; an ordinary telemetry repaint cannot hide it.
   if (completed?.unmuteRequested && completed.desiredState === 1) {

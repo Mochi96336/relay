@@ -17,7 +17,9 @@ import { ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS } from './room-song-command-conv
 
 /**
  * One desired media state, reconciled against asynchronous iframe observations.
- * Owners decide authority, audibility and deadlines. This adapter alone decides
+ * Owners decide authority, audibility, deadlines and iframe lifetime. Before
+ * CUED replaces media they honor needsFreshCuePlayer(); retiring a JS target
+ * cannot recall iframe requests. This adapter alone decides
  * how load/cue/seek/play/pause achieve their desired physical player state.
  *
  * Commands are requests, not observations. A paused reused player needs Play;
@@ -25,6 +27,18 @@ import { ROOM_SONG_LOCAL_JUMP_TOLERANCE_SECONDS } from './room-song-command-conv
  * Each outstanding command is sent once, even with reentrant player callbacks.
  */
 export class YouTubePlaybackTarget {
+  // A posted media request cannot be recalled by retiring its JS owner. A new
+  // dormant controller must use a fresh iframe after this player requested media.
+  /** @type {WeakSet<object>} */
+  static #mediaPlayers = new WeakSet();
+
+  /** @param {{getPlayerState(): unknown}} player */
+  static needsFreshCuePlayer(player) {
+    if (this.#mediaPlayers.has(player)) return true;
+    try { return [0, 1, 2, 3].includes(Number(player.getPlayerState())); }
+    catch { return false; } // An initializing, unrequested iframe has no media to retire.
+  }
+
   /** @type {YouTubePlaybackPlayer} */
   #player;
   /** @type {PlaybackTarget} */
@@ -74,7 +88,10 @@ export class YouTubePlaybackTarget {
           if (this.#options.mode === 'cue') {
             if (!player.cueVideoById) throw new Error('YouTube cueVideoById is unavailable');
             player.cueVideoById(input);
-          } else player.loadVideoById(input);
+          } else {
+            YouTubePlaybackTarget.#mediaPlayers.add(player);
+            player.loadVideoById(input);
+          }
         }
       }
       let videoId;
@@ -83,6 +100,7 @@ export class YouTubePlaybackTarget {
 
       let state;
       try { state = Number(player.getPlayerState()); } catch { return; }
+      if ([0, 1, 2, 3].includes(state)) YouTubePlaybackTarget.#mediaPlayers.add(player);
       if (state !== this.#lastState) this.#positionRequested = false;
       if (!this.#current()) return;
       // An old cue/load can finish after its owner was retired. Re-entering a
@@ -110,6 +128,7 @@ export class YouTubePlaybackTarget {
           changed = true;
           this.#positionRequested = true;
           this.#explicitSeekPending = false;
+          YouTubePlaybackTarget.#mediaPlayers.add(player);
           player.seekTo(desired.positionSeconds, true);
         } else if (!ownsPosition || !displaced) this.#positionApplied = true;
       }
@@ -134,6 +153,7 @@ export class YouTubePlaybackTarget {
             && (this.#options.mode === 'reuse' || state === 2 || state === 5 || state === 0)) {
           changed = true;
           this.#stateRequested = true;
+          YouTubePlaybackTarget.#mediaPlayers.add(player);
           player.playVideo();
         } else if (desired.state !== 1 && (state === 1 || state === 5 && this.#options.mode === 'reuse')) {
           changed = true;

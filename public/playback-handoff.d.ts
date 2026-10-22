@@ -65,7 +65,7 @@ export type HandoffMutation = {
 };
 export type HandoffPorts = {
     getPlayer: () => HandoffPlayer | null;
-    ensurePlayer: (videoId: string, isCurrent: () => boolean) => Promise<unknown>;
+    ensurePlayer: (videoId: string, isCurrent: () => boolean, options?: {cue: boolean}) => Promise<unknown>;
     onMutation: (mutation: HandoffMutation) => void;
     onTimelineBoundary: (videoId: string | null) => void;
     onNote: (key: string) => void;

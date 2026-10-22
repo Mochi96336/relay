@@ -281,6 +281,16 @@ Audibility, authority and deadlines stay with their owners. Player construction
 checks the operation's identity after API loading, and cold commands wait for
 `onReady` instead of treating an initializing iframe as a failure.
 
+Retiring JavaScript does not cancel media requests already posted to YouTube.
+When CUED replaces a player that requested media, the browser owner mutes and
+destroys the old iframe and mounts a fresh one. This also applies when natural
+completion refreshes a moving commit; readiness is acknowledged again inside
+the original server deadline. The handoff's original mute preference survives
+replacement. All iframe callbacks are generation-fenced, including Ready, Error
+and AutoplayBlocked. Completion releases the handoff mutation context so native
+Play can immediately create the next intent. This isolation avoids guessing
+whether PLAYING came from an obsolete Load or a user's native Play gesture.
+
 The Mic owner may replace the song during or after a failed transfer. Load still
 checks identity, revision and causal command ordering. Only acceptance cancels
 the old handoff, and cancellation precedes the new apply on the target socket.
@@ -291,6 +301,11 @@ The deterministic contract tests exercise both domain and browser owners. The
 opt-in `test/browser/youtube-playback.spec.mjs` checks the physical adapter against
 YouTube's real iframe, including a one-second clip and autoplay recovery through
 the visible native Play button. It requires `RELAY_REAL_YOUTUBE=1` and browser tools.
+The reverse-order fault tests deliberately finish an old Load after a successful
+new CUED, even after destroying its fake iframe. Real-YouTube owner tests use the
+production browser module to check iframe removal, video/state/mute before and
+after completion, and native Play on the new iframe. These real tests verify
+physical isolation; they do not claim YouTube reproduced the injected ordering.
 
 The server and browser must be updated together for CUED dormant handoffs.
 Reload pages carrying the previous build before exercising this protocol change;

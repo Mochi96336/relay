@@ -77,11 +77,11 @@ test('Mic transport evidence is sampled from statusz only on the Technical detai
 });
 
 test('legacy backing attention remains a compatibility projection outside normal System', () => {
-  assert.match(liveStatus, /'audio-unavailable': \(\) => t\('system\.attention\.audio-unavailable'\)/);
+  assert.match(liveStatus, /productIssueTitleKey\(issue\)/);
   assert.match(liveStatus, /const audioProblem = attention\?\.scope === 'audio'[\s\S]*attention\?\.scope === 'song'[\s\S]*attention\?\.scope === 'mic'/);
 
   assert.doesNotMatch(system, /product\.attention/);
-  assert.match(system, /const titleKey = issueTitleKeys\[issue\?\.code\]/);
+  assert.match(system, /productIssueTitleKey\(issue\)/);
   assert.match(system, /detail\.textContent = causeCopy\(issue\?\.cause\)/);
 });
 

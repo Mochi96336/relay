@@ -335,6 +335,20 @@ describe('product lifecycle and health', () => {
     assert.equal(model.room.song.state, 'unavailable');
   });
 
+  test('an offline paused controller is not a playback failure even after a long gap', () => {
+    for (const state of [-1, 0, 2, 5]) {
+      const model = buildProductViewModel(input({
+        micOwnerId: null,
+        micOwnerNickname: null,
+        readiness: readiness({ timelineConnected: false, timelineState: state, micConnected: false, micStreaming: false }),
+        roomSong: { videoId: 'abcdefghijk', connected: false, clockAgeMs: 12 * 60_000, state, handoffState: 'idle' },
+      }));
+      assert.equal(model.health, 'healthy', `state ${state}`);
+      assert.equal(model.attention, null);
+      assert.equal(model.room.song.state, 'ready');
+    }
+  });
+
   /**
    * The clock stops being authoritative after 1.5 s, which is right for
    * alignment and wrong as a thing to say to a singer. A phone reports every

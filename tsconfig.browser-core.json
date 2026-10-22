@@ -14,6 +14,7 @@
     "public/publisher-session.js",
     "public/playback-handoff.js",
     "public/youtube-playback-target.js",
+    "public/product-issue-copy.js",
     "shared/song-playback-target.js"
   ]
 }

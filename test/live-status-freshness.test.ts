@@ -196,6 +196,18 @@ test('OPEN status socket expires stale ProductStatus truth and a fresh snapshot 
     assert.equal(body.dataset.selfMic, 'live');
     assert.equal(nodes.get('#system-relay')?.textContent, 'system.connected');
 
+    for (const [code, cause, key] of [
+      ['robot-player-unavailable', 'robot-source-unavailable', 'system.attention.robot-source-disconnected'],
+      ['robot-player-unavailable', 'robot-video-unplayable', 'system.attention.robot-video-unplayable'],
+      ['mic-audio-stalled', 'mic-uplink-delayed', 'system.attention.mic-delayed'],
+      ['timing-recovering', 'timing-fallback', 'system.attention.timing-estimate'],
+    ]) {
+      socket.emit({ ...productStatus(), health: 'degraded', attention: { code, scope: 'robot', severity: 'warning' },
+        issues: [{ code, cause, scope: 'robot', severity: 'warning', recovery: 'automatic' }] });
+      assert.equal(nodes.get('#attention-copy')?.textContent, key, 'the actual hero uses cause-specific copy');
+    }
+    socket.emit(productStatus());
+
     clock.advance(1_000);
     socket.emit(productStatus());
     assert.equal(fakeWindow.relayProductAuthority.authorityFresh, true,

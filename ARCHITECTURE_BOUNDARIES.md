@@ -62,6 +62,18 @@ Diagnostics may expose implementation details such as routes, transport identiti
 
 If the product layer only knows current availability, it must describe current availability. Terms such as `disconnected`, `lost`, or other transition claims require actual transition/history evidence.
 
+Missing song progress is timing uncertainty, not proof of inaudible or unplayable
+media. Only PLAYING/BUFFERING without a handoff needs continuing clock reports;
+paused, cued, ended and unstarted songs do not become failed playback when the
+controller leaves. Existing long-gap checks still protect new synchronized Takes
+during a live performance. Clock issues affect timing and ask users to check the
+playback page; they do not promise an unobserved automatic repair.
+
+Hero and System issue titles share `product-issue-copy.js` and use the reported
+cause before the broad compatibility code. A Robot page that is not connected, a rejected
+video, delayed Mic audio and estimated timing must remain distinct. Generic
+automatic guidance describes status refresh, not a recovery action without proof.
+
 ## 4. Compatibility projections stay compatibility projections
 
 When a richer replacement is introduced for an existing product contract, the compatibility field must retain its previous runtime shape unless an intentional versioned breaking change is made.

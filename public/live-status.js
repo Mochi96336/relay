@@ -1,4 +1,5 @@
 import { authorityState } from './authority-freshness.js';
+import { productIssueTitleKey } from './product-issue-copy.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 import { wsUrl } from './ws-url.js';
 import { micPresenceDisplayValues } from '../shared/mic-presence-precision.js';
@@ -38,28 +39,12 @@ if (
   let roomMicOwnerId = null;
   let roomMicLive = false;
 
-  const attentionLabels = {
-    'audio-unavailable': () => t('system.attention.audio-unavailable'),
-    'robot-audio-unavailable': () => t('system.attention.robot-audio-unavailable'),
-    'robot-route-invalid': () => t('system.attention.robot-route-invalid'),
-    'robot-player-unavailable': () => t('system.attention.robot-player-unavailable'),
-    'song-clock-unavailable': () => t('system.attention.song-clock-unavailable'),
-    'mic-reconnecting': () => t('system.attention.mic-reconnecting'),
-    'mic-audio-stalled': () => t('system.attention.mic-audio-stalled'),
-    'mic-input-clipping': () => t('system.attention.mic-input-clipping'),
-    'mic-too-loud': () => t('system.attention.mic-too-loud'),
-    'mic-too-quiet': () => t('system.attention.mic-too-quiet'),
-    'timing-recovering': () => t('system.attention.timing-recovering'),
-    'timing-clamped': () => t('system.needsAttention'),
-    'take-failed': () => t('system.attention.take-failed'),
-  };
-
   const timingLabels = {
     idle: () => t('system.idle'),
     calibrating: () => t('system.timing.gettingReady'),
     aligned: () => t('system.timing.aligned'),
-    fallback: () => t('system.timing.recovering'),
-    stale: () => t('system.timing.recovering'),
+    fallback: () => t('system.timing.estimated'),
+    stale: () => t('system.attention.timing-recovering'),
     clamped: () => t('system.needsAttention'),
   };
 
@@ -334,7 +319,7 @@ if (
    */
   function takeFreezesEstimate(status) {
     return ['recording', 'finalizing'].includes(status.take?.lifecycle)
-      && ['fallback', 'stale'].includes(status.timing?.state);
+      && status.timing?.state === 'fallback';
   }
 
   /** The Mic never heard the chime (headphones): an estimate, not a recovery in progress. */
@@ -350,11 +335,12 @@ if (
       attentionCopy.textContent = '';
       return;
     }
+    const issue = Array.isArray(status.issues)
+      ? status.issues.find(issue => issue?.code === attention.code && issue?.scope === attention.scope) ?? attention
+      : attention;
     attentionCopy.textContent = attention.code === 'timing-recovering' && takeFreezesEstimate(status)
       ? t('system.attention.timing-estimated')
-      : attention.code === 'timing-recovering' && probeUnheardEstimate(status)
-        ? t('system.attention.timing-estimate')
-        : attentionLabels[attention.code]?.() ?? t('system.attention');
+      : t(productIssueTitleKey(issue));
     attentionRegion.hidden = false;
     attentionRegion.dataset.scope = attention.scope || '';
     attentionRegion.dataset.severity = attention.severity || 'warning';

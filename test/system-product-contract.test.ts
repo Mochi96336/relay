@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { productIssueTitleKey } from '../public/product-issue-copy.js';
 
 const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
@@ -154,9 +155,9 @@ test('retry-mic recovery becomes a self-owner user-gesture action without wideni
     2,
     'Retry Mic action copy must exist in both supported Live locales',
   );
-  assert.match(
-    system,
-    /'mic-input-clipping': 'system\.attention\.mic-input-clipping'/,
+  assert.equal(
+    productIssueTitleKey({ code: 'mic-input-clipping', cause: 'mic-input-clipping' }),
+    'system.attention.mic-input-clipping',
     'Mic clipping must have a normal System title',
   );
   assert.match(

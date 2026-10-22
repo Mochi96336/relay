@@ -34,13 +34,13 @@ export type RoomSongFacts = {
  * room becoming meaningfully unavailable to the singer.
  */
 export const SONG_CLOCK_LOST_MS = 6_000;
-/** Only a substantially longer gap is severe enough to block a performance. */
+/** A substantially longer moving-clock gap blocks new synchronized Takes. */
 export const SONG_CLOCK_BLOCKING_MS = 15_000;
 
 export function roomSongClockLost(facts: RoomSongFacts): boolean {
-  // An ended Song plays nothing, so there is no clock left to lose. Its holder
-  // leaving afterwards is not a problem worth a warning.
-  if (facts.state === 0) return false;
+  // Only moving media needs a progressing clock. A paused/cued/ended song or
+  // a handoff in preparation is not failed playback when its page stops reporting.
+  if (![1, 3].includes(facts.state ?? -1) || facts.handoffState !== 'idle') return false;
   return !facts.connected && facts.clockAgeMs > SONG_CLOCK_LOST_MS;
 }
 

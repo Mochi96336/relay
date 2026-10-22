@@ -133,7 +133,7 @@ describe('product issue contract', () => {
     }]);
   });
 
-  test('Song clock issues describe availability without inventing connection history', () => {
+  test('missing song progress reports timing uncertainty with a playback-page check', () => {
     const issues = buildProductIssues({
       ...HEALTHY_ISSUES,
       songClockSeverity: 'warning',
@@ -144,8 +144,8 @@ describe('product issue contract', () => {
       scope: 'song',
       severity: 'warning',
       cause: 'song-clock-unavailable',
-      affects: ['song', 'timing'],
-      recovery: 'automatic',
+      affects: ['timing'],
+      recovery: 'check-playback',
     }]);
   });
 

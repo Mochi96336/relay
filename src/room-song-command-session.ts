@@ -61,7 +61,7 @@ type PendingRoomSongCommand = AcceptedRoomSongCommand & {
 };
 
 export type RoomSongCommandDecision =
-  | { ok: true; command: AcceptedRoomSongCommand; duplicate: boolean }
+  | { ok: true; command: AcceptedRoomSongCommand; duplicate: boolean; replacedCommandId?: string }
   | {
     ok: false;
     reason:
@@ -126,7 +126,7 @@ function statusHandoffTarget(status: RoomSongStatus): PlaybackIdentity | null {
   return { participantId, transportId, generation };
 }
 
-function safeTerminalReloadContinuation(
+function safeDormantReloadContinuation(
   payload: Record<string, unknown>,
   identity: PlaybackIdentity,
   roomStatus: RoomSongStatus,
@@ -141,7 +141,8 @@ function safeTerminalReloadContinuation(
 
   const roomState = Number(roomStatus.state);
   const incomingState = Number(payload.state);
-  if (![0, -1].includes(roomState) || incomingState !== 2) return false;
+  if (![-1, 0, 2, 5].includes(roomState) || ![2, 5].includes(incomingState)) return false;
+  if (incomingState === 2 && ![0, -1].includes(roomState)) return false;
 
   const roomVideoId = typeof roomStatus.videoId === 'string' ? roomStatus.videoId : null;
   const incomingVideoId = typeof payload.videoId === 'string' ? payload.videoId : null;
@@ -155,6 +156,7 @@ function safeTerminalReloadContinuation(
     || Math.abs(roomRate - incomingRate) > 0.0001
   ) return false;
 
+  if (incomingState === 5) return true;
   const roomPosition = Number(roomStatus.serverTime);
   const incomingPosition = Number(payload.currentTime);
   if (
@@ -303,6 +305,9 @@ export class RoomSongCommandSession {
       return { ok: false, reason: 'invalid-identity' };
     }
 
+    // A Mic owner's Load replaces the song, rather than depending on the old
+    // media being transferable. All other commands retain the exact leader gate.
+    const replacementLoad = request.body.action === 'load' && actorParticipantId === micOwnerId;
     const leader = statusLeader(roomStatus);
     const healthyLeader = Boolean(
       leader && roomStatus.leaderConnected === true && roomStatus.leaderFresh === true,
@@ -326,7 +331,7 @@ export class RoomSongCommandSession {
       return { ok: false, reason: 'command-id-conflict' };
     }
 
-    if (roomStatus.handoffState && roomStatus.handoffState !== 'idle') {
+    if (!replacementLoad && roomStatus.handoffState && roomStatus.handoffState !== 'idle') {
       return { ok: false, reason: 'handoff-active' };
     }
 
@@ -334,7 +339,7 @@ export class RoomSongCommandSession {
       if (actorParticipantId !== micOwnerId) {
         return { ok: false, reason: 'mic-owner-required' };
       }
-      if (healthyLeader && leader && !sameIdentity(leader, target)) {
+      if (!replacementLoad && healthyLeader && leader && !sameIdentity(leader, target)) {
         if (leader.participantId !== micOwnerId) {
           return { ok: false, reason: 'playback-handoff-required' };
         }
@@ -388,7 +393,7 @@ export class RoomSongCommandSession {
       if (request.expectedRevision !== currentRevision) {
         return { ok: false, reason: 'stale-revision' };
       }
-      if (this.pending) return { ok: false, reason: 'command-pending' };
+      if (this.pending && !replacementLoad) return { ok: false, reason: 'command-pending' };
     }
 
     const inheritsPendingAuthority = Boolean(
@@ -397,7 +402,11 @@ export class RoomSongCommandSession {
     const baseDesired = inheritsPendingAuthority
       ? projectDesired(this.pending!, nowMs)
       : desiredFromRoom(roomStatus);
-    const desired = foldDesired(baseDesired, request.body);
+    const foldedDesired = foldDesired(baseDesired, request.body);
+    // Starting a cued controller applies the logical room position explicitly;
+    // getCurrentTime() while CUED is not the paused song's media clock.
+    const desired = foldedDesired && request.body.action === 'play' && roomStatus.playbackParked === true
+      ? { ...foldedDesired, mustApplyPosition: true } : foldedDesired;
     if (!desired) return { ok: false, reason: 'song-required' };
 
     const inheritedMutations = inheritsPendingAuthority ? this.pending!.body.ownedMutations : [];
@@ -425,6 +434,8 @@ export class RoomSongCommandSession {
       issuedAtMs: nowMs,
     };
 
+    const replacedCommandId = replacementLoad && this.pending && !causalPredecessor
+      ? this.pending.commandId : undefined;
     this.pending = command;
     this.stableCompleteProofCommandId = null;
     this.correctionDebtSeconds = inheritedCorrectionDebtSeconds;
@@ -439,7 +450,8 @@ export class RoomSongCommandSession {
       if (!oldest) break;
       this.recent.delete(oldest);
     }
-    return { ok: true, command: accepted, duplicate: false };
+    return { ok: true, command: accepted, duplicate: false,
+      ...(replacedCommandId ? { replacedCommandId } : {}) };
   }
 
   gateTelemetry(
@@ -586,7 +598,7 @@ export class RoomSongCommandSession {
       return { ok: true };
     }
 
-    if (safeTerminalReloadContinuation(payload, identity, roomStatus)) {
+    if (safeDormantReloadContinuation(payload, identity, roomStatus)) {
       return { ok: true };
     }
 

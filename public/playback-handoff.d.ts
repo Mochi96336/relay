@@ -1,3 +1,4 @@
+import { YouTubePlaybackTarget } from './youtube-playback-target.js';
 export declare const HANDOFF_COMMIT_TIMEOUT_MS = 6500;
 /**
  * A preparation still not ready this long after it began says why, once.
@@ -10,10 +11,15 @@ export type HandoffPlayer = {
     } | null;
     getPlayerState(): unknown;
     getCurrentTime(): unknown;
+    getPlaybackRate?: () => unknown;
     getVideoLoadedFraction(): unknown;
     isMuted(): boolean;
     mute(): void;
     unMute(): void;
+    cueVideoById?: (input: {
+        videoId: string;
+        startSeconds: number;
+    }) => void;
     loadVideoById(input: {
         videoId: string;
         startSeconds: number;
@@ -49,6 +55,7 @@ export type Attempt = HandoffState & {
     timers: Set<number>;
     samples: SampleJob | null;
     stallTimer: number | null;
+    media: YouTubePlaybackTarget | null;
 };
 export type HandoffMutation = {
     source: 'handoff-prepare' | 'handoff-commit';
@@ -58,7 +65,7 @@ export type HandoffMutation = {
 };
 export type HandoffPorts = {
     getPlayer: () => HandoffPlayer | null;
-    ensurePlayer: (videoId: string, isCurrent: () => boolean) => Promise<unknown>;
+    ensurePlayer: (videoId: string, isCurrent: () => boolean, options?: {cue: boolean}) => Promise<unknown>;
     onMutation: (mutation: HandoffMutation) => void;
     onTimelineBoundary: (videoId: string | null) => void;
     onNote: (key: string) => void;
@@ -76,10 +83,12 @@ export type HandoffPorts = {
  *   getVideoData(): {video_id?: unknown} | null,
  *   getPlayerState(): unknown,
  *   getCurrentTime(): unknown,
+ *   getPlaybackRate?: () => unknown,
  *   getVideoLoadedFraction(): unknown,
  *   isMuted(): boolean,
  *   mute(): void,
  *   unMute(): void,
+ *   cueVideoById?: (input: {videoId: string, startSeconds: number}) => void,
  *   loadVideoById(input: {videoId: string, startSeconds: number}): void,
  *   seekTo(position: number, allowSeekAhead: boolean): void,
  *   setPlaybackRate(rate: number): void,
@@ -94,7 +103,7 @@ export type HandoffPorts = {
  * @typedef {{timers: number[]}} SampleJob
  * @typedef {HandoffState & {
  *   reusePreparedPlayer: boolean, readySent: boolean, timerEpoch: number,
- *   timers: Set<number>, samples: SampleJob | null, stallTimer: number | null,
+ *   timers: Set<number>, samples: SampleJob | null, stallTimer: number | null, media: YouTubePlaybackTarget | null,
  * }} Attempt
  * @typedef {{
  *   source: 'handoff-prepare' | 'handoff-commit', action: 'load' | 'play' | 'pause',
@@ -140,8 +149,8 @@ export declare class PlaybackHandoff {
      */
     readiness(): HandoffReadiness;
     announceReady(): boolean;
-    /** @param {number} state */
-    observeState(state: number): void;
+    /** Reconcile on events and the existing telemetry tick; deadlines stay with the owner. */
+    reconcile(): void;
     /** @param {{handoffId?: unknown, serverTime?: unknown, state?: unknown}} message */
     commit(message: {
         handoffId?: unknown;

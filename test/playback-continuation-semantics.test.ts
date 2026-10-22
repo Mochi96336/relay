@@ -42,7 +42,7 @@ function endedRoom(overrides: Record<string, unknown> = {}) {
   };
 }
 
-test('reload desired state maps terminal YouTube state to paused at the same position', () => {
+test('reload prepares a replay controller without decoding the terminal position', () => {
   assert.deepEqual(reloadDesiredFromRoom({
     videoId: VIDEO,
     state: 0,
@@ -50,8 +50,8 @@ test('reload desired state maps terminal YouTube state to paused at the same pos
     playbackRate: 1,
   }), {
     videoId: VIDEO,
-    state: 2,
-    positionSeconds: 199,
+    state: 5,
+    positionSeconds: 0,
     playbackRate: 1,
     ended: true,
   });
@@ -59,18 +59,14 @@ test('reload desired state maps terminal YouTube state to paused at the same pos
   assert.equal(reloadDesiredFromRoom({ videoId: 'bad' }), null);
 });
 
-test('a player restored to the end of a finished song may report ENDED and still be restored', () => {
-  const desired = reloadDesiredFromRoom({ videoId: VIDEO, state: 0, serverTime: 199, playbackRate: 1 });
-  assert.ok(desired);
-  const observed = { videoId: VIDEO, currentTime: 199, playbackRate: 1 };
-  assert.equal(roomSongCommandConvergence({ desired, observed: { ...observed, state: 0 } }), 'complete');
-  assert.equal(roomSongCommandConvergence({ desired, observed: { ...observed, state: 2 } }), 'complete');
-
-  // A room deliberately paused mid-song is not satisfied by a player that ended.
-  const paused = reloadDesiredFromRoom({ videoId: VIDEO, state: 2, serverTime: 199, playbackRate: 1 });
-  assert.ok(paused);
-  assert.equal(paused.ended, false);
-  assert.equal(roomSongCommandConvergence({ desired: paused, observed: { ...observed, state: 0 } }), 'none');
+test('a dormant reload converges on CUED without treating its setup position as a clock', () => {
+  for (const state of [0, 2, 5, -1]) {
+    const desired = reloadDesiredFromRoom({ videoId: VIDEO, state, serverTime: 199, playbackRate: 1 });
+    assert.ok(desired);
+    const observed = { videoId: VIDEO, currentTime: 0, playbackRate: 1 };
+    assert.equal(roomSongCommandConvergence({ desired, observed: { ...observed, state: 5 }, requirePosition: false }), 'complete');
+    assert.equal(roomSongCommandConvergence({ desired, observed: { ...observed, state: 0 }, requirePosition: false }), 'none');
+  }
 });
 
 test('reload continuation key changes when authoritative room revision changes', () => {
@@ -158,4 +154,25 @@ test('an ended room can promote the reloaded generation without a synthetic Paus
     (songs.statusPayload(100) as Record<string, unknown>).playbackGeneration,
     A_RELOAD.generation,
   );
+});
+
+test('dormant reload promotes only the new same-tab controller and retains logical room state', () => {
+  for (const state of [-1, 0, 2, 5]) {
+    const songs = new SongSession();
+    const commands = new RoomSongCommandSession();
+    songs.update(telemetry(state), A, null, 0);
+    const before = songs.statusPayload(100);
+    const cued = telemetry(5, 0, { bufferedFraction: 0 });
+    assert.deepEqual(commands.gateTelemetry(cued, A_RELOAD, before, 100), { ok: true });
+    assert.equal(songs.update(cued, A_RELOAD, null, 100).leaderChanged, true);
+    const room = songs.statusPayload(100);
+    assert.equal(room.state, state);
+    assert.equal(room.serverTime, 199);
+    assert.equal(room.playbackParked, true);
+    const represented = songs.projectTelemetry(cued, A_RELOAD, 200);
+    assert.deepEqual(commands.gateTelemetry(represented, A_RELOAD, songs.statusPayload(200), 200), { ok: true });
+    assert.equal(songs.update(cued, A_RELOAD, null, 200).accepted, true);
+    assert.equal(songs.statusPayload(200).state, state);
+    assert.equal(songs.statusPayload(200).serverTime, 199);
+  }
 });

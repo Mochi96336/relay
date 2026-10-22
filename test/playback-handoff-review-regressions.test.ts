@@ -15,29 +15,24 @@ function topLevelFunctionSection(source: string, declaration: string) {
   return source.slice(start, nextFunction >= 0 ? nextFunction : source.length);
 }
 
-test('CUED and ENDED cannot become final playback handoff proof', () => {
-  const songs = new SongSession();
-  songs.update(telemetry(10, { state: 5 }), A, A.participantId, 0);
-
-  const plan = songs.beginHandoff(B, B.participantId, 100);
-  assert.ok(plan);
-  assert.equal(plan.state, 2,
-    'dormant room states are transferred as an explicitly renderable PAUSED target');
-  assert.ok(songs.markHandoffReady(B, plan.handoffId, B.participantId, 150));
-
-  const cued = songs.update(telemetry(10, { state: 5 }), B, B.participantId, 180);
-  assert.equal(cued.accepted, false);
-  assert.equal(cued.reason, 'handoff-song-mismatch');
-  assert.equal((songs.statusPayload(180) as Record<string, any>).playbackLeaderParticipantId, A.participantId);
-
-  const ended = songs.update(telemetry(10, { state: 0 }), B, B.participantId, 190);
-  assert.equal(ended.accepted, false);
-  assert.equal(ended.reason, 'handoff-song-mismatch');
-
-  const paused = songs.update(telemetry(10, { state: 2 }), B, B.participantId, 200);
-  assert.equal(paused.accepted, true);
-  assert.equal(paused.handoffCompleted, true);
-  assert.equal((songs.statusPayload(200) as Record<string, any>).playbackLeaderParticipantId, B.participantId);
+test('CUED proves only a dormant controller; moving handoffs still require actual PLAYING', () => {
+  for (const roomState of [0, 1, 2, 3, 5]) {
+    const songs = new SongSession();
+    songs.update(telemetry(10, { state: roomState }), A, A.participantId, 0);
+    const plan = songs.beginHandoff(B, B.participantId, 100)!;
+    const moving = [1, 3].includes(roomState);
+    assert.equal(plan.state, moving ? 1 : 5);
+    songs.markHandoffReady(B, plan.handoffId, B.participantId, 150);
+    const cued = songs.update(telemetry(0, { state: 5, bufferedFraction: 0 }), B, B.participantId, 180);
+    assert.equal(cued.handoffCompleted === true, !moving);
+    if (moving) {
+      assert.equal(songs.update(telemetry(10, { state: 0 }), B, B.participantId, 190).accepted, false);
+      assert.equal(songs.update(telemetry(10.2, { state: 1 }), B, B.participantId, 200).handoffCompleted, true);
+    } else {
+      assert.equal(songs.statusPayload(180).state, roomState);
+      assert.equal(songs.statusPayload(180).serverTime, 10);
+    }
+  }
 });
 
 test('post-handoff autoplay recovery CTA persists, localizes, and clears only after actual PLAYING', async () => {

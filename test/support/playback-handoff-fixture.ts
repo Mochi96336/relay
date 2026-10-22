@@ -6,7 +6,7 @@ let sequence = 0;
 export const SONG = 'dQw4w9WgXcQ';
 
 /** Runs the whole production browser module through its public window events. */
-export async function playbackHandoffFixture(t: TestContext) {
+export async function playbackHandoffFixture(t: TestContext, { readyDelayMs = 0, loadDelayMs = 0, muteDelayMs = 0, initiallyMuted = false } = {}) {
   const clock = new FakeClock();
   class Element extends EventTarget {
     textContent = ''; value = ''; dataset: Record<string, string> = {};
@@ -25,7 +25,7 @@ export async function playbackHandoffFixture(t: TestContext) {
   });
   const events: { type: string; detail: Record<string, unknown> }[] = [];
   const window = Object.assign(new EventTarget(), { YT: {} as { Player?: typeof Player }, onYouTubeIframeAPIReady: undefined as (() => void) | undefined });
-  for (const type of ['relay:song-handoff-ready', 'relay:song-handoff-failed', 'relay:youtube-telemetry', 'relay:room-song-command-intent']) {
+  for (const type of ['relay:song-handoff-ready', 'relay:song-handoff-failed', 'relay:youtube-telemetry', 'relay:room-song-command-intent', 'relay:room-song-command-failed', 'relay:song-handoff-stalled']) {
     window.addEventListener(type, event => events.push({ type, detail: (event as CustomEvent<Record<string, unknown>>).detail }));
   }
   const players: Player[] = [];
@@ -37,7 +37,8 @@ export async function playbackHandoffFixture(t: TestContext) {
     state = 5;
     buffer = 0.5;
     rate = 1;
-    muted = false;
+    muted = players.length === 0 && initiallyMuted;
+    destroyed = false;
     pauseOnUnmute = false;
     failMute = false;
     callbacks: Record<string, (event: { target?: Player; data?: number }) => void>;
@@ -45,9 +46,10 @@ export async function playbackHandoffFixture(t: TestContext) {
       this.videoId = options.videoId; this.initialVideoId = options.videoId;
       this.callbacks = options.events;
       players.push(this);
-      clock.setTimeout(() => this.callbacks.onReady({ target: this }), 0);
+      clock.setTimeout(() => this.callbacks.onReady({ target: this }), readyDelayMs);
     }
-    getIframe() { return { referrerPolicy: '' }; }
+    getIframe() { return { referrerPolicy: '', replaceWith() {} }; }
+    destroy() { this.destroyed = true; commands.push(['destroy']); }
     getVideoData() { return { video_id: this.videoId }; }
     getPlayerState() { return this.state; }
     getCurrentTime() { return this.position; }
@@ -55,11 +57,25 @@ export async function playbackHandoffFixture(t: TestContext) {
     getVideoLoadedFraction() { return this.buffer; }
     getPlaybackRate() { return this.rate; }
     isMuted() { return this.muted; }
-    mute() { if (this.failMute) throw Error('test: mute failed'); this.muted = true; commands.push(['mute']); }
+    mute() {
+      if (this.failMute) throw Error('test: mute failed');
+      if (muteDelayMs) clock.setTimeout(() => { this.muted = true; }, muteDelayMs);
+      else this.muted = true;
+      commands.push(['mute']);
+    }
     unMute() { this.muted = false; if (this.pauseOnUnmute) this.state = 2; commands.push(['unmute']); }
     loadVideoById(input: { videoId: string; startSeconds: number }) {
-      this.videoId = input.videoId; this.position = input.startSeconds; this.state = 1;
       commands.push(['load', input.videoId, input.startSeconds]);
+      const finish = () => {
+        this.videoId = input.videoId; this.position = input.startSeconds; this.state = 1;
+        if (loadDelayMs) this.callbacks.onStateChange({ target: this, data: 1 });
+      };
+      if (loadDelayMs) {
+        this.state = -1;
+        // Intentionally survive destroy(): prove isolation even if an old
+        // pipeline and its callback finish after the new controller succeeds.
+        clock.setTimeout(finish, loadDelayMs);
+      } else finish();
     }
     cueVideoById(input: { videoId: string; startSeconds: number }) {
       this.videoId = input.videoId; this.position = input.startSeconds; this.state = 5;
@@ -90,7 +106,7 @@ export async function playbackHandoffFixture(t: TestContext) {
   const root = process.env.RELAY_HANDOFF_RUNTIME_ROOT;
   const url = root ? pathToFileURL(`${root}/public/youtube.js`) : new URL('../../public/youtube.js', import.meta.url);
   await import(`${url.href}?handoff-case=${++sequence}`);
-  const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); clock.advance(0); };
+  const flush = async () => { for (let i = 0; i < 8; i++) { await Promise.resolve(); clock.advance(0); } };
   const send = (type: string, detail: object = {}) => window.dispatchEvent(new CustomEvent(`relay:${type}`, { detail }));
   const prepare = async (id = 'h1', overrides: Record<string, unknown> = {}) => {
     send('song-handoff-prepare', { handoffId: id, videoId: SONG, serverTime: 40, state: 1, playbackRate: 1, ...overrides });
@@ -103,5 +119,5 @@ export async function playbackHandoffFixture(t: TestContext) {
     deferApi() { window.YT.Player = undefined; },
     resolveApi() { window.YT.Player = Player; window.onYouTubeIframeAPIReady?.(); },
     rejectApi() { apiScript?.dispatchEvent(new Event('error')); },
-    get player() { return players[0]; }, players };
+    get player() { return players.at(-1)!; }, players };
 }

@@ -10,5 +10,10 @@
     "skipLibCheck": true,
     "types": []
   },
-  "include": ["public/publisher-session.js", "public/playback-handoff.js"]
+  "include": [
+    "public/publisher-session.js",
+    "public/playback-handoff.js",
+    "public/youtube-playback-target.js",
+    "shared/song-playback-target.js"
+  ]
 }

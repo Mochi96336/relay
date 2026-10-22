@@ -1,3 +1,5 @@
+import { roomPlaybackTarget } from './song-playback-target.js';
+
 function safeGeneration(value) {
   const generation = Number(value);
   return Number.isSafeInteger(generation) && generation >= 0 ? generation : null;
@@ -18,28 +20,12 @@ function roomSemanticToken(room) {
 
 /**
  * Convert authoritative room state into the subset the iframe can be asked to
- * restore deterministically. YouTube has no API operation for "be ended";
- * ended/unstarted therefore restore as a paused terminal position. The server
- * command gate treats only that narrow same-transport reload proof as
- * semantically equivalent instead of mistaking it for a user Pause command.
+ * restore deterministically. Dormant songs restore as cued controllers. Their
+ * thumbnail/setup clock never replaces the logical room position or ended state.
+ * A subsequent authorized Play applies that position (or replays from zero).
  */
 export function reloadDesiredFromRoom(room) {
-  if (!room || typeof room !== 'object') return null;
-  const videoId = typeof room.videoId === 'string' && /^[A-Za-z0-9_-]{11}$/.test(room.videoId)
-    ? room.videoId
-    : null;
-  if (!videoId) return null;
-
-  const targetTime = Number(room.serverTime);
-  const state = Number(room.state);
-  const playbackRate = Number(room.playbackRate);
-  return {
-    videoId,
-    positionSeconds: Number.isFinite(targetTime) ? Math.max(0, targetTime) : 0,
-    state: state === 1 || state === 3 ? 1 : state === 5 ? 5 : 2,
-    playbackRate: Number.isFinite(playbackRate) && playbackRate > 0 ? playbackRate : 1,
-    ended: state === 0,
-  };
+  return roomPlaybackTarget(room);
 }
 
 /**

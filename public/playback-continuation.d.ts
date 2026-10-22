@@ -1,9 +1,9 @@
 export type ReloadDesiredState = {
   videoId: string;
   positionSeconds: number;
-  state: 1 | 2 | 5;
+  state: 1 | 5;
   playbackRate: number;
-  /** The room had finished: paused at its end, where the player may report ENDED. */
+  /** The logical room had finished; the cued controller prepares a replay from zero. */
   ended: boolean;
 };
 

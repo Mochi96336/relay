@@ -185,7 +185,7 @@ if (
     const choirLocalFollower = choirGuestEnabled && role === 'observer' && Boolean(videoId);
     stage.dataset.choirFollower = choirLocalFollower ? 'active' : 'off';
     headingTitle.hidden = !(holderWithSong || choirLocalFollower);
-    form.hidden = role === 'preparing' || !canChange || (Boolean(videoId) && !editing);
+    form.hidden = !canChange || (Boolean(videoId) && !editing);
     changeButton.hidden = !canChange || !videoId;
     setText(changeButton, editing ? t('song.done') : t('song.change'));
     changeButton.setAttribute('aria-expanded', editing ? 'true' : 'false');

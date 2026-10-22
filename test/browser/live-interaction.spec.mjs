@@ -1957,3 +1957,38 @@ test('production DOM: cancelled API loading cannot create a stale handoff player
   await page.waitForFunction(() => window.__handoffApiSettled);
   expect(await page.evaluate(() => window.__handoffPlayers.length)).toBe(0);
 });
+
+test('production DOM: Mic owner can choose a replacement while the previous song handoff is stuck', async ({ page }) => {
+  await handoffPhone(page);
+  await page.evaluate(() => {
+    const h = window.__relayInteractionHarness;
+    const hello = h.commands.find(command => command.type === 'playback-hello');
+    const participantId = window.relayParticipantId;
+    h.broadcast({ type: 'session-status', revision: 9999, participants: [], micOwnerId: participantId, micConnected: true });
+    h.broadcast({ type: 'room-song-command-status', revision: 2, pendingCommandId: null });
+    const room = { videoId: 'dQw4w9WgXcQ', state: 0, serverTime: 200, duration: 200, playbackRate: 1,
+      connected: true, leaderConnected: true, leaderFresh: true, ageMs: 0, handoffState: 'preparing' };
+    window.__replacementRoom = room;
+    const timeline = { ...room, type: 'youtube-timeline-status', playbackLeaderParticipantId: 'previous-singer',
+      playbackTransportId: 'playback-previous', playbackGeneration: 1, handoffId: 'stuck-video',
+      handoffTargetParticipantId: participantId, handoffTargetPlaybackTransportId: hello.playbackTransportId,
+      handoffTargetPlaybackGeneration: hello.playbackGeneration };
+    window.__replacementTimeline = timeline;
+    h.broadcast(timeline);
+    h.broadcast({ ...room, type: 'room-song-status' });
+  });
+  await expect(page.locator('.song-stage')).toHaveAttribute('data-playback-role', 'preparing');
+  await expect(page.locator('#change-youtube')).toBeVisible();
+  await page.locator('#change-youtube').click();
+  await expect(page.locator('#youtube-url')).toBeVisible();
+  await page.locator('#youtube-url').fill('M7lc1UVf-VE');
+  await page.locator('#load-youtube').click();
+  await expect.poll(() => page.evaluate(() => window.__relayInteractionHarness.commands.some(command =>
+    command.type === 'room-song-command' && command.action === 'load' && command.videoId === 'M7lc1UVf-VE'))).toBe(true);
+  await page.evaluate(() => {
+    const h = window.__relayInteractionHarness;
+    h.broadcast({ ...window.__replacementTimeline, handoffState: 'idle', handoffId: null });
+    h.broadcast({ ...window.__replacementRoom, type: 'room-song-status', handoffState: 'idle' });
+  });
+  await expect(page.locator('#change-youtube')).toBeVisible();
+});

@@ -30,20 +30,8 @@ test('an unusable desired rate is never applied', () => {
   }
 });
 
-test('the apply path never lets a player read break the command', async () => {
-  const source = await readFile(new URL('../public/youtube.js', import.meta.url), 'utf8');
-  const applyStart = source.indexOf('async function applyRoomSongCommand');
-  const applyEnd = source.indexOf('async function restoreAuthoritativeRoom', applyStart);
-  const applySection = source.slice(applyStart, applyEnd);
-
-  // The whole apply runs inside one try whose catch fails the command, so a
-  // read that throws would skip playVideo() and report a failure - worse than
-  // the unconditional call the read exists to avoid.
-  assert.doesNotMatch(applySection, /player\.getPlaybackRate\(\)/);
-
-  for (const helper of ['function safePlaybackRate()']) {
-    const start = source.indexOf(helper);
-    assert.ok(start >= 0, `${helper} is missing`);
-    assert.match(source.slice(start, start + 320), /try \{[\s\S]*\} catch \{/);
-  }
+test('the shared iframe adapter tolerates an unreadable current rate', async () => {
+  const source = await readFile(new URL('../public/youtube-playback-target.js', import.meta.url), 'utf8');
+  assert.match(source, /try \{ rate = Number\(player\.getPlaybackRate\?\.\(\)\); \} catch \{\}/);
+  assert.match(source, /shouldSetPlaybackRate\(\{ currentRate: rate, desiredRate: desired\.playbackRate \}\)/);
 });

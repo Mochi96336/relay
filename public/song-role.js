@@ -53,9 +53,9 @@ export function resolvePlaybackRole({
     return 'holder';
   }
 
-  // Observer is a surface with no controls at all: no song form, no player, and
-  // every command refused before it is sent. That is the right answer while
-  // somebody is actually driving the room, and a trap once they stop.
+  // Observer keeps the iframe on the established media leader. Song selection
+  // and recovery permission are derived separately from Mic ownership, so an
+  // observer who owns the Mic can still replace an unplayable song.
   //
   // `leaderHolding` deliberately uses the product-facing hold grace rather than
   // the shorter alignment freshness boundary. Recovery and feedback policy use

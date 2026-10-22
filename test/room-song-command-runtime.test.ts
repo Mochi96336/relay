@@ -100,3 +100,30 @@ test('terminal completion keeps the committed revision and the next command adva
   assert.equal(second.command.revision, 2);
   assert.equal(runtime.revision, 2);
 });
+
+test('Mic owner replacement atomically retires a pending command after checking revision', () => {
+  const runtime = new RoomSongCommandRuntime();
+  const first = runtime.begin(request('old-command', 0, 'play'), A.participantId, A, A.participantId, room(), 0);
+  assert.equal(first.ok, true);
+  const parsed = parseRoomSongCommand({ commandId: 'new-song-load', expectedRevision: 0, action: 'load', videoId: VIDEO });
+  assert.equal(parsed.ok, true); if (!parsed.ok) return;
+  const status = { ...room(), handoffState: 'preparing' };
+  const stale = runtime.begin(parsed.request, B.participantId, B, B.participantId, status, 10);
+  assert.deepEqual(stale, { ok: false, reason: 'stale-revision' });
+  assert.equal(runtime.pendingForTarget(A, 10)?.commandId, 'old-command');
+  const next = runtime.begin({ ...parsed.request, expectedRevision: 1 }, B.participantId, B, B.participantId, status, 20);
+  assert.equal(next.ok, true); if (!next.ok) return;
+  assert.equal(next.replacedCommandId, 'old-command');
+  assert.deepEqual(next.command.target, B);
+  assert.equal(runtime.pendingForTarget(A, 20), null);
+  assert.equal(runtime.pendingForTarget(B, 20)?.commandId, 'new-song-load');
+});
+
+test('Play on a parked paused controller applies its logical position explicitly', () => {
+  const runtime = new RoomSongCommandRuntime();
+  const begun = runtime.begin(request('play-parked', 0, 'play'), A.participantId, A, A.participantId,
+    { ...room(), state: 2, serverTime: 198, playbackParked: true }, 0);
+  assert.equal(begun.ok, true); if (!begun.ok) return;
+  assert.equal(begun.command.body.desired.positionSeconds, 198);
+  assert.equal(begun.command.body.desired.mustApplyPosition, true);
+});

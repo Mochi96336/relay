@@ -448,6 +448,7 @@ async function installProductionDomHarness(page) {
       broadcast(payload) {
         broadcast(payload);
       },
+      setProduct(payload) { broadcastProduct(payload); },
       /** Sends one server message to the open sockets of one kind. */
       sendTo(kind, payload) {
         for (const candidate of sockets) {
@@ -1992,3 +1993,55 @@ test('production DOM: Mic owner can choose a replacement while the previous song
   });
   await expect(page.locator('#change-youtube')).toBeVisible();
 });
+
+for (const [cause, title] of [
+  ['robot-source-unavailable', 'Robot 播放端未連線'],
+  ['robot-video-unplayable', 'Robot 無法播放這支影片'],
+  ['song-clock-unavailable', '歌曲進度未更新'],
+]) {
+  test(`production DOM: warning evidence stays consistent for ${cause}`, async ({ page }, testInfo) => {
+    await installProductionDomHarness(page);
+    await page.route('https://www.youtube.com/**', route => route.abort());
+    await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => window.relayProductAuthority?.authorityFresh === true);
+    await page.evaluate(cause => {
+      window.relayI18n.setLocale('zh-Hant', { persist: false });
+      const issue = { code: cause === 'song-clock-unavailable' ? cause : 'robot-player-unavailable',
+        cause, scope: cause === 'song-clock-unavailable' ? 'timing' : 'robot', severity: cause === 'song-clock-unavailable' ? 'warning' : 'critical',
+        affects: cause === 'song-clock-unavailable' ? ['timing'] : ['song', 'recording'], recovery: cause === 'song-clock-unavailable' ? 'check-playback' : cause === 'robot-video-unplayable' ? 'change-song' : 'host-service' };
+      window.__warningStatus = { type: 'product-status', lifecycle: cause === 'song-clock-unavailable' ? 'live' : 'ready', health: cause === 'song-clock-unavailable' ? 'degraded' : 'blocked',
+        attention: { code: issue.code, scope: issue.scope, severity: issue.severity }, issues: [issue],
+        room: { participantCount: 1, mic: { state: 'free', ownerId: null, ownerNickname: null },
+          song: { state: cause === 'song-clock-unavailable' ? 'unavailable' : 'ready', videoId: 'M7lc1UVf-VE', handoffState: 'idle' } },
+        timing: { state: 'idle' }, take: { lifecycle: 'idle' }, actions: { canStartTake: false, canStartCalibration: false } };
+      window.__relayInteractionHarness.setProduct(window.__warningStatus);
+    }, cause);
+    await expect(page.locator('#attention-copy')).toHaveText(title);
+    await page.locator('#system-panel').evaluate(node => { node.open = true; });
+    await expect(page.locator('#system-product-issues .system-issue strong')).toHaveText(title);
+    if (cause === 'song-clock-unavailable') {
+      await expect(page.locator('#system-audio')).toHaveText('未知');
+      await expect(page.locator('#system-timing')).toHaveText(title);
+      await expect(page.locator('.system-issue-recovery')).toHaveText('請確認播放歌曲的頁面是否仍開啟並連線。');
+      await expect(page.locator('.system-issue-meta > span').first()).not.toContainText('錄音');
+      await page.evaluate(() => {
+        const status = window.__warningStatus;
+        const issue = { ...status.issues[0], severity: 'critical', affects: ['timing', 'recording'] };
+        window.__relayInteractionHarness.setProduct({ ...status, health: 'blocked',
+          attention: { code: issue.code, scope: issue.scope, severity: issue.severity }, issues: [issue] });
+      });
+      await expect(page.locator('.system-issue-meta > span').first()).toContainText('錄音');
+      await expect(page.locator('.system-issue-meta > span').first()).not.toContainText('歌曲');
+      await expect(page.locator('#system-audio')).toHaveText('未知');
+    }
+    await testInfo.attach(`warning-${cause}`, { body: await page.screenshot(), contentType: 'image/png' });
+    // A new healthy paused snapshot must withdraw the old warning everywhere.
+    await page.evaluate(() => {
+      const s = window.__warningStatus;
+      window.__relayInteractionHarness.setProduct({ ...s, lifecycle: 'ready', health: 'healthy', attention: null, issues: [],
+        room: { ...s.room, song: { ...s.room.song, state: 'ready' } } });
+    });
+    await expect(page.locator('#system-attention')).toBeHidden();
+    await expect(page.locator('#system-product-issues .system-issue')).toHaveCount(0);
+  });
+}

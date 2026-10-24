@@ -86,14 +86,14 @@ test('System issue cause, impact and recovery rerender through product i18n', as
   const issue = page.locator('#system-product .system-issue');
   await expect(page.locator('#system-panel')).toHaveJSProperty('open', true);
   await expect(issue).toHaveCount(1);
-  await expect(issue.locator('strong')).toHaveText('麥克風音訊中斷');
-  await expect(issue.locator('p')).toHaveText('Mic 仍連線，但音訊已停止送達。');
+  await expect(issue.locator('strong')).toHaveText('麥克風音訊不穩定');
+  await expect(issue.locator('p')).toHaveText('Mic 仍連線，但音訊未能穩定送達。');
   await expect(issue.locator('.system-issue-meta span').first()).toHaveText('影響：人聲 · 錄音');
   await expect(issue.locator('.system-issue-recovery')).toHaveText('重新連接 Mic 後再試一次。');
 
   await page.evaluate(() => window.relayI18n.setLocale('en', { persist: false }));
-  await expect(issue.locator('strong')).toHaveText('Microphone audio interrupted');
-  await expect(issue.locator('p')).toHaveText('The Mic is connected, but audio stopped arriving.');
+  await expect(issue.locator('strong')).toHaveText('Microphone audio unstable');
+  await expect(issue.locator('p')).toHaveText('The Mic is connected, but its audio is not arriving reliably.');
   await expect(issue.locator('.system-issue-meta span').first()).toHaveText('Affects：Voice · Recording');
   await expect(issue.locator('.system-issue-recovery')).toHaveText('Reconnect the Mic, then try again.');
 });

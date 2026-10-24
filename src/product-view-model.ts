@@ -319,7 +319,10 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
     },
     robotSourceConnected: input.readiness.components.robotSource.connected,
     robotVideoUnplayable: input.robotVideoUnplayable === true,
-    songClockSeverity: roomSongClockSeverity(input.roomSong, performanceActive),
+    // Handoff changes the display lifecycle to preparing while the mix may
+    // remain active. It must not downgrade a long moving-clock gap for admission.
+    songClockSeverity: roomSongClockSeverity(input.roomSong,
+      performanceActive || input.readiness.components.session.active),
     mic: {
       ownerId: input.micOwnerId,
       state: mic,

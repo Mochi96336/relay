@@ -1,4 +1,5 @@
 import './live-i18n.js';
+import { productIssueTitleKey } from './product-issue-copy.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 import { DIAGNOSTICS_MESSAGES } from './diagnostics-copy.js';
 import {
@@ -50,22 +51,6 @@ if (
 
   rememberPlaybackDiagnostics(window.relayPlaybackDiagnostics);
 
-  const issueTitleKeys = {
-    'audio-unavailable': 'system.attention.audio-unavailable',
-    'robot-audio-unavailable': 'system.attention.robot-audio-unavailable',
-    'robot-route-invalid': 'system.attention.robot-route-invalid',
-    'robot-player-unavailable': 'system.attention.robot-player-unavailable',
-    'song-clock-unavailable': 'system.attention.song-clock-unavailable',
-    'mic-reconnecting': 'system.attention.mic-reconnecting',
-    'mic-audio-stalled': 'system.attention.mic-audio-stalled',
-    'mic-input-clipping': 'system.attention.mic-input-clipping',
-    'mic-too-loud': 'system.attention.mic-too-loud',
-    'mic-too-quiet': 'system.attention.mic-too-quiet',
-    'timing-recovering': 'system.attention.timing-recovering',
-    'timing-clamped': 'system.attention.timing-clamped',
-    'take-failed': 'system.attention.take-failed',
-  };
-
   const issueCauseKeys = {
     'backing-not-ready': 'system.issue.cause.backing-not-ready',
     'backing-unavailable': 'system.issue.cause.backing-unavailable',
@@ -93,6 +78,7 @@ if (
 
   const issueRecoveryKeys = {
     automatic: 'system.issue.recovery.automatic',
+    'check-playback': 'system.issue.recovery.check-playback',
     'retry-mic': 'system.issue.recovery.retry-mic',
     'adjust-input': 'system.issue.recovery.adjust-input',
     'lower-mic-gain': 'system.issue.recovery.lower-mic-gain',
@@ -138,14 +124,7 @@ if (
     card.dataset.severity = issue?.severity === 'critical' ? 'critical' : 'warning';
 
     const heading = document.createElement('strong');
-    const titleKey = issueTitleKeys[issue?.code];
-    // A Take freezes timing, so the estimate it records with is not
-    // "recovering"; say what the recording is using instead.
-    heading.textContent = issue?.recovery === 'recalibrate-after-take'
-      ? t('system.attention.timing-estimated')
-      : issue?.cause === 'timing-probe-unheard'
-        ? t('system.attention.timing-estimate')
-        : titleKey ? t(titleKey) : t('system.attention');
+    heading.textContent = t(productIssueTitleKey(issue));
 
     const detail = document.createElement('p');
     detail.textContent = causeCopy(issue?.cause);

@@ -333,6 +333,80 @@ describe('product lifecycle and health', () => {
     assert.equal(model.health, 'blocked');
     assert.equal(model.attention?.code, 'song-clock-unavailable');
     assert.equal(model.room.song.state, 'unavailable');
+    assert.deepEqual(model.issues.find(issue => issue.code === 'song-clock-unavailable')?.affects,
+      ['timing', 'recording']);
+    assert.equal(model.actions.canStartTake, false);
+    assert.equal(model.actions.startTakeBlockedReason, 'room-blocked');
+  });
+
+  test('handoff preparation cannot downgrade an active moving-song clock blocker', () => {
+    for (const state of [1, 3]) {
+      for (const handoffState of ['preparing', 'committing']) {
+        const model = buildProductViewModel(input({
+          readiness: readiness({ timelineConnected: false, timelineState: state, sessionActive: true }),
+          roomSong: { videoId: 'abcdefghijk', connected: false, clockAgeMs: 15_001, state, handoffState },
+        }));
+        assert.equal(model.lifecycle, 'preparing');
+        assert.equal(model.room.song.state, 'handoff');
+        assert.equal(model.health, 'blocked');
+        const issue = model.issues.find(issue => issue.code === 'song-clock-unavailable');
+        assert.equal(issue?.severity, 'critical');
+        assert.deepEqual(issue?.affects, ['timing', 'recording']);
+        assert.equal(model.actions.canStartTake, false);
+        assert.equal(model.actions.startTakeBlockedReason, 'room-blocked');
+        assert.deepEqual(model.actions.startTakeBlockingIssue, issue);
+      }
+    }
+  });
+
+  test('handoff clock protection keeps its age, media-state and session boundaries', () => {
+    for (const [state, clockAgeMs, sessionActive, severity] of [
+      [1, 6_000, true, null],
+      [1, 6_001, true, 'warning'],
+      [1, 15_000, true, 'warning'],
+      [1, 15_001, false, 'warning'],
+      [2, 30_000, true, null],
+      [5, 30_000, true, null],
+    ] as const) {
+      const model = buildProductViewModel(input({
+        readiness: readiness({ timelineConnected: false, timelineState: state, sessionActive }),
+        roomSong: { videoId: 'abcdefghijk', connected: false, clockAgeMs, state, handoffState: 'preparing' },
+      }));
+      assert.equal(model.issues.find(issue => issue.code === 'song-clock-unavailable')?.severity ?? null, severity);
+      assert.equal(model.health, severity ? 'degraded' : 'healthy');
+      assert.equal(model.actions.canStartTake, sessionActive);
+    }
+  });
+
+  test('an offline paused controller is not a playback failure even after a long gap', () => {
+    for (const state of [-1, 0, 2, 5]) {
+      const model = buildProductViewModel(input({
+        micOwnerId: null,
+        micOwnerNickname: null,
+        readiness: readiness({ timelineConnected: false, timelineState: state, micConnected: false, micStreaming: false }),
+        roomSong: { videoId: 'abcdefghijk', connected: false, clockAgeMs: 12 * 60_000, state, handoffState: 'idle' },
+      }));
+      assert.equal(model.health, 'healthy', `state ${state}`);
+      assert.equal(model.attention, null);
+      assert.equal(model.room.song.state, 'ready');
+    }
+  });
+
+  test('dormant clock exemption preserves observed backing and video failures', () => {
+    for (const [overrides, cause] of [
+      [{ readiness: readiness({ timelineState: 2, backingStreaming: false }) }, 'backing-stalled'],
+      [{ readiness: readiness({ timelineState: 2, robotSourceConnected: false }) }, 'robot-source-unavailable'],
+      [{ robotVideoUnplayable: true }, 'robot-video-unplayable'],
+    ] as const) {
+      const model = buildProductViewModel(input({
+        ...overrides,
+        roomSong: { videoId: 'abcdefghijk', connected: false, clockAgeMs: 12 * 60_000, state: 2, handoffState: 'idle' },
+      }));
+      assert.ok(!model.issues.some(issue => issue.code === 'song-clock-unavailable'));
+      assert.ok(model.issues.some(issue => issue.cause === cause && issue.severity === 'critical'));
+      assert.equal(model.health, 'blocked');
+      assert.equal(model.actions.canStartTake, false);
+    }
   });
 
   /**

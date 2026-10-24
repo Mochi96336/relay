@@ -88,7 +88,7 @@ test('Song clock degradation and blocking use separate product thresholds', () =
   assert.equal(roomSongClockSeverity(blocked, true), 'critical');
 });
 
-test('an ended Song has no clock to lose once its holder leaves', () => {
+test('dormant and unobserved Songs do not need progressing clock reports', () => {
   const ended = {
     videoId: 'abcdefghijk',
     connected: false,
@@ -100,17 +100,26 @@ test('an ended Song has no clock to lose once its holder leaves', () => {
   assert.equal(deriveRoomSongState(ended), 'ready');
   assert.equal(roomSongClockSeverity(ended, true), null);
 
-  // A paused Song still needs its holder to resume, so losing it still counts.
-  const paused = { ...ended, state: 2, clockAgeMs: SONG_CLOCK_LOST_MS + 1 };
-  assert.equal(deriveRoomSongState(paused), 'unavailable');
+  for (const state of [-1, 2, 5, null]) {
+    const dormant = { ...ended, state };
+    assert.equal(roomSongClockLost(dormant), false);
+    assert.equal(deriveRoomSongState(dormant), 'ready');
+    assert.equal(roomSongClockSeverity(dormant, true), null);
+  }
 });
 
 test('handoff remains a first-class Song state ahead of clock availability', () => {
-  assert.equal(deriveRoomSongState({
+  const handoff = {
     videoId: 'abcdefghijk',
     connected: false,
     clockAgeMs: SONG_CLOCK_BLOCKING_MS + 1,
     state: 1,
     handoffState: 'preparing',
-  }), 'handoff');
+  };
+  assert.equal(deriveRoomSongState(handoff), 'handoff');
+  assert.equal(roomSongClockLost(handoff), true);
+  assert.equal(roomSongClockSeverity(handoff, false), 'warning');
+  assert.equal(roomSongClockSeverity(handoff, true), 'critical');
+  assert.equal(roomSongClockSeverity({ ...handoff, clockAgeMs: 2_000 }, true), null);
+  assert.equal(roomSongClockSeverity({ ...handoff, state: 2 }, true), null);
 });

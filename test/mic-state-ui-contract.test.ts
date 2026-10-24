@@ -70,6 +70,6 @@ test('terminal browser media degradation is composed without rewriting server Mi
     'ordinary Live copy must be lower priority than terminal media degradation',
   );
 
-  const renderSystem = functionCode(liveStatus, 'renderSystem');
-  assert.match(renderSystem, /attention\?\.scope === 'mic'/);
+  // System's Mic audio impact and legacy attention fallback are exercised by
+  // live-status-freshness.test.ts against the actual presenter.
 });

@@ -133,7 +133,7 @@ describe('product issue contract', () => {
     }]);
   });
 
-  test('Song clock issues describe availability without inventing connection history', () => {
+  test('missing song progress reports timing uncertainty with a playback-page check', () => {
     const issues = buildProductIssues({
       ...HEALTHY_ISSUES,
       songClockSeverity: 'warning',
@@ -141,12 +141,19 @@ describe('product issue contract', () => {
 
     assert.deepEqual(issues, [{
       code: 'song-clock-unavailable',
-      scope: 'song',
+      scope: 'timing',
       severity: 'warning',
       cause: 'song-clock-unavailable',
-      affects: ['song', 'timing'],
-      recovery: 'automatic',
+      affects: ['timing'],
+      recovery: 'check-playback',
     }]);
+  });
+
+  test('critical missing song progress declares the new-recording restriction without song impact', () => {
+    const issue = buildProductIssues({ ...HEALTHY_ISSUES, songClockSeverity: 'critical' })[0];
+    assert.equal(issue.scope, 'timing');
+    assert.deepEqual(issue.affects, ['timing', 'recording']);
+    assert.equal(issue.recovery, 'check-playback');
   });
 
   test('surfaces recent Mic input clipping as a non-blocking input-adjustment warning', () => {

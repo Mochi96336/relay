@@ -49,6 +49,7 @@ export type ProductImpact = 'song' | 'voice' | 'recording' | 'timing';
 
 export type ProductRecovery =
   | 'automatic'
+  | 'check-playback'
   | 'retry-mic'
   | 'adjust-input'
   | 'lower-mic-gain'
@@ -219,13 +220,14 @@ export function buildProductIssues(facts: ProductIssueFacts): ProductIssue[] {
   if (facts.songClockSeverity) {
     issues.push({
       code: 'song-clock-unavailable',
-      scope: 'song',
+      scope: 'timing',
       severity: facts.songClockSeverity,
       // The product model knows current clock availability and age, but not
       // whether a playback holder ever established the clock in this lifecycle.
       cause: 'song-clock-unavailable',
-      affects: ['song', 'timing'],
-      recovery: 'automatic',
+      // Missing observations establish timing uncertainty, not inaudible media.
+      affects: facts.songClockSeverity === 'critical' ? ['timing', 'recording'] : ['timing'],
+      recovery: 'check-playback',
     });
   }
 

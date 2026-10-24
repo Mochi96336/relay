@@ -477,3 +477,14 @@ it('Timing hides expired YT state', () => {
   }, en));
   assert.equal(rows.youtubeRate.value, 'Not connected');
 });
+
+it('missing song observations are described as progress uncertainty in both locales', () => {
+  const facts = { product: { room: { song: { state: 'unavailable' } } } };
+  const english = byKey(describeSession(facts, en)).song;
+  const chinese = byKey(describeSession(facts, zh)).song;
+  assert.equal(english.value, 'Progress not updating');
+  assert.equal(chinese.value, '進度未更新');
+  assert.match(english.note, /does not establish an audio failure/);
+  assert.match(chinese.note, /不代表音訊故障/);
+  assert.equal(english.tone, 'warn');
+});

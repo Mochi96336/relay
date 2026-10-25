@@ -499,6 +499,20 @@ export function createMonitorSocketTransport(
 }
 
 /**
+ * Admission reads only the path and query, so the request target resolves
+ * against a fixed origin, never the client's Host header. A target that still
+ * does not parse (`//[`, say) is that client's bad request: it must not throw
+ * out of the 'upgrade' listener and take the whole room down with it.
+ */
+function upgradeRequestUrl(request: IncomingMessage) {
+  try {
+    return new URL(request.url ?? '/', 'http://localhost');
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Owns the physical WebSocket substrate only: HTTP upgrade admission, socket
  * liveness, and heartbeat cleanup. Message meaning, identity/auth authority,
  * and disconnect domain effects stay in server orchestration.
@@ -522,7 +536,12 @@ export function createRelayWebSocketServer(
   let connectionSequence = 0;
 
   const onUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer) => {
-    const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
+    const url = upgradeRequestUrl(request);
+    if (!url) {
+      socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
     if (url.pathname !== socketPath) {
       socket.destroy();
       return;

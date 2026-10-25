@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { get } from 'node:http';
 import { promisify } from 'node:util';
 
 import {
@@ -16,6 +17,32 @@ export type RobotSemanticRecoveryExec = (
 ) => Promise<{ stdout: string; stderr: string }>;
 
 const execFileAsync = promisify(execFile) as RobotSemanticRecoveryExec;
+
+/** The part of fetch() the observation read uses; fetch itself still fits. */
+export type RobotSemanticRecoveryFetch = (
+  url: string,
+  init: { cache: 'no-store'; signal: AbortSignal },
+) => Promise<{ status: number; json(): Promise<unknown> }>;
+
+/**
+ * A plain node:http GET of the loopback observation. Global fetch() loads
+ * undici on first use, which cost about 0.37 s of CPU on the Pi, and the
+ * recovery timer starts a fresh process every ~12 s.
+ */
+export const getLoopbackJson: RobotSemanticRecoveryFetch = (url, { signal }) => (
+  new Promise((resolve, reject) => {
+    const request = get(url, { signal }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on('data', (chunk: Buffer) => chunks.push(chunk));
+      response.on('error', reject);
+      response.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8');
+        resolve({ status: response.statusCode ?? 0, json: async () => JSON.parse(body) });
+      });
+    });
+    request.on('error', reject);
+  })
+);
 
 export const ROBOT_ROUTE_SERVICE = 'relay-robot-source.service';
 export const SYSTEMCTL = '/usr/bin/systemctl';
@@ -212,7 +239,7 @@ export function robotSemanticRecoveryObservationUrl(port: number): string {
 export async function fetchRobotSemanticRecoveryObservation(
   port: number,
   requestTimeoutMs: number,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: RobotSemanticRecoveryFetch = getLoopbackJson,
 ): Promise<RobotSemanticRecoveryObservationSnapshot> {
   const response = await fetchImpl(robotSemanticRecoveryObservationUrl(port), {
     cache: 'no-store',
@@ -245,7 +272,7 @@ export async function readRobotRouteServiceActive(
 export async function sampleRobotSemanticRecoveryEvidence(options: {
   port: number;
   requestTimeoutMs: number;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: RobotSemanticRecoveryFetch;
   exec?: RobotSemanticRecoveryExec;
 }): Promise<RobotSemanticRecoveryEvidence> {
   const [observation, routeServiceActive] = await Promise.all([
@@ -271,7 +298,7 @@ export async function evaluateRobotSemanticRecoveryDryRun(
   options: {
     port: number;
     requestTimeoutMs: number;
-    fetchImpl?: typeof fetch;
+    fetchImpl?: RobotSemanticRecoveryFetch;
     exec?: RobotSemanticRecoveryExec;
   },
 ): Promise<RobotSemanticRecoveryAdapterResult> {

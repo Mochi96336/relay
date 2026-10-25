@@ -3,11 +3,14 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import os from 'node:os';
@@ -36,8 +39,12 @@ function harness() {
   mkdirSync(runtime);
   mkdirSync(state);
 
-  // Stands in for `node --import tsx <entry>`; records the arguments it got.
+  // Stands in for the node that runs the entry; records the arguments it got.
+  // esbuild's launcher is itself a node script, so that one goes to real node.
   executable(bin, 'node', `
+if [[ "\${1:-}" == */esbuild ]]; then
+  exec ${JSON.stringify(process.execPath)} "$@"
+fi
 printf '%s\\n' "$*" >>"$TEST_STATE/node-calls"
 : >"$TEST_STATE/entered"
 while [[ ! -f "$TEST_STATE/release" ]]; do
@@ -47,6 +54,7 @@ done
 
   return {
     state,
+    runtime,
     env: {
       ...process.env,
       PATH: `${bin}:${process.env.PATH ?? ''}`,
@@ -128,7 +136,8 @@ test('a second live recovery process skips while the first still owns restart au
   first.stderr?.on('data', (chunk) => { firstStderr += String(chunk); });
 
   try {
-    await waitForFile(entered);
+    // The first run may build the bundle before it enters the body.
+    await waitForFile(entered, 15_000);
 
     const second = spawnSync('bash', [wrapper], {
       cwd: root,
@@ -143,9 +152,9 @@ test('a second live recovery process skips while the first still owns restart au
       skipped: 'already-running',
       restartAttempted: false,
     });
-    assert.deepEqual(readFileSync(calls, 'utf8').trim().split(/\r?\n/),
-      ['--import tsx src/robot-semantic-recovery-live-entry.ts'],
-      'only one process may enter the live recovery body');
+    const entries = readFileSync(calls, 'utf8').trim().split(/\r?\n/);
+    assert.equal(entries.length, 1, 'only one process may enter the live recovery body');
+    assert.match(entries[0], /\/relay-robot-semantic-recovery-live\.[0-9a-f]{16}\.mjs$/);
 
     writeFileSync(release, 'release\n');
     const [code, signal] = await firstExit;
@@ -154,4 +163,68 @@ test('a second live recovery process skips while the first still owns restart au
   } finally {
     await stopChild(first, release);
   }
+});
+
+/**
+ * A stand-in checkout holding only what the wrapper reads: itself, src/, the
+ * lockfile and, when `withEsbuild`, the real node_modules.
+ */
+function fakeCheckout(withEsbuild: boolean) {
+  const checkout = mkdtempSync(path.join(os.tmpdir(), 'relay-recovery-checkout-'));
+  temporaryDirectories.push(checkout);
+  mkdirSync(path.join(checkout, 'scripts'));
+  mkdirSync(path.join(checkout, 'src'));
+  copyFileSync(wrapper, path.join(checkout, 'scripts', 'robot-semantic-recovery-live.sh'));
+  writeFileSync(path.join(checkout, 'package-lock.json'), '{}\n');
+  writeFileSync(path.join(checkout, 'src', 'robot-semantic-recovery-live-entry.ts'), "console.log('first');\n");
+  if (withEsbuild) symlinkSync(path.join(root, 'node_modules'), path.join(checkout, 'node_modules'), 'dir');
+  return checkout;
+}
+
+function runFakeCheckout(checkout: string, env: NodeJS.ProcessEnv) {
+  const result = spawnSync('bash', [path.join(checkout, 'scripts', 'robot-semantic-recovery-live.sh')], {
+    cwd: os.tmpdir(),
+    env,
+    encoding: 'utf8',
+    timeout: 15_000,
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, `stderr:\n${result.stderr}`);
+  return result;
+}
+
+test('live recovery runs a bundle keyed by its sources and rebuilds it when they change', { skip: flockSkip() }, () => {
+  const { env, state, runtime } = harness();
+  writeFileSync(path.join(state, 'release'), 'release\n');
+  const checkout = fakeCheckout(true);
+  const bundles = () => readdirSync(runtime).filter((name) => name.endsWith('.mjs'));
+  const lastCall = () => readFileSync(path.join(state, 'node-calls'), 'utf8').trim().split(/\r?\n/).at(-1);
+
+  runFakeCheckout(checkout, env);
+  const [first] = bundles();
+  assert.match(first, /^relay-robot-semantic-recovery-live\.[0-9a-f]{16}\.mjs$/);
+  assert.equal(lastCall(), path.join(runtime, first));
+  assert.match(readFileSync(path.join(runtime, first), 'utf8'), /first/);
+
+  runFakeCheckout(checkout, env);
+  assert.deepEqual(bundles(), [first], 'unchanged sources reuse the bundle');
+
+  writeFileSync(path.join(checkout, 'src', 'robot-semantic-recovery-live-entry.ts'), "console.log('second');\n");
+  runFakeCheckout(checkout, env);
+  const [second] = bundles();
+  assert.notEqual(second, first);
+  assert.deepEqual(bundles(), [second], 'the stale bundle is removed');
+  assert.match(readFileSync(path.join(runtime, second), 'utf8'), /second/);
+  assert.equal(lastCall(), path.join(runtime, second));
+});
+
+test('live recovery falls back to tsx when it cannot build the bundle', { skip: flockSkip() }, () => {
+  const { env, state, runtime } = harness();
+  writeFileSync(path.join(state, 'release'), 'release\n');
+  const result = runFakeCheckout(fakeCheckout(false), env);
+
+  assert.match(result.stderr, /could not bundle src\/robot-semantic-recovery-live-entry\.ts; running it through tsx/);
+  assert.equal(readFileSync(path.join(state, 'node-calls'), 'utf8').trim(),
+    '--import tsx src/robot-semantic-recovery-live-entry.ts');
+  assert.deepEqual(readdirSync(runtime).filter((name) => name.includes('.mjs')), []);
 });

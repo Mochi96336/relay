@@ -7,6 +7,7 @@ import {
   evaluateRobotSemanticRecoveryDryRun,
   type RobotSemanticRecoveryAdapterResult,
   type RobotSemanticRecoveryExec,
+  type RobotSemanticRecoveryFetch,
 } from './robot-semantic-recovery-adapter.js';
 import {
   emptyRobotSemanticRecoveryState,
@@ -74,7 +75,7 @@ export async function runRobotSemanticRecoveryDryRunOnce(options: {
   port: number;
   requestTimeoutMs: number;
   config: RobotSemanticRecoveryConfig;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: RobotSemanticRecoveryFetch;
   exec?: RobotSemanticRecoveryExec;
 }): Promise<RobotSemanticRecoveryAdapterResult> {
   if (!Number.isFinite(options.nowMs) || !Number.isInteger(options.nowMs) || options.nowMs < 0) {

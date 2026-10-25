@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
+import { createServer } from 'node:http';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -319,4 +320,32 @@ test('adapter scope is read-only: no supervisor unit, package entry, or systemct
   assert.doesNotMatch(source, /\['--user',\s*'restart'/);
   assert.doesNotMatch(packageJson, /robot:supervisor/);
   assert.equal(deployFiles.includes('relay-robot-supervisor.service'), false);
+});
+
+test('the default observation read is a plain loopback GET with a deadline', async () => {
+  let stall = false;
+  const server = createServer((request, response) => {
+    if (stall) return;
+    assert.equal(request.url, '/api/status/v1');
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify(status({ connected: true, sourceConnected: true })));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+
+  try {
+    const observation = await fetchRobotSemanticRecoveryObservation(address.port, 1_000);
+    assert.equal(observation.sources.backing.connected, true);
+    assert.equal(observation.mix.backingStarvedFrames, 12);
+
+    stall = true;
+    await assert.rejects(
+      fetchRobotSemanticRecoveryObservation(address.port, 200),
+      (error: Error) => error.name === 'AbortError' || error.name === 'TimeoutError',
+    );
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
 });

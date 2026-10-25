@@ -19,9 +19,17 @@ export type ParticipantIdentityResult =
  * refused rather than quietly treated as anonymous.
  */
 export function upgradeRequestNamesParticipant(
-  request: Pick<IncomingMessage, 'url' | 'headers'>,
+  request: Pick<IncomingMessage, 'url'>,
 ) {
-  const url = new URL(request.url ?? '/', 'http://' + (request.headers.host ?? 'localhost'));
+  // The same fixed origin as upgrade admission in relay-socket-server.ts, which
+  // already refused any target this cannot parse. Should one get here anyway,
+  // refuse it: a URL nobody can read is not proof that it names nobody.
+  let url: URL;
+  try {
+    url = new URL(request.url ?? '/', 'http://localhost');
+  } catch {
+    return true;
+  }
   return url.searchParams.has('participant');
 }
 

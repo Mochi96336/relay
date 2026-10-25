@@ -86,7 +86,12 @@ while :; do sleep 1; done
 printf '%s\\n' "$@" >>"$TEST_STATE/curl-arguments"
 exit 0
 `);
-  executable(bin, 'pgrep', 'exit 1\n');
+  // Matches the pattern (an ERE, as for `pgrep -f`) against one fake command
+  // line, so a test can stand up exactly the process the doctor looks for.
+  executable(bin, 'pgrep', `
+pattern="\${@: -1}"
+[[ -n "\${MOCK_PROCESS_COMMAND:-}" && "$MOCK_PROCESS_COMMAND" =~ $pattern ]]
+`);
 
   return {
     state,
@@ -244,6 +249,16 @@ describe('robot doctor', () => {
     assert.match(curlArguments, /http:\/\/localhost:3100\/healthz/);
     assert.match(curlArguments, /http:\/\/localhost:3100\/source\.html\?robot=1/);
     assert.doesNotMatch(curlArguments, /127\.0\.0\.1/);
+  });
+
+  test('sees the backing bridge under the command npm starts it with', { skip: FLOCK_SKIP }, () => {
+    const { env } = mockedEnvironment();
+    const script = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).scripts['backing:stdin'];
+    const running = run('robot-doctor.sh', { ...env, MOCK_PROCESS_COMMAND: `node /relay/node_modules/.bin/${script}` });
+    assert.match(running.stdout, /backing bridge process is running/);
+
+    const stopped = run('robot-doctor.sh', env);
+    assert.match(stopped.stderr + stopped.stdout, /backing bridge is not running/);
   });
 
   test('fails when a named sink has no monitor source', () => {

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { connect } from 'node:net';
 import test from 'node:test';
 
 import WebSocket from 'ws';
@@ -217,6 +218,56 @@ test('a malformed frame closes only that socket, not the Relay process', { timeo
     for (const socket of [client, survivor]) {
       if (socket && socket.readyState !== WebSocket.CLOSED) socket.terminate();
     }
+    await closeWebSocketServer(wss);
+    await closeServer(server);
+  }
+});
+
+/** Sends one raw HTTP request and resolves with everything the server wrote back. */
+function rawRequest(port: number, request: string) {
+  return new Promise<string>((resolve, reject) => {
+    let response = '';
+    const socket = connect(port, '127.0.0.1', () => socket.write(request));
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error('Timed out waiting for a raw HTTP response.'));
+    }, PHASE_TIMEOUT_MS);
+    socket.on('data', (chunk) => {
+      response += chunk;
+    });
+    socket.on('error', () => {});
+    socket.on('close', () => {
+      clearTimeout(timer);
+      resolve(response);
+    });
+  });
+}
+
+function upgradeRequest(target: string, host: string) {
+  return `GET ${target} HTTP/1.1\r\nHost: ${host}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n`
+    + 'Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n';
+}
+
+test('an upgrade the server cannot parse is refused, not fatal to the Relay process', { timeout: 10_000 }, async () => {
+  const server = createServer();
+  const wss = createRelayWebSocketServer(server, {
+    relayKey: 'secret',
+    heartbeatMs: 1_000,
+  });
+  const port = await listen(server);
+  let survivor: WebSocket | null = null;
+
+  try {
+    // Admission runs before the key check, so neither request needs the key.
+    // The Host header no longer takes part in parsing at all...
+    assert.match(await rawRequest(port, upgradeRequest('/ws', '[')), /^HTTP\/1\.1 401 /);
+    // ...and a target that does not parse against any origin is a bad request.
+    assert.match(await rawRequest(port, upgradeRequest('//[', 'relay.test')), /^HTTP\/1\.1 400 /);
+
+    survivor = new WebSocket(`ws://127.0.0.1:${port}/ws?key=secret`);
+    await waitForEvent(survivor, 'open', 'survivor client open');
+  } finally {
+    if (survivor && survivor.readyState !== WebSocket.CLOSED) survivor.terminate();
     await closeWebSocketServer(wss);
     await closeServer(server);
   }

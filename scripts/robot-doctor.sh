@@ -97,7 +97,7 @@ if command -v curl >/dev/null 2>&1; then
 fi
 
 if command -v pgrep >/dev/null 2>&1; then
-  if pgrep -f '[s]rc/backing-stdin' >/dev/null 2>&1; then
+  if pgrep -f '[s]rc/backing-entry\.ts' >/dev/null 2>&1; then
     ok "backing bridge process is running"
   else
     warn "backing bridge is not running (expected before robot:source starts)"

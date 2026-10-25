@@ -10,9 +10,13 @@ import {
 describe('participant identity parsing', () => {
   test('an upgrade URL without a participant names nobody', () => {
     assert.equal(
-      upgradeRequestNamesParticipant({ url: '/ws?key=room', headers: { host: 'relay.test' } }),
+      upgradeRequestNamesParticipant({ url: '/ws?key=room' }),
       false,
     );
+  });
+
+  test('an upgrade target that does not parse is refused rather than thrown', () => {
+    assert.equal(upgradeRequestNamesParticipant({ url: '//[' }), true);
   });
 
   test('any participant in the upgrade URL is refused, browser-shaped or not', () => {
@@ -20,7 +24,6 @@ describe('participant identity parsing', () => {
       assert.equal(
         upgradeRequestNamesParticipant({
           url: '/ws?participant=' + participantId + '&name=Singer',
-          headers: { host: 'relay.test' },
         }),
         true,
       );

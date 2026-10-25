@@ -36,8 +36,9 @@ function harness() {
   mkdirSync(runtime);
   mkdirSync(state);
 
-  executable(bin, 'tsx', `
-printf 'run\\n' >>"$TEST_STATE/tsx-calls"
+  // Stands in for `node --import tsx <entry>`; records the arguments it got.
+  executable(bin, 'node', `
+printf '%s\\n' "$*" >>"$TEST_STATE/node-calls"
 : >"$TEST_STATE/entered"
 while [[ ! -f "$TEST_STATE/release" ]]; do
   sleep 0.02
@@ -102,7 +103,7 @@ test('live recovery fails closed without an absolute per-user runtime directory'
   assert.ifError(result.error);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /XDG_RUNTIME_DIR must be an absolute path/);
-  assert.equal(existsSync(path.join(state, 'tsx-calls')), false, 'recovery body must not start');
+  assert.equal(existsSync(path.join(state, 'node-calls')), false, 'recovery body must not start');
 });
 
 // The wrapper holds its lock with `flock` and exits before the recovery body
@@ -116,7 +117,7 @@ test('a second live recovery process skips while the first still owns restart au
   const { env, state } = harness();
   const entered = path.join(state, 'entered');
   const release = path.join(state, 'release');
-  const calls = path.join(state, 'tsx-calls');
+  const calls = path.join(state, 'node-calls');
   const first = spawn('bash', [wrapper], {
     cwd: root,
     env,
@@ -142,7 +143,8 @@ test('a second live recovery process skips while the first still owns restart au
       skipped: 'already-running',
       restartAttempted: false,
     });
-    assert.deepEqual(readFileSync(calls, 'utf8').trim().split(/\r?\n/), ['run'],
+    assert.deepEqual(readFileSync(calls, 'utf8').trim().split(/\r?\n/),
+      ['--import tsx src/robot-semantic-recovery-live-entry.ts'],
       'only one process may enter the live recovery body');
 
     writeFileSync(release, 'release\n');

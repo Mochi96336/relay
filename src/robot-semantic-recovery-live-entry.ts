@@ -56,6 +56,11 @@ async function main() {
     config: LIVE_CONFIG,
   });
 
+  // A healthy pass repeats every ~12 s, so it gets one line in the journal;
+  // anything that needs reading later keeps the indented form.
+  const routine = result.decision?.cause === 'healthy'
+    && !result.restartAttempted
+    && !result.error;
   process.stdout.write(`${JSON.stringify({
     mode: 'live',
     stateFile,
@@ -71,7 +76,7 @@ async function main() {
     verification: result.verification,
     error: result.error?.message ?? null,
     state: result.state,
-  }, null, 2)}\n`);
+  }, null, routine ? undefined : 2)}\n`);
 
   if (!result.evidenceAvailable) {
     process.exitCode = 2;

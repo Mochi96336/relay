@@ -12,7 +12,7 @@ const unit = (name: string) => readFileSync(path.join(deploy, name), 'utf8');
 function systemdVerifySkip() {
   if (spawnSync('systemd-analyze', ['--version']).error) return 'systemd-analyze unavailable';
   try {
-    accessSync('/usr/bin/npm', constants.X_OK);
+    accessSync('/usr/bin/bash', constants.X_OK);
     accessSync('/usr/bin/systemctl', constants.X_OK);
   } catch {
     return 'deployment command unavailable on verifier host';
@@ -35,7 +35,8 @@ test('semantic recovery oneshot respects operator stop intent and owns no schedu
     service,
     /ExecCondition=\/usr\/bin\/systemctl --user --quiet is-active relay-robot-source\.service/,
   );
-  assert.match(service, /ExecStart=\/usr\/bin\/npm run robot:recovery-live/);
+  // The single-instance wrapper, the same one `npm run robot:recovery-live` uses.
+  assert.match(service, /^ExecStart=\/usr\/bin\/bash %h\/relay\/scripts\/robot-semantic-recovery-live\.sh$/m);
   assert.match(service, /TimeoutStartSec=5min/);
 
   assert.doesNotMatch(service, /^(?:Requires|Wants)=/m,

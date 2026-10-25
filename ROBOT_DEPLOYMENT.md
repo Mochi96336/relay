@@ -287,7 +287,8 @@ the backing route.
 
 `relay-robot-semantic-recovery.service` is a static `Type=oneshot` unit. It has
 no `Restart=` policy and contains no restart command. It runs the audited
-`npm run robot:recovery-live` entry only when both the server and Robot source
+`scripts/robot-semantic-recovery-live.sh` wrapper (what `npm run
+robot:recovery-live` runs, minus npm's startup) only when both the server and Robot source
 services are already active. If either unit has been deliberately stopped, its
 `ExecCondition` fails closed; the live runner also rechecks the source
 ActiveState immediately before any effect to close the operator-stop race.

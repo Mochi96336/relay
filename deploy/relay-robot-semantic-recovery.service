@@ -26,7 +26,9 @@ EnvironmentFile=-%h/.config/relay/robot.env
 # an operator stop racing this gate is still respected.
 ExecCondition=/usr/bin/systemctl --user --quiet is-active relay-server.service
 ExecCondition=/usr/bin/systemctl --user --quiet is-active relay-robot-source.service
-ExecStart=/usr/bin/npm run robot:recovery-live
+# The wrapper directly, not `npm run robot:recovery-live`: the timer runs this
+# every ~12 s, and npm's own startup was nearly half of each healthy run's CPU.
+ExecStart=/usr/bin/bash %h/relay/scripts/robot-semantic-recovery-live.sh
 # The CLI allows a 120 s verification timeout and 30 s request timeouts. A
 # verification iteration can already be in flight when its 120 s deadline is
 # crossed, so the service boundary must be wider than the inner logical bound.

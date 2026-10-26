@@ -323,9 +323,14 @@ test('adapter scope is read-only: no supervisor unit, package entry, or systemct
 });
 
 test('the default observation read is a plain loopback GET with a deadline', async () => {
-  let stall = false;
+  let stall: 'none' | 'headers' | 'body' = 'none';
   const server = createServer((request, response) => {
-    if (stall) return;
+    if (stall === 'headers') return;
+    if (stall === 'body') {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.write('{"schema":');
+      return;
+    }
     assert.equal(request.url, '/api/status/v1');
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(JSON.stringify(status({ connected: true, sourceConnected: true })));
@@ -339,11 +344,16 @@ test('the default observation read is a plain loopback GET with a deadline', asy
     assert.equal(observation.sources.backing.connected, true);
     assert.equal(observation.mix.backingStarvedFrames, 12);
 
-    stall = true;
-    await assert.rejects(
-      fetchRobotSemanticRecoveryObservation(address.port, 200),
-      (error: Error) => error.name === 'AbortError' || error.name === 'TimeoutError',
-    );
+    // The deadline holds whether the server stalls before its headers or
+    // halfway through the body.
+    for (const where of ['headers', 'body'] as const) {
+      stall = where;
+      await assert.rejects(
+        fetchRobotSemanticRecoveryObservation(address.port, 200),
+        (error: Error) => error.name === 'AbortError' || error.name === 'TimeoutError',
+        `stalled ${where}`,
+      );
+    }
   } finally {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));

@@ -167,7 +167,7 @@ test('a second live recovery process skips while the first still owns restart au
 
 /**
  * A stand-in checkout holding only what the wrapper reads: itself, src/, the
- * lockfile and, when `withEsbuild`, the real node_modules.
+ * lockfile, tsconfig.json and, when `withEsbuild`, the real node_modules.
  */
 function fakeCheckout(withEsbuild: boolean) {
   const checkout = mkdtempSync(path.join(os.tmpdir(), 'relay-recovery-checkout-'));
@@ -176,6 +176,7 @@ function fakeCheckout(withEsbuild: boolean) {
   mkdirSync(path.join(checkout, 'src'));
   copyFileSync(wrapper, path.join(checkout, 'scripts', 'robot-semantic-recovery-live.sh'));
   writeFileSync(path.join(checkout, 'package-lock.json'), '{}\n');
+  writeFileSync(path.join(checkout, 'tsconfig.json'), '{}\n');
   writeFileSync(path.join(checkout, 'src', 'robot-semantic-recovery-live-entry.ts'), "console.log('first');\n");
   if (withEsbuild) symlinkSync(path.join(root, 'node_modules'), path.join(checkout, 'node_modules'), 'dir');
   return checkout;
@@ -216,6 +217,26 @@ test('live recovery runs a bundle keyed by its sources and rebuilds it when they
   assert.deepEqual(bundles(), [second], 'the stale bundle is removed');
   assert.match(readFileSync(path.join(runtime, second), 'utf8'), /second/);
   assert.equal(lastCall(), path.join(runtime, second));
+
+  // esbuild reads tsconfig.json, so it is part of what the bundle is keyed by.
+  writeFileSync(path.join(checkout, 'tsconfig.json'), '{ "compilerOptions": {} }\n');
+  runFakeCheckout(checkout, env);
+  const [third] = bundles();
+  assert.notEqual(third, second);
+  assert.equal(lastCall(), path.join(runtime, third));
+});
+
+test('live recovery still runs, through tsx, when it cannot hash its sources', { skip: flockSkip() }, () => {
+  const { env, state, runtime } = harness();
+  writeFileSync(path.join(state, 'release'), 'release\n');
+  const checkout = fakeCheckout(true);
+  rmSync(path.join(checkout, 'package-lock.json'));
+  const result = runFakeCheckout(checkout, env);
+
+  assert.match(result.stderr, /could not hash the sources of src\/robot-semantic-recovery-live-entry\.ts; running it through tsx/);
+  assert.equal(readFileSync(path.join(state, 'node-calls'), 'utf8').trim(),
+    '--import tsx src/robot-semantic-recovery-live-entry.ts');
+  assert.deepEqual(readdirSync(runtime).filter((name) => name.includes('.mjs')), []);
 });
 
 test('live recovery falls back to tsx when it cannot build the bundle', { skip: flockSkip() }, () => {

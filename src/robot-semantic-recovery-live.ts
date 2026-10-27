@@ -18,6 +18,7 @@ import {
   type RobotBackingPcmProgressResult,
   type RobotSemanticRecoveryEvidence,
   type RobotSemanticRecoveryExec,
+  type RobotSemanticRecoveryFetch,
   type RobotSemanticRecoveryObservationSnapshot,
 } from './robot-semantic-recovery-adapter.js';
 import {
@@ -152,7 +153,7 @@ async function verifyRobotSemanticRecovery(options: {
   requestTimeoutMs: number;
   verificationTimeoutMs: number;
   sampleIntervalMs: number;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: RobotSemanticRecoveryFetch;
   exec?: RobotSemanticRecoveryExec;
   now?: () => number;
   sleep?: RobotSemanticRecoverySleep;
@@ -252,7 +253,7 @@ export async function runRobotSemanticRecoveryLiveOnce(options: {
   verificationTimeoutMs: number;
   verificationSampleIntervalMs: number;
   config: RobotSemanticRecoveryConfig;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: RobotSemanticRecoveryFetch;
   exec?: RobotSemanticRecoveryExec;
   verificationNow?: () => number;
   sleep?: RobotSemanticRecoverySleep;

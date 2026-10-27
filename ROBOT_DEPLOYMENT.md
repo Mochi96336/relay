@@ -293,6 +293,14 @@ services are already active. If either unit has been deliberately stopped, its
 `ExecCondition` fails closed; the live runner also rechecks the source
 ActiveState immediately before any effect to close the operator-stop race.
 
+The wrapper runs the live entry as a single esbuild bundle in `$XDG_RUNTIME_DIR`
+(`relay-robot-semantic-recovery-live.<hash>.mjs`), rather than through tsx, so a
+healthy pass costs under 0.3 s of CPU instead of about 1 s. The bundle is keyed
+by a hash of `src/`, `package-lock.json`, `tsconfig.json` and the wrapper
+itself, so a pull or an edit builds a fresh one on the next run without a
+deploy step. If hashing or the build fails, that run falls back to
+`node --import tsx` and logs why.
+
 The companion timer first evaluates 45 seconds after the timer itself is
 activated (`OnActiveSec=45s`). After that it uses `OnUnitInactiveSec=10s`: the
 next evaluation is not scheduled until the previous oneshot, including any

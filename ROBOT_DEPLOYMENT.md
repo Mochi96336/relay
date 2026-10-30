@@ -18,7 +18,7 @@ Robot                                    │
 
 Relay server
 └─ aligned song + microphone
-   └─ Listen / Take / later Discord
+   └─ Listen / Take
 ```
 
 ## Validated browser audio route

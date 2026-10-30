@@ -4,8 +4,6 @@ Relay is an experimental shared karaoke audio room. A singer uses the phone as t
 
 The current production target is **phone + unattended robot/host**. The desktop Chrome extension is a development adapter for exercising the same backing-audio path without the robot runtime.
 
-Discord output is not connected yet.
-
 ## What Relay does
 
 The phone is the human-facing surface: it presents normal song control, Mic actions, room listening, Take control, recording review, and product-facing recovery state.

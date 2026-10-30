@@ -185,7 +185,7 @@ The observation endpoints themselves never perform recovery. The optional semant
 
 The launcher does not create a second mixer clock or alignment model. Observed follower deltas are diagnostics, not configuration: final audio alignment remains the calibration system's job.
 
-## Boot services: written, deliberately not enabled
+## Boot services
 
 `deploy/` holds the two core systemd **user** services, `relay-server.service` and
 `relay-robot-source.service`, plus the optional
@@ -339,15 +339,6 @@ Use the journal and timer state as the operator evidence surface:
 systemctl --user status relay-robot-semantic-recovery.timer
 journalctl --user -u relay-robot-semantic-recovery.service --since -10min --no-pager
 ```
-
-## Current deployment checkpoint
-
-The manually launched robot backing route is reproducible and validated, and
-the bounded recovery path has deterministic code/systemd contract coverage.
-That is not the same as a Pi/Robot proof. Full phone microphone + robot backing +
-automatic calibration still needs an integrated real-device sung Take rehearsal,
-and automatic recovery additionally needs the injected-fault cases above. Those
-real-device checks remain the gate on enabling the recovery timer unattended.
 
 ## Experimental sample/song fallback
 
@@ -553,35 +544,58 @@ observations. Freshness-dependent fields expire after 1.5 seconds; negative
 headroom is valid evidence. The server logs unseen action sequences under
 `[mic-recovery]`, rather than treating each health tick as a new action.
 
+### Robot catch-up and calibration authority
 
-### Robot 追趕回報與校準權限
+The Robot player seeks only when it is more than 450 ms off the room clock. Only
+residual player offsets within ±450 ms feed the calibration tracker and content
+mapping. A larger report stays in timing diagnostics but clears the tracker's
+history and freshness instead of updating the mapping, so catch-up is never
+taken for acoustic delay. Authority is rebuilt from fresh reports once the
+offset is back in range; it does not reuse the pre-catch-up median. The
+5-second reference revocation fence still applies.
 
-Robot seek門檻仍為嚴格大於450ms，seek後一次回報仍可讓下一次追趕繼續。Relay只讓絕對值不超過450ms的播放器殘餘偏差進入校準tracker與content mapping；更大的回報保留timing diagnostics，但清除tracker的歷史與新鮮度，不更新mapping。這不刪除Boot路徑測量，也不把追趕誤認為聲學延遲。回到範圍內可重新建立權限，不沿用追趕前median。原本大於5秒的reference撤銷保護保留。
+### Mic Opus
 
-實測−2800ms那筆的來源是Robot Δ=−3215.527ms，加Boot路徑差90−140=−50ms，要求−3265.527ms被限制到−2800ms；當筆frontier correction=0，不能將它歸因於網路回讀。負Δ表示Robot落後手機，負advance表示讀較舊Mic座標，兩者都不是封包早到的測量。
+`RELAY_MIC_OPUS_TRIAL=1` makes newly loaded phone pages send 48 kHz mono CBR
+Opus instead of PCM16. It is off by default. Deploy the receiver before turning
+it on; `/mic-codec-config` reports the flag, and an open phone keeps its codec
+until it reloads. Turning the flag off and reloading the phone returns to PCM.
 
-### Mic Opus 固定碼率試驗
+Opus uses the sequenced v2 registration with v3 audio packets and keeps
+generation, sequence, `firstSampleIndex` and 960-sample frames. `sequence`
+counts encoded frames; `firstSampleIndex` counts capture time, including PCM
+dropped before encoding. The receiver orders and de-duplicates before decoding,
+corrects sample positions by the encoder lookahead each packet carries, and runs
+codec PLC only for lost encoded frames. The worker holds at most two pending
+frames and drops a result older than 100 ms; the WebSocket audio queue budget is
+about 200 ms.
 
-`RELAY_MIC_OPUS_TRIAL=1` 讓新載入的手機頁面使用 48 kHz、mono、32 kbps CBR Opus；預設關閉，仍使用 PCM16。先部署接收端，再開啟旗標。`/mic-codec-config` 回報開關；既有手機須重新載入才會套用，不強制重載。
+The bitrate starts at 128 kbps and steps 128 → 64 → 32 kbps. It drops one step
+after three seconds of new congestion rejects, media backlog over 300 ms or
+queue age over 200 ms. It rises one step after 30 seconds with backlog under
+100 ms, queue age under 50 ms, a playable mix and no new rejects. Changes are at
+least five seconds apart, and a local-file (premixed) song stops at 64 kbps. RTT
+alone never changes the bitrate. Backgrounding, input silence or loss, stale
+capture, and a path or capture-generation change reset the observation window;
+a new generation starts again at 128 kbps. The bitrate changes between frames
+through an Opus ctl, without rebuilding the encoder or the capture. This tunes
+only the Mic uplink; Listen keeps its own 96 kbps setting.
 
-Opus 使用既有 sequenced v2 註冊與 v3 音訊封包，保留 generation、sequence、firstSampleIndex 和 960-sample frame。接收端先排序去重，再解碼，依封包附帶的 encoder lookahead 修正樣本位置；不以到達時間取代音訊時間。Worker 最多保留兩個待編碼 frame，超過 100 ms 的結果丟棄。WebSocket 壓縮音訊排隊預算約 200 ms，控制訊息另有有界寫入上限。這次沒有自適應碼率。
+`captureAndSender.transport.codec`, `codecBitrate` and `codecBitrateReason`
+(`startup`, `stable-delivery`, `congestion`, `media-backlog`) show the live
+mode. `/statusz` `audio.receiverTransport.opus` reports `decodedPackets`,
+`concealedPackets` and `decodeFailures` for the current Mic decoder. An invalid
+payload counts as a gap in the mix and Take evidence; it does not rebuild the
+decoder. The second Mic shares the decoder path, resets both codec histories on
+each new media socket, and records codec rejects under
+`audio.duetIngress.rejected["codec-error"]`.
 
-實際模式見 `captureAndSender.transport.codec` 與 `codecBitrate`。32 kbps 加應用封包標頭約 43 kbps，尚未計入網路協定、控制訊息和重傳。關閉旗標並重新載入手機可回復 PCM。Pi 僅跑受影響測試與型別檢查；GitHub 執行完整 CI，包含實際瀏覽器 WebSocket/WebTransport 錄音驗證。
+Listen jumping back to live clears only its playback queue and keeps codec
+history. Only a real mix-generation or transport replacement, or the PCM
+fallback, retires the decoder.
 
-### Mic 自動碼率（接續固定碼率試驗）
-
-Mic Opus 試驗現在以 128 kbps 啟動，檔位 128 → 64 → 32 kbps。每秒觀察：新的壅塞拒送計數、有效 ACK 推算的媒體積壓與本地排隊年齡。連續三秒出現壅塞拒送、媒體積壓大於300ms或排隊年齡大於200ms，下降一檔；兩次調整至少隔五秒。連續30秒媒體積壓小於100ms、排隊年齡小於50ms、Mixer可播且沒有新的壅塞拒送，才升一檔。這些是試驗門檻，不代表已量到連線可用頻寬。
-
-RTT本身不觸發降檔。舊／缺少回報保持未知，不升檔；本地持續壅塞仍可降檔。切背景、輸入靜音／中斷、採集資料過期、傳輸路徑或capture generation變更會清除觀察窗口。新generation恢復128kbps。碼率透過Opus ctl在frame之間更新，無需重建編碼器、Mic或capture generation，lookahead與樣本座標不變。Worker確認後才回報實際碼率並更新WebSocket排隊預算。
-
-`captureAndSender.transport.codecBitrateReason` 顯示啟動、持續穩定升檔、壅塞降檔或媒體積壓降檔；Mic技術細節沿用原傳輸說明顯示。128kbps payload約為原PCM的1/6，加應用標頭約139.2kbps。此策略只調Mic上行；房間收聽仍為既有96kbps設定。
-
-### Opus 連續性與雜音驗證
-
-Opus 的 `sequence` 計算實際編碼框數；`firstSampleIndex` 計算擷取時間，包含編碼前丟掉的 PCM。接收端只對遺失的編碼框執行 codec PLC，不再由擷取位置缺口推算。主／副 Mic 共用解碼、lookahead 補償與錯誤處理；副 Mic 每次綁定新媒體 socket，會同步重設兩端 codec history，保留原擷取時鐘。副 Mic 的排隊預算也依 codec 換算為約 200 ms。
-
-`/statusz` 的 `audio.receiverTransport.opus` 回報 `decodedPackets`、`concealedPackets`、`decodeFailures`；它們屬於目前 Mic decoder，不是 receiver 的外框收包計數。無效 payload 不會重建 decoder，仍以缺口計入混音／Take 證據。副 Mic 的 codec 拒收由 `audio.duetIngress.rejected["codec-error"]` 記錄。技術細節不會把「外框全到、解碼失敗」顯示成沒有遺失。
-
-Listen 跳回即時位置只清除播放佇列，保留 codec history；原始 mix position 由有界輸入區間對應，不依賴 WebCodecs 是否保留時間缺口。真正的 mix generation／傳輸替換與 PCM fallback 才退休舊 decoder。
-
-`mic-audible-loss-matrix.test.ts` 同時驗證 PCM 與 32/64/128 kbps 的正式 Opus 路徑，涵蓋丟包、連續丟包、重傳、換路、重連與強音；補音仍計為缺失，不能用補音掩蓋品質證據。實際 Chromium 的 Listen proof 另檢查低電平母音跨缺口後的音量與精確樣本位置；Pi 可用 `RELAY_BROWSER_EXECUTABLE=/usr/bin/chromium` 指定已安裝的瀏覽器。
+`test/mic-audible-loss-matrix.test.ts` covers PCM and Opus at 32, 64 and
+128 kbps under loss, burst loss, retransmission, path changes, reconnects and
+loud input; concealed audio still counts as missing. On the Pi,
+`RELAY_BROWSER_EXECUTABLE=/usr/bin/chromium` points the browser proofs at the
+installed Chromium.

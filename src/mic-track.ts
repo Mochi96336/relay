@@ -56,8 +56,8 @@ export type MicReadHeadEvent =
     kind: 'jump'; fromMs: number; toMs: number; waitedMs: number;
     /** False when the wait ran out, or holding could not continue, and it jumped over a voice. */
     quiet: boolean;
-    /** Which part of the alignment moved since the last emitted frame, in ms. */
-    moved: Partial<Record<'calibratedMicLagMs' | 'networkCompensationMs' | 'fineTuneMs' | 'frontierCorrectionMs', number>>;
+    /** Which part of the alignment moved since the last emitted frame, in ms; null when it started or stopped applying. */
+    moved: Partial<Record<'calibratedMicLagMs' | 'networkCompensationMs' | 'fineTuneMs' | 'frontierCorrectionMs', number | null>>;
   }
   | { kind: 'walk-start' | 'walk-end'; what: 'calibration' | 'network'; fromMs: number; toMs: number };
 
@@ -359,12 +359,11 @@ export class MicTrack {
    * Reads one microphone frame while a bounded runtime timing correction moves
    * the live read head.
    *
-   * Both content-validation slew and frontier-correction release are explicitly
-   * limited to about one percent per 20 ms frame. That is a read-rate policy:
-   * the frame should consume about 19.8-20.2 ms of microphone audio. Changing
-   * only the integer frame start instead skips/repeats about ten samples every
-   * 20 ms at 48 kHz, a 50 Hz train of waveform discontinuities that voiced
-   * harmonics expose as zipper/buzz.
+   * Alignment walks (0.2% per 20 ms frame) and frontier walks (1%) are
+   * read-rate policy: at 1% the frame consumes about 19.8-20.2 ms of
+   * microphone audio. Changing only the integer frame start instead
+   * skips/repeats about ten samples every 20 ms at 48 kHz, a 50 Hz train of
+   * waveform discontinuities that voiced harmonics expose as zipper/buzz.
    *
    * Interpolate a continuous source position across the emitted frame, landing
    * exactly on the new advance at the next frame boundary. Limiter look-ahead
@@ -774,7 +773,7 @@ export class MicTrack {
       const calibrated = this.alignmentState.calibratedMicLagMs;
       if (calibrated !== before.calibratedMicLagMs) {
         moved.calibratedMicLagMs = calibrated === null || before.calibratedMicLagMs === null
-          ? Number.NaN : calibrated - before.calibratedMicLagMs;
+          ? null : calibrated - before.calibratedMicLagMs;
       }
       delta('networkCompensationMs', this.alignmentState.networkCompensationMs);
       delta('fineTuneMs', this.alignmentState.fineTuneMs);
@@ -803,6 +802,17 @@ export class MicTrack {
   /** How long the pending jump has waited for a quiet moment; 0 when none waits. */
   get readHeadJumpWaitMs() {
     return this.jumpWaitFrames * this.frameMs;
+  }
+
+  /** A jump waiting for a quiet moment goes on the next frame instead. */
+  flushPendingJump() {
+    if (this.jumpWaitFrames > 0) this.jumpWaitFrames = this.jumpQuietWaitFrames;
+  }
+
+  /** Where the last frame was actually heard, which a waiting jump has not moved yet; null before any. */
+  get heardMicAdvanceMs() {
+    return this.lastEmittedMicAdvanceSamples === null
+      ? null : (this.lastEmittedMicAdvanceSamples / this.sampleRate) * 1000;
   }
 
   /** How much arrived audio is left past this frame's reads; none left is starvation. */

@@ -98,3 +98,15 @@ test('a stopped session takes the fallback target at once', () => {
   session.slewNetworkCompensationTo(140);
   assert.equal(session.alignment.networkCompensationMs, 140);
 });
+
+test('re-targeting a walk at the current value stops it where it is (the server holds this way)', () => {
+  const session = makeSession();
+  session.drain(() => {}, PREBUFFER_MS, 1);
+  session.slewNetworkCompensationTo(120);
+  session.drain(() => {}, PREBUFFER_MS + FRAME_MS, 1);
+  const held = session.alignment.networkCompensationMs;
+  session.slewNetworkCompensationTo(held);
+  assert.equal(session.networkCompensationTargetMs, null);
+  for (let frame = 2; frame < 20; frame += 1) session.drain(() => {}, PREBUFFER_MS + frame * FRAME_MS, 1);
+  assert.equal(session.alignment.networkCompensationMs, held);
+});

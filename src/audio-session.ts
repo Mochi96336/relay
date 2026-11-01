@@ -531,8 +531,8 @@ export class AudioSession {
    * or one set while it is silent, applies at once; later changes ease in
    * exactly as the main Mic's runtime corrections do. A change too large to
    * ease (from no song to a song's measurement and back, often a second or
-   * more, which the 1% slew would take minutes over) fades B out, jumps and
-   * fades B back in.
+   * more, which a walk would take minutes over) fades B out, jumps and fades B
+   * back in. One past the walk limit but not that far jumps at a quiet moment.
    */
   setSecondaryMicLag(lagMs: number | null) {
     const secondary = this.secondary;
@@ -677,6 +677,27 @@ export class AudioSession {
   /** How long a pending read-head jump has waited for a quiet moment; 0 when none waits. */
   get micReadHeadJumpWaitMs() {
     return this.micTrack.readHeadJumpWaitMs;
+  }
+
+  /**
+   * Where the main Mic was last heard. It differs from `appliedMicAdvanceMs`
+   * while a jump waits for a quiet moment; null before any frame.
+   */
+  get heardMicAdvanceMs() {
+    return this.micTrack.heardMicAdvanceMs;
+  }
+
+  /**
+   * A Take freezes what is heard: walks stop where they are, and a jump still
+   * waiting for a quiet moment goes now rather than inside the recording.
+   */
+  settleMicReadHead() {
+    const track = this.micTrack;
+    if (track.alignmentState.calibratedMicLagMs !== null) {
+      track.calibratedMicLagTargetMs = track.alignmentState.calibratedMicLagMs;
+    }
+    track.networkCompensationTargetMs = null;
+    track.flushPendingJump();
   }
 
   /** Where a live network-compensation walk is heading; null when none is pending. */

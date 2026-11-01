@@ -118,3 +118,36 @@ test('a live correction too far to walk is taken at once and jumped to', () => {
   session.slewCalibratedMicLagTo(100 + MIC_WALK_LIMIT_MS + 5);
   assert.equal(session.alignment.calibratedMicLagMs, 100 + MIC_WALK_LIMIT_MS + 5);
 });
+
+test('while a jump waits, the heard advance stays put and the applied one has moved', () => {
+  const session = makeSession(voice(8));
+  run(session, 60);
+  const before = session.heardMicAdvanceMs!;
+  session.setAlignment({ calibratedMicLagMs: 130 });
+  run(session, 5);
+  assert.ok(session.micReadHeadJumpWaitMs > 0);
+  assert.ok(Math.abs(session.heardMicAdvanceMs! - before) < 1e-9, `heard ${session.heardMicAdvanceMs}`);
+  assert.ok(Math.abs(session.appliedMicAdvanceMs - (before + 30)) < 1e-9, `applied ${session.appliedMicAdvanceMs}`);
+});
+
+test('a Take start lands a waiting jump on the next frame and stops a walk where it is', () => {
+  const session = makeSession(voice(8));
+  run(session, 60);
+  session.setAlignment({ calibratedMicLagMs: 130 });
+  run(session, 5);
+  assert.ok(session.micReadHeadJumpWaitMs > 0);
+  session.settleMicReadHead();
+  run(session, 1);
+  assert.equal(session.micReadHeadJumpWaitMs, 0);
+  assert.ok(Math.abs(session.heardMicAdvanceMs! - session.appliedMicAdvanceMs) < 1e-9);
+  const jump = session.drainMicReadHeadEvents().find((event) => event.kind === 'jump');
+  assert.equal(jump?.kind === 'jump' && jump.quiet, false);
+
+  session.slewCalibratedMicLagTo(140);
+  run(session, 3);
+  const walked = session.alignment.calibratedMicLagMs!;
+  assert.ok(walked > 130 && walked < 131);
+  session.settleMicReadHead();
+  run(session, 10);
+  assert.equal(session.alignment.calibratedMicLagMs, walked);
+});

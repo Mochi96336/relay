@@ -374,8 +374,8 @@ function renderCalibration() {
   } else {
     const estimate = signed(latestSourceStatus?.micNetworkCompensationMs, ' ms');
     timingStatus.textContent = latestCalibration?.autoCalibrate
-      ? `即將自動校正 · 目前先用 network estimate ${estimate}。`
-      : `Ready · 目前先用 network estimate ${estimate}。`;
+      ? `即將自動校正 · 目前人聲補償 ${estimate}。`
+      : `Ready · 目前人聲補償 ${estimate}。`;
   }
 }
 

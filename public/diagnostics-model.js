@@ -283,7 +283,7 @@ function timingFormula(timing, timeline, source, t) {
   if ((source?.timingMode ?? timing.timingMode) !== 'acoustic-calibration') {
     const estimate = finite(timing.fallbackNetworkMs);
     if (estimate === null) return null;
-    const key = timing.sampleSongFallback?.active ? 'diag.timing.formula.sampleSong' : 'diag.timing.formula.transport';
+    const key = timing.sampleSongFallback?.active ? 'diag.timing.formula.sampleSong' : 'diag.timing.formula.unplaced';
     return { text: t(key, { result: ms(estimate) }), result: estimate };
   }
 

@@ -206,7 +206,7 @@ describe('Timing', () => {
       product: { timing: { state: 'fallback' } },
       source: source({ timingMode: 'network-estimate' }),
     }, en));
-    assert.equal(estimated.method.value, 'Network estimate');
+    assert.equal(estimated.method.value, 'Not measured');
     assert.equal(estimated.alignment.tone, 'warn');
   });
 
@@ -465,7 +465,7 @@ it('Timing names sample/song when it actually controls fallback', () => {
     source: source({ timingMode: 'network-estimate', appliedMicAdvanceMs: 143, requestedMicAdvanceMs: 143 }),
     timing: { fallbackNetworkMs: 143, sampleSongFallback: { active: false } },
   }, zh));
-  assert.equal(estimate.formula.value, '網路估計 +143 ms');
+  assert.equal(estimate.formula.value, '尚無推算 +143 ms');
 });
 
 it('Timing hides expired YT state', () => {

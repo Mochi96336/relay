@@ -610,6 +610,9 @@ function expireMicTransportGrace(expectedOwnerId: string) {
   if (!released.ok) return;
   clearMicMediaAuthority();
   applyMicOwnerEffects(released.effects);
+  // A backing grace that expired while this one was pending kept the room
+  // voice-only for this singer. With the singer gone too, nothing is left.
+  maybeStopLiveSourceWhenUnarmed();
   broadcastSessionStatus();
 }
 
@@ -676,6 +679,9 @@ function releaseMicLease(
     beforeTimingInvalidation: cleanReleasedTransport,
   });
   cleanReleasedTransport();
+  // The publisher is detached here, so its socket closing later is no
+  // longer a Mic close: a voice-only room has to stop on the release itself.
+  maybeStopLiveSourceWhenUnarmed();
   broadcastSessionStatus();
   sendJson(socket, { type: 'mic-released' });
 }

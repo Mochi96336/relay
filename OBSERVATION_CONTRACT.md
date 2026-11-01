@@ -55,7 +55,7 @@ Consumers must key on `schema`, not on incidental fields from `/statusz` or WebS
 
 `workload.ok` is false only for `fault` evidence. Warnings do not clear `ok`.
 
-The contract does not claim end-to-end singing quality or Discord health. It reports only facts Relay itself can currently observe.
+The contract does not claim end-to-end singing quality. It reports only facts Relay itself can currently observe.
 
 ## Privacy and access
 

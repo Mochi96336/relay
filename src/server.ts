@@ -1,4 +1,4 @@
-import { SampleSongFallback } from './sample-song-fallback.js';
+import { FallbackTargetJournal, SampleSongFallback } from './sample-song-fallback.js';
 import { ChoirRuntime, refuseChoirMessage } from './choir-runtime.js';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -1922,10 +1922,12 @@ let sampleSongSelected = false;
 let robotSongObservation: Record<string, unknown> | null = null;
 let sampleSongEpoch: number | null = null;
 let sampleSongMicOwner: string | null = null;
+const fallbackTargetJournal = new FallbackTargetJournal();
 
 function refreshLiveMicNetworkCompensation() {
   if (sampleSongEpoch !== session.generation || sampleSongMicOwner !== participants.micOwnerId) {
     sampleSongFallback.clear();
+    fallbackTargetJournal.reset();
     sampleSongEpoch = session.generation;
     sampleSongMicOwner = participants.micOwnerId;
   }
@@ -1952,6 +1954,48 @@ function refreshLiveMicNetworkCompensation() {
   // jumps: the pops heard from singers whose boot probe failed.
   if (mode === 'sample-song' && session.active) session.slewNetworkCompensationTo(target);
   else session.setAlignment({ networkCompensationMs: target });
+  noteFallbackTarget(selected, timeline, target, transportEstimateMs);
+}
+
+/**
+ * Logs where an uncalibrated singer's fallback target comes from and how far it
+ * moves. Each move walks the voice against the song, so a target that jumps
+ * between sample/song and the transport estimate, or chases noise, is heard.
+ */
+function noteFallbackTarget(
+  selected: boolean,
+  timeline: ReturnType<typeof currentTimelineStatus>,
+  targetMs: number,
+  transportEstimateMs: number,
+) {
+  if (!session.active || !participants.micOwnerId) {
+    fallbackTargetJournal.reset();
+    return;
+  }
+  const reason = selected ? null
+    : !robotRouteActive() ? 'robot-route-off'
+    : !timeline.connected ? 'timeline-stale'
+    : timeline.state !== 1 ? 'not-playing'
+    : sampleSongFallback.rejection;
+  const source = selected ? 'sample-song' as const : 'transport' as const;
+  const nowMs = performance.now();
+  const change = fallbackTargetJournal.note({ source, reason, targetMs }, nowMs);
+  if (!change) return;
+  const evidence = sampleSongFallback.diagnostics(nowMs);
+  console.warn('[mic-fallback-target]', JSON.stringify({
+    change,
+    source,
+    reason,
+    mode: relayConfig.sampleSongFallback,
+    targetMs: Math.round(targetMs),
+    candidateMs: sampleSongCandidateMs === null ? null : Math.round(sampleSongCandidateMs),
+    transportEstimateMs: Number.isFinite(transportEstimateMs) ? Math.round(transportEstimateMs) : null,
+    calibrated: session.alignment.calibratedMicLagMs !== null,
+    networkCompensationMs: Math.round(session.alignment.networkCompensationMs),
+    appliedMicAdvanceMs: Math.round(session.appliedMicAdvanceMs),
+    micAnchorAgeMs: evidence.mic ? Math.round(evidence.mic.ageMs) : null,
+    backingAnchorAgeMs: evidence.backing ? Math.round(evidence.backing.ageMs) : null,
+  }));
 }
 
 function startLiveSource() {

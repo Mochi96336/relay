@@ -130,7 +130,6 @@ const MONITOR_OPUS_BACKLOG_BYTES = Math.max(
 );
 const LIVE_MIX_PREBUFFER_MS = relayConfig.livePrebufferMs;
 const LIVE_BACKING_GAIN = 0.65;
-const MAX_OFFSET_MS = 500;
 const MIC_RETENTION_MS = relayConfig.micRetentionMs;
 /**
  * How far either side of the estimated position a probe is searched for.
@@ -1547,7 +1546,7 @@ function takeQualityFrameState(nowMs = performance.now()) {
     ...(takeBlocksCalibration()
       ? {
           appliedCalibrationKind: alignment.calibratedMicLagMs === null ? 'none' as const : appliedCalibrationKind(),
-          estimateSource: sampleSongSelected ? 'sample-song' as const : 'transport' as const,
+          ...(sampleSongPlacedVideoId !== null ? { estimateSource: 'sample-song' as const } : {}),
         }
       : {}),
   };
@@ -1702,8 +1701,9 @@ function timingCalibrationStatusPayload() {
     robotDeltaFresh: robotDeltaIsFresh(nowMs),
     robotContentTransition: robotContentTransitionStatus(nowMs),
     fallbackNetworkMs: alignment.networkCompensationMs,
-    sampleSongFallback: { mode: relayConfig.sampleSongFallback, candidateMs: sampleSongCandidateMs,
-      selected: sampleSongSelected, active: sampleSongSelected && alignment.calibratedMicLagMs === null, approximate: true,
+    sampleSongFallback: { candidateMs: sampleSongCandidateMs, selected: sampleSongSelected,
+      held: sampleSongPlacedVideoId !== null && !sampleSongSelected,
+      active: sampleSongPlacedVideoId !== null && alignment.calibratedMicLagMs === null, approximate: true,
       evidence: sampleSongFallback.diagnostics(nowMs) },
     vocalFineTuneMs: alignment.fineTuneMs,
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
@@ -1919,42 +1919,57 @@ function retireMicCaptureTiming() {
 const sampleSongFallback = new SampleSongFallback();
 let sampleSongCandidateMs: number | null = null;
 let sampleSongSelected = false;
+/** The song whose sample/song estimate has placed this singer's voice; null until one has. */
+let sampleSongPlacedVideoId: string | null = null;
 let robotSongObservation: Record<string, unknown> | null = null;
 let sampleSongEpoch: number | null = null;
 let sampleSongMicOwner: string | null = null;
 const fallbackTargetJournal = new FallbackTargetJournal();
 
 function refreshLiveMicNetworkCompensation() {
-  if (sampleSongEpoch !== session.generation || sampleSongMicOwner !== participants.micOwnerId) {
+  const ownerChanged = sampleSongMicOwner !== participants.micOwnerId;
+  if (sampleSongEpoch !== session.generation || ownerChanged) {
     sampleSongFallback.clear();
     fallbackTargetJournal.reset();
     sampleSongEpoch = session.generation;
     sampleSongMicOwner = participants.micOwnerId;
+    sampleSongPlacedVideoId = null;
+    // Another singer's placement says nothing about this one.
+    if (ownerChanged) session.setAlignment({ networkCompensationMs: 0 });
   }
   const timeline = currentTimelineStatus();
-  const transportEstimateMs = Number(timeline.transportEstimateMs);
-  const mode = relayConfig.sampleSongFallback;
+  const videoId = String(timeline.videoId);
   sampleSongCandidateMs = robotRouteActive() && timeline.connected && timeline.state === 1
-    ? sampleSongFallback.estimate(performance.now(), String(timeline.videoId),
+    ? sampleSongFallback.estimate(performance.now(), videoId,
       (side, a) => session.sampleSongPosition(side, a.generation, a.sampleIndex, a.sampleRate), session.sampleRate)
     : null;
-  const selected = mode === 'sample-song' && sampleSongCandidateMs !== null;
-  if (mode === 'sample-song' && takeBlocksCalibration()) {
+  if (takeBlocksCalibration()) {
     // A Take freezes alignment, including a walk already under way.
     session.slewNetworkCompensationTo(session.alignment.networkCompensationMs);
     return;
   }
-  sampleSongSelected = selected;
-  const target = selected ? sampleSongCandidateMs! : Number.isFinite(transportEstimateMs)
-    ? Math.max(0, Math.min(MAX_OFFSET_MS, transportEstimateMs)) : 0;
-  // The mixer walks a live target per frame. Stepping it here by 1% of the
-  // time since the last call depended on how calls arrive: the live Robot
-  // capture lands 40 ms batches about every 42.7 ms, and 1% of that is just
-  // past the per-frame slew bound, so steps became crossfaded read-head
-  // jumps: the pops heard from singers whose boot probe failed.
-  if (mode === 'sample-song' && session.active) session.slewNetworkCompensationTo(target);
-  else session.setAlignment({ networkCompensationMs: target });
-  noteFallbackTarget(selected, timeline, target, transportEstimateMs);
+  sampleSongSelected = sampleSongCandidateMs !== null;
+  // Without a candidate the voice stays where it is. The transport estimate
+  // (half the control socket's RTT) once stood in here, but it measures
+  // neither the players' offset nor the phone's own delay, and not even the
+  // path the voice takes; it could sit a second from the song and on the
+  // other side of it, so every lapse in the anchors walked the voice away.
+  if (sampleSongCandidateMs !== null) {
+    if (sampleSongPlacedVideoId !== videoId || !session.active) {
+      // The first estimate for a song is taken at once: walking there at the
+      // slew rate from wherever the voice sat could take minutes.
+      session.setAlignment({ networkCompensationMs: sampleSongCandidateMs });
+      sampleSongPlacedVideoId = videoId;
+    } else {
+      // The mixer walks a later target per frame. Stepping it here by 1% of
+      // the time since the last call depended on how calls arrive: the live
+      // Robot capture lands 40 ms batches about every 42.7 ms, and 1% of that
+      // is just past the per-frame slew bound, so steps became crossfaded
+      // read-head jumps: the pops heard from singers whose boot probe failed.
+      session.slewNetworkCompensationTo(sampleSongCandidateMs);
+    }
+  }
+  noteFallbackTarget(timeline);
 }
 
 /**
@@ -1962,22 +1977,19 @@ function refreshLiveMicNetworkCompensation() {
  * moves. Each move walks the voice against the song, so a target that jumps
  * between sample/song and the transport estimate, or chases noise, is heard.
  */
-function noteFallbackTarget(
-  selected: boolean,
-  timeline: ReturnType<typeof currentTimelineStatus>,
-  targetMs: number,
-  transportEstimateMs: number,
-) {
+function noteFallbackTarget(timeline: ReturnType<typeof currentTimelineStatus>) {
   if (!session.active || !participants.micOwnerId) {
     fallbackTargetJournal.reset();
     return;
   }
-  const reason = selected ? null
+  const reason = sampleSongSelected ? null
     : !robotRouteActive() ? 'robot-route-off'
     : !timeline.connected ? 'timeline-stale'
     : timeline.state !== 1 ? 'not-playing'
     : sampleSongFallback.rejection;
-  const source = selected ? 'sample-song' as const : 'transport' as const;
+  const source = sampleSongSelected ? 'sample-song' as const
+    : sampleSongPlacedVideoId === null ? 'unplaced' as const : 'held' as const;
+  const targetMs = session.networkCompensationTargetMs ?? session.alignment.networkCompensationMs;
   const nowMs = performance.now();
   const change = fallbackTargetJournal.note({ source, reason, targetMs }, nowMs);
   if (!change) return;
@@ -1986,10 +1998,8 @@ function noteFallbackTarget(
     change,
     source,
     reason,
-    mode: relayConfig.sampleSongFallback,
     targetMs: Math.round(targetMs),
     candidateMs: sampleSongCandidateMs === null ? null : Math.round(sampleSongCandidateMs),
-    transportEstimateMs: Number.isFinite(transportEstimateMs) ? Math.round(transportEstimateMs) : null,
     calibrated: session.alignment.calibratedMicLagMs !== null,
     networkCompensationMs: Math.round(session.alignment.networkCompensationMs),
     appliedMicAdvanceMs: Math.round(session.appliedMicAdvanceMs),
@@ -2525,7 +2535,7 @@ function maybeReapplyBootCalibration(nowMs: number) {
 const youtubeTimelineTimer = setInterval(() => {
   const nowMs = performance.now();
   choir?.tick(nowMs);
-  if (relayConfig.sampleSongFallback !== 'rtt') refreshLiveMicNetworkCompensation();
+  refreshLiveMicNetworkCompensation();
 
   refreshPreparedSongHandoff(nowMs);
   if (
@@ -2822,8 +2832,8 @@ const takeCommands = createTakeCommandHandlers<RelaySocket>({
   songAt: takeSongSnapshot,
   timingAtStart: (nowMs) => ({
     appliedCalibrationKind: session.alignment.calibratedMicLagMs === null ? 'none' : appliedCalibrationKind(),
-    estimateSource: session.alignment.calibratedMicLagMs === null
-      ? (sampleSongSelected ? 'sample-song' : 'transport')
+    estimateSource: session.alignment.calibratedMicLagMs === null && sampleSongPlacedVideoId !== null
+      ? 'sample-song'
       : null,
     calibrationError: calibration.status().error ?? probeStatus(nowMs).error ?? null,
   }),

@@ -70,6 +70,12 @@ test('real protocol places the voice by sample/song at once and holds it when bo
     assert.equal(lapsed?.change, 'source', JSON.stringify(journal));
     assert.match(String(lapsed?.reason), /-stale$/);
     assert.ok(Math.abs(lapsed!.targetMs - live.fallbackNetworkMs) < 10, JSON.stringify(lapsed));
+    // The placement was one jump, made over the silent fixture Mic, and journaled.
+    const jumps = server.stderr().split('\n').filter(line => line.startsWith('[mic-read-head] '))
+      .map(line => JSON.parse(line.slice('[mic-read-head] '.length))).filter(line => line.kind === 'jump');
+    assert.equal(jumps.length, 1, JSON.stringify(jumps));
+    assert.equal(jumps[0].quiet, true);
+    assert.ok(Math.abs(jumps[0].moved.networkCompensationMs - live.fallbackNetworkMs) < 10, JSON.stringify(jumps[0]));
   } finally {
     for (const c of clients) c.close();
     await server.stop();

@@ -196,11 +196,16 @@ describe('AudioSession second singer', () => {
     drainAll(session, 600 + 200);
     assert.equal(session.secondaryMic!.blend, 1);
 
-    // A small correction eases, as the main Mic's do: 1% of a frame per frame.
-    session.setSecondaryMicLag(50);
+    // A small correction eases, as the main Mic's do: 0.2% of a frame per frame.
+    session.setSecondaryMicLag(10);
     drainAll(session, 600 + 220);
-    assert.ok(session.secondaryMic!.lagMs! > 0 && session.secondaryMic!.lagMs! < 1,
-      `easing toward 50 ms (${session.secondaryMic!.lagMs})`);
+    assert.ok(session.secondaryMic!.lagMs! > 0 && session.secondaryMic!.lagMs! < 0.1,
+      `easing toward 10 ms (${session.secondaryMic!.lagMs})`);
+
+    // Past the walk limit B is moved at once, with no fade, at a quiet moment.
+    session.setSecondaryMicLag(50);
+    assert.equal(session.secondaryMic!.lagMs, 50);
+    assert.equal(session.secondaryMic!.blend, 1);
 
     // A song's measurement after no song: far too far to ease.
     session.setSecondaryMicLag(450);

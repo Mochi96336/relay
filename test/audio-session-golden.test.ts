@@ -581,14 +581,14 @@ test('golden: a steady Robot room with everything a singer does to it', () => {
   assert.ok(exercises.backingClockCorrections > 0, 'corrects the slow song clock');
   assert.ok(exercises.backingGapSamples > 0, 'declicks lost song packets');
   assert.ok(exercises.trimSamples > 0, 'trims the Mic capture clock');
-  assert.equal(digest, '1db4a3c9284107ded6020560f49b092734d2b68eecbfeb92b581fd344529e50f');
+  assert.equal(digest, '0840393c3c7d0286cc5260e3f1db1aa98562e6a5629771fd0f1d7ce485d442b5');
 });
 
 test('golden: late, stalled, recovered and silent Mic arrival', () => {
   const { digest, exercises } = lateStalledRecovered();
   assert.ok(exercises.maxCorrectionMs > 0, 'holds a late stream back');
   assert.ok(exercises.micStarvedSamples > 0, 'reports the outage as starvation');
-  assert.equal(digest, 'd8e8d4bc180e85f26c8e51c5cf8124f048dfdcaca287396f7f2d1f0ac9095473');
+  assert.equal(digest, 'b6dd9183efb59ea0d9ae8ebc7b672087831f2429b22dc2d1db3ab15ca911b412');
 });
 
 test('golden: a slow capture clock spending the headroom', () => {

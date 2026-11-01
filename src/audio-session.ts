@@ -14,7 +14,7 @@ import {
   type PcmTimeline,
 } from './pcm-timeline.js';
 import { MicClockTrim } from './mic-clock-trim.js';
-import { MicFrontierCorrection } from './mic-frontier-correction.js';
+import { MIC_FRONTIER_PROMPT_RELEASE_MS, MicFrontierCorrection } from './mic-frontier-correction.js';
 import { MicInputClipping } from './mic-input-clipping.js';
 import { MicGainRamp } from './mic-gain-ramp.js';
 import { MicLimiter } from './mic-limiter.js';
@@ -107,12 +107,32 @@ export type MixHealth = {
 const ADVANCE_SAFETY_MS = 200;
 
 /**
- * Runtime validation corrects an already-live read head. Moving it in one frame
- * skips or repeats the whole delta, so validated drift is allowed to change the
- * read rate by at most one percent until the new target is reached. Initial,
- * manual and robot calibrations still use the existing immediate setAlignment.
+ * How fast a live correction walks the read head, as a share of each frame.
+ * Moving it in one frame skips or repeats the whole delta; walking changes the
+ * read rate, and so the pitch, while it moves. 0.2% is about 3.5 cents and
+ * 2 ms a second. It was 1%, 17 cents: audible against the song on a held note.
  */
-const RUNTIME_CALIBRATION_SLEW_FRACTION = 0.01;
+const RUNTIME_CALIBRATION_SLEW_FRACTION = 0.002;
+
+/**
+ * The frontier's walk rate stays at 1%. It keeps the read head behind what has
+ * arrived; a capture that slips (about 3% on 2026-10-03) outruns a slower walk
+ * and starves the Mic, and a starved voice is worse than a sharp one.
+ */
+const MIC_FRONTIER_SLEW_FRACTION = 0.01;
+
+/**
+ * A live correction further than this is not walked (it would take 10 s at the
+ * walk rate) but taken at once; the read plan then jumps at a quiet moment.
+ */
+export const MIC_WALK_LIMIT_MS = 20;
+
+/**
+ * How long a read-head jump may wait for a quiet moment before it goes
+ * anyway. A singer breathes well within this; the voice sits where it was
+ * meanwhile, which is where it sat before the correction arrived.
+ */
+const MIC_JUMP_QUIET_WAIT_MS = 3_000;
 
 /**
  * Immediate authority changes must take effect immediately, but changing the
@@ -155,6 +175,12 @@ export type AudioSessionOptions = {
    * correlating at exactly -1 against a window of zeros.
    */
   backingRetentionMs?: number;
+  /** The read-head walk rate; tests of the walk itself pin their own. */
+  micWalkFraction?: number;
+  /** How long a read-head jump may wait for a quiet moment; 0 jumps at once. */
+  micJumpQuietWaitMs?: number;
+  /** The furthest a live correction walks rather than jumps (MIC_WALK_LIMIT_MS). */
+  micWalkLimitMs?: number;
 };
 
 export class AudioSession {
@@ -179,6 +205,7 @@ export class AudioSession {
    */
   private secondary: SecondaryVoice | null = null;
   private readonly micTrackOptions: ConstructorParameters<typeof MicTrack>[0];
+  private readonly micWalkLimitMs: number;
   private readonly mic: PcmTimeline;
   private readonly backing = emptyPcmTimeline();
 
@@ -234,6 +261,7 @@ export class AudioSession {
       1,
       Math.round((SOURCE_GAP_DECLICK_MS * options.sampleRate) / 1000),
     );
+    this.micWalkLimitMs = options.micWalkLimitMs ?? MIC_WALK_LIMIT_MS;
     this.micTrackOptions = {
       sampleRate: options.sampleRate,
       prebufferMs: options.prebufferMs,
@@ -242,8 +270,11 @@ export class AudioSession {
       frameSamples: this.frameSamples,
       sourceEdgeFadeSamples: this.sourceEdgeFadeSamples,
       safetyMs: ADVANCE_SAFETY_MS,
-      slewFraction: RUNTIME_CALIBRATION_SLEW_FRACTION,
+      slewFraction: options.micWalkFraction ?? RUNTIME_CALIBRATION_SLEW_FRACTION,
+      frontierSlewFraction: MIC_FRONTIER_SLEW_FRACTION,
       readHeadCrossfadeMs: MIC_READ_HEAD_CROSSFADE_MS,
+      jumpQuietWaitMs: options.micJumpQuietWaitMs ?? MIC_JUMP_QUIET_WAIT_MS,
+      frontierPromptReleaseMs: Math.min(MIC_FRONTIER_PROMPT_RELEASE_MS, this.micWalkLimitMs),
     };
     this.micTrack = new MicTrack(this.micTrackOptions);
     // Keep the existing single-Mic methods literally unchanged: their fields
@@ -517,6 +548,8 @@ export class AudioSession {
       track.alignmentState = { ...track.alignmentState, calibratedMicLagMs: lagMs };
     } else if (Math.abs(lagMs - current) > SECONDARY_JUMP_MS) {
       secondary.pendingLagMs = lagMs;
+    } else if (Math.abs(lagMs - current) > this.micWalkLimitMs) {
+      track.alignmentState = { ...track.alignmentState, calibratedMicLagMs: lagMs };
     }
     if (secondary.pendingLagMs === null) track.calibratedMicLagTargetMs = lagMs;
     if (!secondary.detaching) secondary.audible = true;
@@ -629,8 +662,21 @@ export class AudioSession {
       this.setAlignment({ networkCompensationMs: targetMs });
       return;
     }
-    this.micTrack.networkCompensationTargetMs =
-      targetMs === this.micTrack.alignmentState.networkCompensationMs ? null : targetMs;
+    const current = this.micTrack.alignmentState.networkCompensationMs;
+    if (targetMs !== current && this.micTrack.networkCompensationTargetMs === null) {
+      this.micTrack.noteReadHeadEvent({ kind: 'walk-start', what: 'network', fromMs: current, toMs: targetMs });
+    }
+    this.micTrack.networkCompensationTargetMs = targetMs === current ? null : targetMs;
+  }
+
+  /** The main Mic's read-head jumps and walks since the last call, oldest first. */
+  drainMicReadHeadEvents() {
+    return this.micTrack.drainReadHeadEvents();
+  }
+
+  /** How long a pending read-head jump has waited for a quiet moment; 0 when none waits. */
+  get micReadHeadJumpWaitMs() {
+    return this.micTrack.readHeadJumpWaitMs;
   }
 
   /** Where a live network-compensation walk is heading; null when none is pending. */
@@ -645,12 +691,15 @@ export class AudioSession {
   slewCalibratedMicLagTo(targetMs: number) {
     if (!Number.isFinite(targetMs)) return false;
     const current = this.micTrack.alignmentState.calibratedMicLagMs;
-    if (current === null || !this.running) {
+    if (current === null || !this.running || Math.abs(targetMs - current) > this.micWalkLimitMs) {
       const changed = current !== targetMs || this.micTrack.calibratedMicLagTargetMs !== targetMs;
       this.setAlignment({ calibratedMicLagMs: targetMs });
       return changed;
     }
     if (this.micTrack.calibratedMicLagTargetMs === targetMs) return false;
+    if (this.micTrack.calibratedMicLagTargetMs === null || this.micTrack.calibratedMicLagTargetMs === current) {
+      this.micTrack.noteReadHeadEvent({ kind: 'walk-start', what: 'calibration', fromMs: current, toMs: targetMs });
+    }
     this.micTrack.calibratedMicLagTargetMs = targetMs;
     return true;
   }
@@ -1290,7 +1339,7 @@ export class AudioSession {
   /** B's frame at the same room position, planned on B's own track. */
   private readSecondaryFrame(secondary: SecondaryVoice, startSample: number): SecondaryFrame {
     const track = secondary.track;
-    const plan = track.planMicRead(startSample, secondary.audible);
+    const plan = track.planMicRead(startSample, secondary.audible, secondary.blend > 0);
     track.measureReadHeadroom(plan, secondary.audible);
     const read = track.readMicFrame(plan);
     return {

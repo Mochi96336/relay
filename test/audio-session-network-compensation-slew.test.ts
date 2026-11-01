@@ -33,7 +33,7 @@ function makeSession() {
   session.setMicExpected(true);
   session.start(0);
   session.setAlignment({ networkCompensationMs: 100 });
-  session.ingestMic({ generation: 1, firstSampleIndex: 0, pcm: tone(RATE * 12) }, RATE, 0);
+  session.ingestMic({ generation: 1, firstSampleIndex: 0, pcm: tone(RATE * 16) }, RATE, 0);
   return session;
 }
 
@@ -59,11 +59,11 @@ test('a live uncalibrated fallback target walks the read head without a crossfad
   const session = makeSession();
   const samples: number[] = [];
   let targetMs = 100;
-  for (let outputFrame = 0; outputFrame < 300; outputFrame += 1) {
+  for (let outputFrame = 0; outputFrame < 600; outputFrame += 1) {
     const nowMs = outputFrame * FRAME_MS;
-    // About the server's 250 ms timeline timer, chasing an estimate 1 ms further
-    // each tick: five times the per-frame bound if it were applied at once.
-    if (outputFrame > 50 && outputFrame % 12 === 0) {
+    // An estimate 1 ms further every 600 ms, just under the walk rate:
+    // twenty-five times the per-frame bound if it were applied at once.
+    if (outputFrame > 50 && outputFrame % 30 === 0) {
       targetMs += 1;
       session.slewNetworkCompensationTo(targetMs);
     }
@@ -72,7 +72,7 @@ test('a live uncalibrated fallback target walks the read head without a crossfad
     }, PREBUFFER_MS + nowMs, 1);
   }
 
-  assert.ok(targetMs > 110, 'fixture must move the target well past one step');
+  assert.ok(targetMs > 115, 'fixture must move the target well past one step');
   assert.equal(session.alignment.networkCompensationMs, targetMs);
   const { steady, quietest } = envelope(samples);
   assert.ok(steady > TONE_AMPLITUDE * 0.9, `fixture tone should be audible, saw ${steady}`);

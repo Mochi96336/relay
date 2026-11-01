@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
 import type { loadRelayConfig } from './config.js';
-import { AudioSession } from './audio-session.js';
+import { AudioSession, MIC_WALK_LIMIT_MS } from './audio-session.js';
 import { BackingRuntime } from './backing-runtime.js';
 import { SourceRuntime } from './source-runtime.js';
 import { loadAudioTransportConfig } from './audio-transport-config.js';
@@ -1707,6 +1707,7 @@ function timingCalibrationStatusPayload() {
       evidence: sampleSongFallback.diagnostics(nowMs) },
     vocalFineTuneMs: alignment.fineTuneMs,
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
+    micReadHeadJumpWaitMs: session.micReadHeadJumpWaitMs,
     requestedMicAdvanceMs: session.requestedMicAdvanceMs,
     probeCorrelation: bootProbe.correlations,
     probeActive: bootProbeInProgress(nowMs),
@@ -1921,6 +1922,13 @@ let sampleSongCandidateMs: number | null = null;
 let sampleSongSelected = false;
 /** The song whose sample/song estimate has placed this singer's voice; null until one has. */
 let sampleSongPlacedVideoId: string | null = null;
+/** Since when sample/song has asked for a placement too far to walk to; null when it has not. */
+let sampleSongFarSinceMs: number | null = null;
+/**
+ * How long sample/song must keep asking for a placement too far to walk before
+ * the voice jumps there: one estimate that far off may be noise in the anchors.
+ */
+const SAMPLE_SONG_JUMP_CONFIRM_MS = 1_000;
 let robotSongObservation: Record<string, unknown> | null = null;
 let sampleSongEpoch: number | null = null;
 let sampleSongMicOwner: string | null = null;
@@ -1934,6 +1942,7 @@ function refreshLiveMicNetworkCompensation() {
     sampleSongEpoch = session.generation;
     sampleSongMicOwner = participants.micOwnerId;
     sampleSongPlacedVideoId = null;
+    sampleSongFarSinceMs = null;
     // Another singer's placement says nothing about this one.
     if (ownerChanged) session.setAlignment({ networkCompensationMs: 0 });
   }
@@ -1960,7 +1969,20 @@ function refreshLiveMicNetworkCompensation() {
       // slew rate from wherever the voice sat could take minutes.
       session.setAlignment({ networkCompensationMs: sampleSongCandidateMs });
       sampleSongPlacedVideoId = videoId;
+      sampleSongFarSinceMs = null;
+    } else if (Math.abs(sampleSongCandidateMs - session.alignment.networkCompensationMs) > MIC_WALK_LIMIT_MS) {
+      // Too far to walk: once it has held for a while, the voice jumps there,
+      // at a quiet moment (MicTrack).
+      const nowMs = performance.now();
+      sampleSongFarSinceMs ??= nowMs;
+      if (nowMs - sampleSongFarSinceMs >= SAMPLE_SONG_JUMP_CONFIRM_MS) {
+        session.setAlignment({ networkCompensationMs: sampleSongCandidateMs });
+        sampleSongFarSinceMs = null;
+      } else {
+        session.slewNetworkCompensationTo(sampleSongCandidateMs);
+      }
     } else {
+      sampleSongFarSinceMs = null;
       // The mixer walks a later target per frame. Stepping it here by 1% of
       // the time since the last call depended on how calls arrive: the live
       // Robot capture lands 40 ms batches about every 42.7 ms, and 1% of that
@@ -2006,6 +2028,22 @@ function noteFallbackTarget(timeline: ReturnType<typeof currentTimelineStatus>) 
     micAnchorAgeMs: evidence.mic ? Math.round(evidence.mic.ageMs) : null,
     backingAnchorAgeMs: evidence.backing ? Math.round(evidence.backing.ageMs) : null,
   }));
+}
+
+/**
+ * Every read-head jump and walk, for the journal: a jump is the one move the
+ * mix can be heard making, and `quiet: false` says it was made over a voice.
+ */
+function logMicReadHeadEvents() {
+  const tenth = (value: number) => Math.round(value * 10) / 10;
+  for (const event of session.drainMicReadHeadEvents()) {
+    console.warn('[mic-read-head]', JSON.stringify(event.kind === 'jump'
+      ? {
+        ...event, fromMs: tenth(event.fromMs), toMs: tenth(event.toMs),
+        moved: Object.fromEntries(Object.entries(event.moved).map(([key, value]) => [key, tenth(value)])),
+      }
+      : { ...event, fromMs: tenth(event.fromMs), toMs: tenth(event.toMs) }));
+  }
 }
 
 function startLiveSource() {
@@ -2536,6 +2574,7 @@ const youtubeTimelineTimer = setInterval(() => {
   const nowMs = performance.now();
   choir?.tick(nowMs);
   refreshLiveMicNetworkCompensation();
+  logMicReadHeadEvents();
 
   refreshPreparedSongHandoff(nowMs);
   if (

@@ -1945,10 +1945,11 @@ function refreshLiveMicNetworkCompensation() {
   sampleSongSelected = selected;
   const target = selected ? sampleSongCandidateMs! : Number.isFinite(transportEstimateMs)
     ? Math.max(0, Math.min(MAX_OFFSET_MS, transportEstimateMs)) : 0;
-  // The mixer walks a live target per frame. Stepping it here at whatever
-  // cadence this runs (1 ms per 250 ms timer tick) was past the per-frame
-  // slew bound, so each step was a crossfaded read-head jump: the pops heard
-  // from singers whose boot probe failed.
+  // The mixer walks a live target per frame. Stepping it here by 1% of the
+  // time since the last call depended on how calls arrive: the live Robot
+  // capture lands 40 ms batches about every 42.7 ms, and 1% of that is just
+  // past the per-frame slew bound, so steps became crossfaded read-head
+  // jumps: the pops heard from singers whose boot probe failed.
   if (mode === 'sample-song' && session.active) session.slewNetworkCompensationTo(target);
   else session.setAlignment({ networkCompensationMs: target });
 }

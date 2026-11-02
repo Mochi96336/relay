@@ -338,6 +338,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
     timingState: timing,
     timingFrontierCorrectionActive: input.timing.frontierCorrectionActive === true,
     timingProbeUnheard: input.timing.micProbeUnheard === true,
+    audibleProbeRequired: input.timing.robotProbeTimingActive === true,
   });
   const attention = primaryAttention(issues);
   const health: ProductHealth = issues.some((issue) => issue.severity === 'critical')

@@ -12,7 +12,7 @@ function analysis(micLagMs: number): TimingCalibrationAnalysis {
 function fixture(options: { automatic?: boolean; enabled?: boolean; analyze?: ContentCalibrationConfig['validation']['analyze'] } = {}) {
   const state = {
     now: 0, robot: true, bootSettled: true, bootExhausted: false, mapping: true,
-    active: true, takeBlocked: false, stale: false,
+    active: true, stale: false,
     backing: true, mic: true, flowing: true, playing: true,
     measured: 0, kindReads: 0,
   };
@@ -49,7 +49,6 @@ function fixture(options: { automatic?: boolean; enabled?: boolean; analyze?: Co
       timeline: () => { liveReads.push('timeline'); return { connected: true, state: state.playing ? 1 : 2 }; },
       noteMicMeasured: () => { state.measured++; events.push('measured'); },
     },
-    takeBlocked: () => state.takeBlocked,
     timingChanged: () => events.push('timing'),
     sourceChanged: () => events.push('source'),
   };
@@ -80,10 +79,10 @@ function fixture(options: { automatic?: boolean; enabled?: boolean; analyze?: Co
   return { coordinator, state, context, timing, events, liveReads, applications, seed, tick, window };
 }
 
-for (const gate of ['takeBlocked', 'bootSettled', 'mapping', 'active'] as const) {
+for (const gate of ['bootSettled', 'mapping', 'active'] as const) {
   test(`automatic admission rejects ${gate} before reading live media`, () => {
     const f = fixture();
-    f.state[gate] = gate === 'takeBlocked';
+    f.state[gate] = false;
     f.tick(0);
     assert.equal(f.coordinator.measurement.collecting, false);
     assert.deepEqual(f.liveReads, []);
@@ -213,30 +212,6 @@ test('drift promotion synchronizes authority and slew before mixer application a
   assert.equal(f.coordinator.validation.status(151).baselineLagMs, 370);
 });
 
-test('Take admission cancels a suspect without revoking confirmed authority', () => {
-  const f = fixture();
-  f.seed(); f.tick(0); f.tick(100); f.window();
-  const revision = f.coordinator.measurement.confirmedRevision;
-  f.events.length = 0;
-  f.coordinator.standDownForTake(101);
-  assert.deepEqual(f.events, ['timing']);
-  assert.equal(f.coordinator.validation.status(101).state, 'waiting');
-  assert.equal(f.coordinator.measurement.confirmedRevision, revision);
-  assert.equal(f.coordinator.measurement.result?.micLagMs, 310);
-});
-
-test('Take stand-down retires content collection while keeping its confirmed snapshot', () => {
-  const f = fixture();
-  f.seed(); f.coordinator.startManual(0);
-  const measured = f.state.measured;
-  f.events.length = 0;
-  f.coordinator.standDownForTake(10);
-  assert.deepEqual(f.events, ['apply', 'timing', 'source']);
-  assert.equal(f.coordinator.measurement.collecting, false);
-  assert.equal(f.coordinator.measurement.result?.micLagMs, 310);
-  assert.equal(f.state.measured, measured);
-});
-
 test('manual start aborts pending drift analysis and its late answer cannot promote', async () => {
   let resolve!: (result: TimingCalibrationAnalysis) => void;
   let signal: AbortSignal | undefined;
@@ -253,12 +228,12 @@ test('manual start aborts pending drift analysis and its late answer cannot prom
   assert.equal(f.coordinator.measurement.collecting, true);
 });
 
-for (const cause of ['takeBlocked', 'mapping', 'bootSettled', 'active', 'flowing'] as const) {
+for (const cause of ['mapping', 'bootSettled', 'active', 'flowing'] as const) {
   test(`withdrawn ${cause} readiness cancels suspect validation`, () => {
     const f = fixture();
     f.seed(); f.tick(0); f.tick(100); f.window();
     assert.equal(f.coordinator.validation.status(100).state, 'suspect');
-    f.state[cause] = cause === 'takeBlocked';
+    f.state[cause] = false;
     f.tick(101);
     assert.equal(f.coordinator.validation.status(101).state, 'waiting');
     assert.equal(f.coordinator.validation.status(101).baselineLagMs, 310);

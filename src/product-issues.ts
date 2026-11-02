@@ -56,7 +56,7 @@ export type ProductRecovery =
   | 'raise-mic-gain'
   | 'retry-recording'
   | 'recalibrate'
-  /** Realign is refused while a Take records; the recording keeps the timing it started with. */
+  /** Audible probe playback waits until the Take ends. */
   | 'recalibrate-after-take'
   /** Realign helps only through speakers; with headphones the estimate stays. */
   | 'recalibrate-speaker'
@@ -114,6 +114,7 @@ export type ProductIssueFacts = {
     levelWarning?: MicLevelWarning | null;
   };
   takeLifecycle: TakeLifecycle;
+  audibleProbeRequired?: boolean;
   performanceActive: boolean;
   timingState: 'idle' | 'calibrating' | 'aligned' | 'fallback' | 'stale' | 'clamped';
   /** The serving alignment is being held back by the live Mic frontier, not only by buffer affordability. */
@@ -122,12 +123,9 @@ export type ProductIssueFacts = {
   timingProbeUnheard?: boolean;
 };
 
-/**
- * A Take freezes timing: Realign is refused and background measurement stops
- * until it ends, so "measure again" is only advice for after the recording.
- */
+/** Audible probes wait for recording; passive content measurement remains available. */
 function recalibrateRecovery(facts: ProductIssueFacts): ProductRecovery {
-  return facts.takeLifecycle === 'recording' || facts.takeLifecycle === 'finalizing'
+  return facts.audibleProbeRequired === true && (facts.takeLifecycle === 'recording' || facts.takeLifecycle === 'finalizing')
     ? 'recalibrate-after-take'
     : 'recalibrate';
 }

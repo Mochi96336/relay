@@ -196,6 +196,7 @@ Claims about those boundaries should come from explicit handset/robot rehearsal,
 ## Documentation
 
 - [ARCHITECTURE_BOUNDARIES.md](ARCHITECTURE_BOUNDARIES.md) — normative ownership and authority boundaries between product, diagnostics, recording, and UI.
+- [CALIBRATION_MODEL.md](CALIBRATION_MODEL.md) — calibration coordinates, evidence, authority, audible read-head policy, verification and physical limits.
 - [SESSION_MODEL.md](SESSION_MODEL.md) — participant identity, presence, Mic lease, takeover, reconnect, and publisher transport lifecycle.
 - [ROBOT_DEPLOYMENT.md](ROBOT_DEPLOYMENT.md) — robot Chromium/PipeWire route, launcher, systemd deployment, infrastructure auth, and optional WebTransport setup.
 - [OBSERVATION_CONTRACT.md](OBSERVATION_CONTRACT.md) — stable machine-readable monitoring contract.

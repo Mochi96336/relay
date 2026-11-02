@@ -130,24 +130,54 @@ test('while a jump waits, the heard advance stays put and the applied one has mo
   assert.ok(Math.abs(session.appliedMicAdvanceMs - (before + 30)) < 1e-9, `applied ${session.appliedMicAdvanceMs}`);
 });
 
-test('a Take start lands a waiting jump on the next frame and stops a walk where it is', () => {
-  const session = makeSession(voice(8));
-  run(session, 60);
-  session.setAlignment({ calibratedMicLagMs: 130 });
-  run(session, 5);
-  assert.ok(session.micReadHeadJumpWaitMs > 0);
-  session.settleMicReadHead();
-  run(session, 1);
-  assert.equal(session.micReadHeadJumpWaitMs, 0);
-  assert.ok(Math.abs(session.heardMicAdvanceMs! - session.appliedMicAdvanceMs) < 1e-9);
-  const jump = session.drainMicReadHeadEvents().find((event) => event.kind === 'jump');
-  assert.equal(jump?.kind === 'jump' && jump.quiet, false);
+test('holding fallback cancels an unheard placement, before or during its quiet wait', () => {
+  for (const waitingFrames of [0, 5]) {
+    const session = makeSession(voice(8));
+    session.setAlignment({ calibratedMicLagMs: null });
+    run(session, 60);
+    const heard = session.heardMicAdvanceMs;
+    session.setAlignment({ networkCompensationMs: 200 });
+    run(session, waitingFrames);
+    session.freezeFallbackAtHeard();
+    run(session, 160);
+    assert.equal(session.heardMicAdvanceMs, heard);
+    assert.equal(session.alignment.networkCompensationMs, 0);
+    assert.equal(session.micReadHeadJumpWaitMs, 0);
+    assert.equal(session.drainMicReadHeadEvents().filter(event => event.kind === 'jump').length, 0);
+    session.slewNetworkCompensationTo(10);
+    run(session, 3);
+    const walked = session.alignment.networkCompensationMs;
+    assert.ok(walked > 0 && walked < 10);
+    session.freezeFallbackAtHeard();
+    run(session, 20);
+    assert.equal(session.alignment.networkCompensationMs, walked, 'hold also stops a walk at the emitted value');
+  }
+});
 
-  session.slewCalibratedMicLagTo(140);
-  run(session, 3);
-  const walked = session.alignment.calibratedMicLagMs!;
-  assert.ok(walked > 130 && walked < 131);
-  session.settleMicReadHead();
-  run(session, 10);
-  assert.equal(session.alignment.calibratedMicLagMs, walked);
+test('a new epoch cannot inherit a quiet wait or restore the previous epoch placement', () => {
+  const session = makeSession(voice(8));
+  session.setAlignment({ calibratedMicLagMs: null });
+  run(session, 60);
+  session.setAlignment({ networkCompensationMs: 200 });
+  run(session, 5);
+  assert.equal(session.micReadHeadJumpWaitMs, 100);
+  session.resetEpoch(2_000);
+  assert.equal(session.micReadHeadJumpWaitMs, 0);
+  assert.equal(session.heardMicAdvanceMs, null);
+  session.freezeFallbackAtHeard();
+  assert.equal(session.alignment.networkCompensationMs, 200, 'old emitted alignment must not roll back a new epoch');
+});
+
+test('a new owner holds its neutral baseline instead of restoring the previous singer placement', () => {
+  const session = makeSession(voice(8));
+  session.setAlignment({ calibratedMicLagMs: null, networkCompensationMs: 100 });
+  run(session, 60);
+  session.resetFallbackForOwner();
+  // Owner retirement can precede replacement capture/PCM. A missing candidate
+  // in that interval must never resurrect the old singer's fallback.
+  session.freezeFallbackAtHeard();
+  assert.equal(session.alignment.networkCompensationMs, 0);
+  session.setAlignment({ networkCompensationMs: 200 });
+  session.freezeFallbackAtHeard();
+  assert.equal(session.alignment.networkCompensationMs, 0);
 });

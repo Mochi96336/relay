@@ -25,7 +25,7 @@ export type AutoContentCalibrationLivePathInput = {
 
 export type AutoContentCalibrationStartMode = 'fresh' | 'primed';
 
-/** Calibration-specific prerequisites after the outer feature/Take guard. */
+/** Calibration-specific prerequisites after the outer feature guard. */
 export function autoContentCalibrationPrerequisitesReady(
   input: AutoContentCalibrationPrerequisiteInput,
 ) {

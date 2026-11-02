@@ -11,7 +11,7 @@ import { READ_HEAD_MECHANISM } from './support/read-head-mechanism.js';
 function fixture() {
   const state = {
     now: 0, robot: true, probeEnabled: false, bootSettled: true, source: true,
-    song: true, deltaFresh: true, deltaEver: true, contentReady: true, takeBlocked: false,
+    song: true, deltaFresh: true, deltaEver: true, contentReady: true,
     targetLag: -86.06 as number | null, deltaMs: 40, rate: 1,
     pathDifferenceMs: 120 as number | null, probeMatches: true,
     bootResult: { advanceMs: 160, micLatencyMs: 180, backingLatencyMs: 60, deltaMs: 40, confidence: 0.9 } as BootCalibrationResult | null,
@@ -59,7 +59,6 @@ function fixture() {
       playbackRate: () => state.rate,
       contentLiveLag: () => state.targetLag,
     },
-    takeBlocked: () => state.takeBlocked,
     bootReapplied: (reason, previous, next) => diagnostics.push({ reason, previous, next }),
   };
   const alignment = new CalibrationAlignment(150, host, () => state.now);
@@ -75,7 +74,7 @@ function fixture() {
   return { state, context, timing, measurement, audio, alignment, reapplied, diagnostics, seed };
 }
 
-test('new content revisions reach the mixer after Take and mapping holds, without bypassing ordinary jitter hold', () => {
+test('new content revisions reach the mixer while mapping holds retain pending authority', () => {
   const f = fixture();
   f.audio.setAlignment({ calibratedMicLagMs: -131.59 });
   f.seed();
@@ -86,12 +85,8 @@ test('new content revisions reach the mixer after Take and mapping holds, withou
   assert.equal(f.audio.alignment.calibratedMicLagMs, -86.06);
   const firstRevision = f.measurement.confirmedRevision;
 
-  f.state.takeBlocked = true;
   f.seed('content', -60);
   f.state.targetLag = -60;
-  assert.equal(f.alignment.sync(), false);
-  assert.equal(f.alignment.authority?.revision, firstRevision);
-  f.state.takeBlocked = false;
   assert.equal(f.alignment.sync(), true);
   assert.equal(f.audio.alignment.calibratedMicLagMs, -60);
   assert.equal(f.alignment.authority?.revision, firstRevision + 1);
@@ -171,6 +166,24 @@ test('mapping holds keep the prepared validation slew and pending confirmation i
   assert.equal(f.audio.alignment.calibratedMicLagMs, 310);
 });
 
+test('new content confirmation at the current lag retires the old walk target', () => {
+  const f = fixture();
+  f.seed('content', 310);
+  f.state.targetLag = 310;
+  f.alignment.sync();
+  f.timing.prepareContentValidationSlew(f.measurement.confirmedRevision + 1);
+  f.seed('content', 320);
+  f.state.targetLag = 320;
+  f.alignment.sync();
+  assert.equal(f.audio.calibratedMicLagTarget, 320);
+  assert.equal(f.audio.alignment.calibratedMicLagMs, 310);
+  f.seed('content', 310);
+  f.state.targetLag = 310;
+  assert.equal(f.alignment.sync(), true);
+  assert.equal(f.audio.calibratedMicLagTarget, 310);
+  assert.equal(f.alignment.sync(), false);
+});
+
 test('an unrelated confirmation cannot consume an old validation slew as its own', () => {
   const f = fixture();
   f.seed('content', 310);
@@ -221,16 +234,15 @@ test('a non-Robot route uses its measured lag independently of Robot mapping rea
   assert.equal(f.alignment.desiredLagMs(0), 310);
 });
 
-test('Take freezes application while desired alignment continues to witness mapping drift', () => {
+test('live application follows mapping drift independently of recording', () => {
   const f = fixture();
   f.seed('content', 310);
   f.state.targetLag = 310;
   f.alignment.sync();
-  f.state.takeBlocked = true;
   f.state.targetLag = 610;
   assert.equal(f.alignment.desiredLagMs(0), 610);
-  assert.equal(f.alignment.sync(), false);
-  assert.equal(f.audio.alignment.calibratedMicLagMs, 310);
+  assert.equal(f.alignment.sync(), true);
+  assert.equal(f.audio.alignment.calibratedMicLagMs, 610);
 });
 
 test('diagnostic authority snapshots cannot mutate the application owner', () => {
@@ -305,13 +317,12 @@ test('valid boot evidence can reclaim revoked content, while a mapping hold cann
   assert.equal(f.alignment.kind, 'boot-probe');
 });
 
-for (const gate of ['Take', 'route', 'context', 'delta', 'path', 'collection', 'transaction'] as const) {
+for (const gate of ['route', 'context', 'delta', 'path', 'collection', 'transaction'] as const) {
   test(`boot reapplication respects the ${gate} fence`, () => {
     const f = fixture();
     f.seed('boot-probe', 160);
     f.alignment.sync();
     f.state.deltaMs = 400;
-    if (gate === 'Take') f.state.takeBlocked = true;
     if (gate === 'route') f.state.robot = false;
     if (gate === 'context') f.state.probeMatches = false;
     if (gate === 'delta') f.state.deltaFresh = false;
@@ -346,15 +357,11 @@ test('boot retention acknowledges an unchanged pipeline-only target without Song
   assert.equal(f.audio.alignment.calibratedMicLagMs, 120);
 });
 
-test('boot retention keeps the new revision pending through Take and quiet-delta holds', () => {
+test('boot retention keeps a new revision pending through quiet-delta holds', () => {
   const f = fixture();
   f.seed('boot-probe', 160);
   f.alignment.sync();
   f.seed('boot-probe', 160);
-  f.state.takeBlocked = true;
-  assert.equal(f.alignment.sync(), false);
-  assert.equal(f.alignment.authority?.revision, 1);
-  f.state.takeBlocked = false;
   f.state.deltaFresh = false;
   assert.equal(f.alignment.sync(), false);
   assert.equal(f.alignment.authority?.revision, 1);
@@ -398,11 +405,10 @@ test('boot retention replaces a previous content slew target even when the read 
   assert.equal(f.audio.alignment.calibratedMicLagMs, 310, 'later frames must not follow the retired content target');
 });
 
-test('session stop clears the applied marker even while Take finalization blocks normal synchronization', () => {
+test('session stop clears the applied marker and cannot reapply retained history', () => {
   const f = fixture();
   f.seed('boot-probe', 160);
   f.alignment.sync();
-  f.state.takeBlocked = true;
   f.audio.stop();
   f.alignment.sessionStopped();
   assert.equal(f.alignment.sync(), false);

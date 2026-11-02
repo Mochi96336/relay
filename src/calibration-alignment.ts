@@ -16,7 +16,7 @@ export type AppliedCalibrationAuthority = Readonly<{ revision: number; kind: Tim
 export type CalibrationAlignmentHost = {
   measurement: Pick<CalibrationSession,
     'status' | 'result' | 'confirmedResult' | 'confirmedRevision' | 'transactionActive' | 'collecting' | 'isStaleFor'>;
-  audio: Pick<AudioSession, 'alignment' | 'calibratedMicLagTarget' | 'setAlignment' | 'slewCalibratedMicLagTo'>;
+  audio: Pick<AudioSession, 'active' | 'alignment' | 'calibratedMicLagTarget' | 'setAlignment' | 'slewCalibratedMicLagTo' | 'acceptMicCalibration'>;
   timing: Pick<TimingRuntime,
     'appliedCalibrationKind' | 'contentValidationSlewRevision' | 'contentValidationSlewMatches' | 'clearContentValidationSlew'>;
   probe: Pick<BootProbeCoordinator, 'pathDifferenceMs' | 'calibrationResult' | 'completedContextMatches' | 'reapply'>;
@@ -37,7 +37,6 @@ export type CalibrationAlignmentHost = {
     playbackRate(nowMs: number): number;
     contentLiveLag(referenceLagMs: number, nowMs: number): number | null;
   };
-  takeBlocked(): boolean;
   bootReapplied?(reason: BootProbeReapplicationReason, previousMs: number | null, nextMs: number): void;
 };
 
@@ -45,7 +44,7 @@ export type CalibrationAlignmentHost = {
  * Owns which calibration revision has reached the mixer. Measurement authority
  * remains with CalibrationSession/TimingRuntime; AudioSession owns the read head
  * and slew. This owner keeps their application, hold and revocation semantics
- * together, including the desired alignment observed while a Take freezes it.
+ * together, including the desired alignment observed independently of recording.
  */
 export class CalibrationAlignment {
   private appliedAuthority: AppliedCalibrationAuthority | null = null;
@@ -108,7 +107,7 @@ export class CalibrationAlignment {
     return pathDifferenceMs + mediaToWallMs(this.host.mapping.deltaMs(nowMs), this.host.mapping.playbackRate(nowMs));
   }
 
-  /** Observes the mapping without moving a frozen Take's Mic read head. */
+  /** Observes the mapping without mutating the read head. */
   desiredLagMs(nowMs: number): number | null {
     const { measurement, probe, route, mapping } = this.host;
     const kind = this.kind;
@@ -129,7 +128,7 @@ export class CalibrationAlignment {
   /** Returns whether the mixer's active target changed. Holds keep revisions pending. */
   sync() {
     const { measurement, audio, probe, timing, route, mapping } = this.host;
-    if (this.host.takeBlocked()) return false;
+    if (!audio.active) return false;
     const active = audio.alignment.calibratedMicLagMs;
     const calibrationKind = this.kind;
     const authority = { revision: measurement.confirmedRevision, kind: calibrationKind };
@@ -153,10 +152,12 @@ export class CalibrationAlignment {
       if (decision.kind === 'hold') return false;
       if (decision.kind === 'retain') {
         this.appliedAuthority = authority;
+        audio.acceptMicCalibration(authority);
         return false;
       }
       audio.setAlignment({ calibratedMicLagMs: decision.micLagMs });
       this.appliedAuthority = decision.micLagMs === null ? null : authority;
+      audio.acceptMicCalibration(this.appliedAuthority);
       return true;
     }
     const applicability = this.applicability(calibrationKind);
@@ -180,6 +181,7 @@ export class CalibrationAlignment {
     if (decision.clearContentValidationSlew) timing.clearContentValidationSlew();
     if (applicability === 'apply' && nextMicLagMs !== null) this.appliedAuthority = authority;
     else if (applicability === 'revoke') this.appliedAuthority = null;
+    audio.acceptMicCalibration(this.appliedAuthority);
     if (decision.kind === 'none') return false;
     if (decision.kind === 'slew') return audio.slewCalibratedMicLagTo(decision.micLagMs);
     audio.setAlignment({ calibratedMicLagMs: decision.micLagMs });
@@ -189,7 +191,7 @@ export class CalibrationAlignment {
   /** Reclaims valid pipeline evidence after content revocation, or follows fresh delta. */
   reapplyBoot(nowMs: number) {
     const { measurement, audio, probe, route, mapping } = this.host;
-    if (this.host.takeBlocked() || !route.robotActive()) return;
+    if (!audio.active || !route.robotActive()) return;
     const appliedKind = this.kind;
     const applied = audio.alignment.calibratedMicLagMs;
     const decision = decideBootProbeReapplication({

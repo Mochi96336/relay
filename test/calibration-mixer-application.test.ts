@@ -98,6 +98,13 @@ test('drift-confirmed content correction slews when both endpoints exist', () =>
   );
 });
 
+test('a new confirmation at the current lag cancels the obsolete target', () => {
+  const facts = input({ nextMicLagMs: 100, calibratedMicLagTarget: 110 });
+  assert.deepEqual(decideCalibrationMixerApplication({ ...facts, newCalibrationAuthority: true }),
+    { kind: 'set', micLagMs: 100, clearContentValidationSlew: true });
+  assert.equal(decideCalibrationMixerApplication(facts).kind, 'none', 'ordinary Robot jitter keeps its hold');
+});
+
 test('validated content with no active lag sets directly instead of slewing from null', () => {
   assert.deepEqual(
     decideCalibrationMixerApplication(input({

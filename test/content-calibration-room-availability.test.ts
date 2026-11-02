@@ -146,14 +146,22 @@ test('a running content measurement leaves the room live and recordable', async 
     ), 8_000);
     assert.ok(accepted.takeId);
 
-    // The run is stood down so it cannot promote a new alignment into the
-    // middle of the recording. Standing down is not a failure, so the room is
-    // never told a calibration error occurred.
-    const settled = await waitForNewMessage(monitor, monitorFrom, (message) => (
-      message.type === 'timing-calibration-status' && message.state !== 'collecting'
+    // Recording taps the existing mix. It cannot cancel passive measurement.
+    monitor.send({ type: 'timing-calibration-status-request' });
+    const continuing = await waitForNewMessage(monitor, monitorFrom, message => (
+      message.type === 'timing-calibration-status' && message.state === 'collecting'
     ), 8_000);
-    assert.equal(settled.state, 'idle');
-    assert.equal(settled.error, null);
+    assert.equal(continuing.error, null);
+    singer.send(playing(songStartedAtMs));
+    await primeStreams(backing, singer);
+    const duringTake = await productStatus(singer);
+    assert.equal(duringTake.actions.canStartCalibration, true, JSON.stringify(duringTake.actions));
+    const realignFrom = monitor.messages.length;
+    singer.send({ type: 'start-timing-calibration' });
+    await waitForNewMessage(monitor, realignFrom, message => (
+      message.type === 'timing-calibration-status' && message.state === 'collecting'
+    ));
+
 
     backing.close();
     singer.close();
@@ -190,7 +198,7 @@ test('a Take the recorder refuses leaves the content measurement running', async
     assert.equal(rejected.type, 'take-command-rejected');
     assert.equal(rejected.reason, 'storage-unavailable');
 
-    // Only an admitted Take may stand background timing work down.
+    // Refused recording also leaves passive calibration untouched.
     const statusFrom = monitor.messages.length;
     monitor.send({ type: 'timing-calibration-status-request' });
     const status = await waitForNewMessage(monitor, statusFrom, (message) => (

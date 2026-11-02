@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import type { MicTrack } from '../src/mic-track.js';
 import { AudioSession } from '../src/audio-session.js';
 import { classifyMicReadMotion, type MicReadMotionInput } from '../src/mic-read-plan.js';
 import { READ_HEAD_MECHANISM } from './support/read-head-mechanism.js';
@@ -129,17 +130,15 @@ for (const [name, length, gap, advance, complete, crossfade] of [
     }
     // Test-only established history; no production snapshot/getMutableState.
     const state = session as unknown as {
-      micTrack: {
-        lastEmittedMicAdvanceSamples: number | null;
-        lastEmittedMicFrameComplete: boolean;
-        edge: { readonly replacementActive: boolean };
-      };
+      micTrack: MicTrack;
       planMicRead(index: number): { canCrossfadeReadHeadJump: boolean };
     };
-    // These are test-only fields, now correctly owned by the canonical
-    // MicTrack rather than stale AudioSession scalar properties.
-    state.micTrack.lastEmittedMicAdvanceSamples = 0;
-    state.micTrack.lastEmittedMicFrameComplete = complete;
+    const history = state.micTrack.readHead.plan({
+      sampleRate: 1000, frameSamples: 20, startSample: 0,
+      previousAdvanceSamplesExact: 0, appliedAdvanceMs: 0,
+      runtimeCalibrationSlewFraction: .01, readHeadCrossfadeMs: 5,
+    }, 0, { mayWait: false, canKeepReading: () => true, quiet: () => false });
+    state.micTrack.readHead.emittedFrame(history, 0, complete);
     assert.equal(state.micTrack.edge.replacementActive, false);
     assert.equal(state.planMicRead(2).canCrossfadeReadHeadJump, crossfade);
     assert.equal(state.micTrack.edge.replacementActive, !crossfade,

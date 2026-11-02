@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { AudioSession } from '../src/audio-session.js';
 import { classifyMicReadMotion, type MicReadMotionInput } from '../src/mic-read-plan.js';
+import { READ_HEAD_MECHANISM } from './support/read-head-mechanism.js';
 
 function classify(patch: Partial<MicReadMotionInput> = {}) {
   return classifyMicReadMotion({ frameSamples: 20, sampleRate: 1000, startSample: 40,
@@ -114,7 +115,7 @@ for (const [name, length, gap, advance, complete, crossfade] of [
   ['previous frame incomplete', 100, null, 40, false, false],
 ] as const) {
   test(`session evidence gate: ${name}`, () => {
-    const session = new AudioSession({ sampleRate: 1000, frameMs: 20, prebufferMs: 400,
+    const session = new AudioSession({ ...READ_HEAD_MECHANISM, sampleRate: 1000, frameMs: 20, prebufferMs: 400,
       backingGain: 0.65, retentionMs: 3000, backingRetentionMs: 6000 });
     session.start(0);
     session.setAlignment({ calibratedMicLagMs: advance });

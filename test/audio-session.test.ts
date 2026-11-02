@@ -3,11 +3,12 @@ import test, { describe } from 'node:test';
 
 import { AudioSession } from '../src/audio-session.js';
 import type { PcmFrame } from '../src/pcm-frame.js';
+import { READ_HEAD_MECHANISM } from './support/read-head-mechanism.js';
 
 const RATE = 48_000;
 
 function makeSession(overrides: Partial<ConstructorParameters<typeof AudioSession>[0]> = {}) {
-  const session = new AudioSession({
+  const session = new AudioSession({ ...READ_HEAD_MECHANISM,
     sampleRate: RATE,
     frameMs: 20,
     prebufferMs: 0,

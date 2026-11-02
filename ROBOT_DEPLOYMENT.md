@@ -372,9 +372,12 @@ capture/rate/song or a player-clock discontinuity withdraws the estimate.
 Recent source coordinates are mapped through the current ingest frontier;
 historical coordinates more than one second old are rejected. Within that
 short interval, individual sample insertions/removals are approximated by the
-current transform. The fallback moves at at most 1% of real time and freezes
-during a Take. Diagnostics in `timing-calibration-status.sampleSongFallback`
-include mode, candidate, selected and active (no acoustic calibration).
+current transform. Later estimates within 20 ms are walked to at 0.2% of real
+time; further ones, once they hold for a second, are jumped to at a quiet
+moment. Placement freezes during a Take. Diagnostics in
+`timing-calibration-status.sampleSongFallback` include candidate, selected,
+held and active (a sample/song placement in force without acoustic
+calibration). `[mic-read-head]` journals every read-head jump and walk.
 Reload the phone after updating so it publishes capture anchors.
 
 To capture concurrent shadow evidence without restarting services or changing

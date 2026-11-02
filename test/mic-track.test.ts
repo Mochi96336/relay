@@ -12,7 +12,7 @@ import { readPcmEvidence } from '../src/pcm-timeline.js';
 const config = {
   sampleRate: 48_000, prebufferMs: 400, retentionMs: 3_000,
   frameMs: 20, frameSamples: 960,
-  sourceEdgeFadeSamples: 96, safetyMs: 200, slewFraction: .01,
+  sourceEdgeFadeSamples: 96, safetyMs: 200, slewFraction: .01, frontierSlewFraction: .01, jumpQuietWaitMs: 0, frontierPromptReleaseMs: 100,
   readHeadCrossfadeMs: 5,
 };
 

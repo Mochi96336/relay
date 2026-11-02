@@ -1,4 +1,4 @@
-import { FallbackTargetJournal, SampleSongFallback } from './sample-song-fallback.js';
+import { FallbackPlacement, FallbackTargetJournal, SampleSongFallback } from './sample-song-fallback.js';
 import { ChoirRuntime, refuseChoirMessage } from './choir-runtime.js';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
 import type { loadRelayConfig } from './config.js';
-import { AudioSession } from './audio-session.js';
+import { AudioSession, MIC_WALK_LIMIT_MS } from './audio-session.js';
 import { BackingRuntime } from './backing-runtime.js';
 import { SourceRuntime } from './source-runtime.js';
 import { loadAudioTransportConfig } from './audio-transport-config.js';
@@ -1520,6 +1520,7 @@ function sourceStatusPayload() {
     robotFollowerSeekPreservesMapping: robotFollowerSeekMayPreserveMapping(nowMs),
     vocalFineTuneMs: alignment.fineTuneMs,
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
+    heardMicAdvanceMs: session.heardMicAdvanceMs,
     requestedMicAdvanceMs: session.requestedMicAdvanceMs,
     micFrontierCorrectionMs: session.micFrontierCorrectionMs,
   };
@@ -1546,7 +1547,7 @@ function takeQualityFrameState(nowMs = performance.now()) {
     ...(takeBlocksCalibration()
       ? {
           appliedCalibrationKind: alignment.calibratedMicLagMs === null ? 'none' as const : appliedCalibrationKind(),
-          ...(sampleSongPlacedVideoId !== null ? { estimateSource: 'sample-song' as const } : {}),
+          ...(fallbackPlacement.placed ? { estimateSource: 'sample-song' as const } : {}),
         }
       : {}),
   };
@@ -1702,11 +1703,13 @@ function timingCalibrationStatusPayload() {
     robotContentTransition: robotContentTransitionStatus(nowMs),
     fallbackNetworkMs: alignment.networkCompensationMs,
     sampleSongFallback: { candidateMs: sampleSongCandidateMs, selected: sampleSongSelected,
-      held: sampleSongPlacedVideoId !== null && !sampleSongSelected,
-      active: sampleSongPlacedVideoId !== null && alignment.calibratedMicLagMs === null, approximate: true,
+      held: fallbackPlacement.placed && !sampleSongSelected,
+      active: fallbackPlacement.placed && alignment.calibratedMicLagMs === null, approximate: true,
       evidence: sampleSongFallback.diagnostics(nowMs) },
     vocalFineTuneMs: alignment.fineTuneMs,
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
+    micReadHeadJumpWaitMs: session.micReadHeadJumpWaitMs,
+    heardMicAdvanceMs: session.heardMicAdvanceMs,
     requestedMicAdvanceMs: session.requestedMicAdvanceMs,
     probeCorrelation: bootProbe.correlations,
     probeActive: bootProbeInProgress(nowMs),
@@ -1919,8 +1922,7 @@ function retireMicCaptureTiming() {
 const sampleSongFallback = new SampleSongFallback();
 let sampleSongCandidateMs: number | null = null;
 let sampleSongSelected = false;
-/** The song whose sample/song estimate has placed this singer's voice; null until one has. */
-let sampleSongPlacedVideoId: string | null = null;
+const fallbackPlacement = new FallbackPlacement(MIC_WALK_LIMIT_MS);
 let robotSongObservation: Record<string, unknown> | null = null;
 let sampleSongEpoch: number | null = null;
 let sampleSongMicOwner: string | null = null;
@@ -1933,7 +1935,7 @@ function refreshLiveMicNetworkCompensation() {
     fallbackTargetJournal.reset();
     sampleSongEpoch = session.generation;
     sampleSongMicOwner = participants.micOwnerId;
-    sampleSongPlacedVideoId = null;
+    fallbackPlacement.reset();
     // Another singer's placement says nothing about this one.
     if (ownerChanged) session.setAlignment({ networkCompensationMs: 0 });
   }
@@ -1949,33 +1951,34 @@ function refreshLiveMicNetworkCompensation() {
     return;
   }
   sampleSongSelected = sampleSongCandidateMs !== null;
-  // Without a candidate the voice stays where it is. The transport estimate
-  // (half the control socket's RTT) once stood in here, but it measures
-  // neither the players' offset nor the phone's own delay, and not even the
-  // path the voice takes; it could sit a second from the song and on the
-  // other side of it, so every lapse in the anchors walked the voice away.
-  if (sampleSongCandidateMs !== null) {
-    if (sampleSongPlacedVideoId !== videoId || !session.active) {
-      // The first estimate for a song is taken at once: walking there at the
-      // slew rate from wherever the voice sat could take minutes.
-      session.setAlignment({ networkCompensationMs: sampleSongCandidateMs });
-      sampleSongPlacedVideoId = videoId;
-    } else {
-      // The mixer walks a later target per frame. Stepping it here by 1% of
-      // the time since the last call depended on how calls arrive: the live
-      // Robot capture lands 40 ms batches about every 42.7 ms, and 1% of that
-      // is just past the per-frame slew bound, so steps became crossfaded
-      // read-head jumps: the pops heard from singers whose boot probe failed.
-      session.slewNetworkCompensationTo(sampleSongCandidateMs);
-    }
+  // The transport estimate (half the control socket's RTT) once stood in
+  // for a missing candidate, but it measures neither the players' offset nor
+  // the phone's own delay, and not even the path the voice takes; it could sit
+  // a second from the song and on the other side of it.
+  const decision = fallbackPlacement.decide(
+    sampleSongCandidateMs, session.alignment.networkCompensationMs, videoId, performance.now(),
+  );
+  if (decision.kind === 'place') {
+    session.setAlignment({ networkCompensationMs: decision.ms });
+  } else if (decision.kind === 'walk') {
+    // The mixer walks a target per frame. Stepping it here by 1% of the time
+    // since the last call depended on how calls arrive: the live Robot capture
+    // lands 40 ms batches about every 42.7 ms, and 1% of that is just past the
+    // per-frame slew bound, so steps became crossfaded read-head jumps: the
+    // pops heard from singers whose boot probe failed.
+    session.slewNetworkCompensationTo(decision.ms);
+  } else {
+    // Holding stops a walk where it is, rather than finishing it toward an
+    // estimate that has lapsed or not been confirmed.
+    session.slewNetworkCompensationTo(session.alignment.networkCompensationMs);
   }
   noteFallbackTarget(timeline);
 }
 
 /**
  * Logs where an uncalibrated singer's fallback target comes from and how far it
- * moves. Each move walks the voice against the song, so a target that jumps
- * between sample/song and the transport estimate, or chases noise, is heard.
+ * moves. Each move walks or jumps the voice against the song, so a target that
+ * lapses, chases noise or keeps asking to jump is heard.
  */
 function noteFallbackTarget(timeline: ReturnType<typeof currentTimelineStatus>) {
   if (!session.active || !participants.micOwnerId) {
@@ -1988,7 +1991,7 @@ function noteFallbackTarget(timeline: ReturnType<typeof currentTimelineStatus>) 
     : timeline.state !== 1 ? 'not-playing'
     : sampleSongFallback.rejection;
   const source = sampleSongSelected ? 'sample-song' as const
-    : sampleSongPlacedVideoId === null ? 'unplaced' as const : 'held' as const;
+    : !fallbackPlacement.placed ? 'unplaced' as const : 'held' as const;
   const targetMs = session.networkCompensationTargetMs ?? session.alignment.networkCompensationMs;
   const nowMs = performance.now();
   const change = fallbackTargetJournal.note({ source, reason, targetMs }, nowMs);
@@ -2003,9 +2006,26 @@ function noteFallbackTarget(timeline: ReturnType<typeof currentTimelineStatus>) 
     calibrated: session.alignment.calibratedMicLagMs !== null,
     networkCompensationMs: Math.round(session.alignment.networkCompensationMs),
     appliedMicAdvanceMs: Math.round(session.appliedMicAdvanceMs),
+    heardMicAdvanceMs: session.heardMicAdvanceMs === null ? null : Math.round(session.heardMicAdvanceMs),
     micAnchorAgeMs: evidence.mic ? Math.round(evidence.mic.ageMs) : null,
     backingAnchorAgeMs: evidence.backing ? Math.round(evidence.backing.ageMs) : null,
   }));
+}
+
+/**
+ * Every read-head jump and walk, for the journal: a jump is the one move the
+ * mix can be heard making, and `quiet: false` says it was made over a voice.
+ */
+function logMicReadHeadEvents() {
+  const tenth = (value: number) => Math.round(value * 10) / 10;
+  for (const event of session.drainMicReadHeadEvents()) {
+    console.warn('[mic-read-head]', JSON.stringify(event.kind === 'jump'
+      ? {
+        ...event, fromMs: tenth(event.fromMs), toMs: tenth(event.toMs),
+        moved: Object.fromEntries(Object.entries(event.moved).map(([key, value]) => [key, value === null ? null : tenth(value)])),
+      }
+      : { ...event, fromMs: tenth(event.fromMs), toMs: tenth(event.toMs) }));
+  }
 }
 
 function startLiveSource() {
@@ -2536,6 +2556,7 @@ const youtubeTimelineTimer = setInterval(() => {
   const nowMs = performance.now();
   choir?.tick(nowMs);
   refreshLiveMicNetworkCompensation();
+  logMicReadHeadEvents();
 
   refreshPreparedSongHandoff(nowMs);
   if (
@@ -2832,12 +2853,15 @@ const takeCommands = createTakeCommandHandlers<RelaySocket>({
   songAt: takeSongSnapshot,
   timingAtStart: (nowMs) => ({
     appliedCalibrationKind: session.alignment.calibratedMicLagMs === null ? 'none' : appliedCalibrationKind(),
-    estimateSource: session.alignment.calibratedMicLagMs === null && sampleSongPlacedVideoId !== null
+    estimateSource: session.alignment.calibratedMicLagMs === null && fallbackPlacement.placed
       ? 'sample-song'
       : null,
     calibrationError: calibration.status().error ?? probeStatus(nowMs).error ?? null,
   }),
-  onStarted: (nowMs) => contentCalibration.standDownForTake(nowMs),
+  onStarted: (nowMs) => {
+    contentCalibration.standDownForTake(nowMs);
+    session.settleMicReadHead();
+  },
   send: sendJson,
 });
 

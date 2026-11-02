@@ -14,6 +14,7 @@ import {
   type PcmTimeline,
 } from './pcm-timeline.js';
 import { MicClockTrim } from './mic-clock-trim.js';
+import type { MicCalibrationAuthority } from './mic-read-head.js';
 import { MIC_FRONTIER_PROMPT_RELEASE_MS, MicFrontierCorrection } from './mic-frontier-correction.js';
 import { MicInputClipping } from './mic-input-clipping.js';
 import { MicGainRamp } from './mic-gain-ramp.js';
@@ -129,14 +130,14 @@ export const MIC_WALK_LIMIT_MS = 20;
 
 /**
  * How long a read-head jump may wait for a quiet moment before it goes
- * anyway. A singer breathes well within this; the voice sits where it was
- * meanwhile, which is where it sat before the correction arrived.
+ * anyway. Until then the voice stays where it was; nearby target updates
+ * share the same bounded wait even if the singer holds a longer note.
  */
 const MIC_JUMP_QUIET_WAIT_MS = 3_000;
 
 /**
- * Immediate authority changes must take effect immediately, but changing the
- * Mic read head by tens or hundreds of milliseconds in one sample is a splice.
+ * Once a jump is admitted, changing the Mic read head by tens or hundreds of
+ * milliseconds in one sample is a splice.
  * Fade from the previously-emitted trajectory into the new one over only a few
  * milliseconds: long enough to remove the discontinuity, short enough that the
  * timing authority is not audibly delayed.
@@ -274,6 +275,7 @@ export class AudioSession {
       frontierSlewFraction: MIC_FRONTIER_SLEW_FRACTION,
       readHeadCrossfadeMs: MIC_READ_HEAD_CROSSFADE_MS,
       jumpQuietWaitMs: options.micJumpQuietWaitMs ?? MIC_JUMP_QUIET_WAIT_MS,
+      walkLimitMs: this.micWalkLimitMs,
       frontierPromptReleaseMs: Math.min(MIC_FRONTIER_PROMPT_RELEASE_MS, this.micWalkLimitMs),
     };
     this.micTrack = new MicTrack(this.micTrackOptions);
@@ -414,9 +416,7 @@ export class AudioSession {
 
   stop() {
     this.running = false;
-    this.micTrack.alignmentState = { networkCompensationMs: 0, calibratedMicLagMs: null, fineTuneMs: 0 };
-    this.micTrack.calibratedMicLagTargetMs = null;
-    this.micTrack.networkCompensationTargetMs = null;
+    this.micTrack.readHead.clear();
     this.micTrack.calibrationUnfoldedSamples = 0;
     this.clearTimeline(this.mic);
     this.clearTimeline(this.backing);
@@ -436,10 +436,6 @@ export class AudioSession {
     this.clearTimeline(this.backing);
     // The frontier correction described the old timelines' positions.
     this.micFrontier.reset(this.mic.generation);
-    // A pending correction belongs to the old mix epoch. Preserve the value
-    // already being applied but do not continue walking an old target forward.
-    this.micTrack.calibratedMicLagTargetMs = this.micTrack.alignmentState.calibratedMicLagMs;
-    this.micTrack.networkCompensationTargetMs = null;
     this.bus.reset();
     this.micGain.reset();
     if (this.secondary) this.resetSecondary(this.secondary, false);
@@ -543,15 +539,15 @@ export class AudioSession {
       return;
     }
     const track = secondary.track;
-    const current = track.alignmentState.calibratedMicLagMs;
+    const current = track.readHead.alignment.calibratedMicLagMs;
     if (current === null || secondary.blend === 0 || !this.running) {
-      track.alignmentState = { ...track.alignmentState, calibratedMicLagMs: lagMs };
+      track.readHead.setAlignment({ calibratedMicLagMs: lagMs });
     } else if (Math.abs(lagMs - current) > SECONDARY_JUMP_MS) {
       secondary.pendingLagMs = lagMs;
     } else if (Math.abs(lagMs - current) > this.micWalkLimitMs) {
-      track.alignmentState = { ...track.alignmentState, calibratedMicLagMs: lagMs };
+      track.readHead.setAlignment({ calibratedMicLagMs: lagMs });
     }
-    if (secondary.pendingLagMs === null) track.calibratedMicLagTargetMs = lagMs;
+    if (secondary.pendingLagMs === null) track.readHead.walkCalibrationTo(lagMs, this.running);
     if (!secondary.detaching) secondary.audible = true;
   }
 
@@ -576,8 +572,9 @@ export class AudioSession {
     return {
       audible: secondary.audible,
       blend: secondary.blend,
-      lagMs: secondary.track.alignmentState.calibratedMicLagMs,
-      targetLagMs: secondary.pendingLagMs ?? secondary.track.calibratedMicLagTargetMs,
+      lagMs: secondary.track.readHead.alignment.calibratedMicLagMs,
+      targetLagMs: secondary.pendingLagMs ?? secondary.track.readHead.calibratedMicLagTargetMs,
+      heardAdvanceMs: secondary.track.readHead.heardMicAdvanceMs,
       gainDb: secondary.track.gain.targetDb,
       gapSamples: secondary.gapSamples,
       starvedSamples: secondary.starvedSamples,
@@ -599,22 +596,18 @@ export class AudioSession {
   private resetSecondary(secondary: SecondaryVoice, stopping: boolean) {
     const track = secondary.track;
     track.clockTrim.reset();
-    track.lastEmittedMicAdvanceSamples = null;
-    track.lastEmittedMicFrameComplete = false;
+    track.readHead.resetContinuity();
     track.lastEmittedMicSourceSample = null;
     track.captureRestarts.clear();
     track.clipping.clear();
     resetPcmTimeline(track.timeline);
     track.frontier.reset(track.timeline.generation);
     track.gain.reset();
-    track.calibratedMicLagTargetMs = track.alignmentState.calibratedMicLagMs;
-    track.networkCompensationTargetMs = null;
     secondary.pendingLagMs = null;
     // Its PCM is gone, and the frame count may restart.
     secondary.heardAtFrame = null;
     if (stopping) {
-      track.alignmentState = { networkCompensationMs: 0, calibratedMicLagMs: null, fineTuneMs: 0 };
-      track.calibratedMicLagTargetMs = null;
+      track.readHead.clear();
       secondary.audible = false;
       secondary.blend = 0;
     }
@@ -632,97 +625,44 @@ export class AudioSession {
   }
 
   get alignment(): AlignmentState {
-    return { ...this.micTrack.alignmentState };
+    return { ...this.micTrack.readHead.alignment };
   }
 
   /** Current target, equal to the applied lag when no runtime slew is pending. */
   get calibratedMicLagTarget() {
-    return this.micTrack.calibratedMicLagTargetMs;
+    return this.micTrack.readHead.calibratedMicLagTargetMs;
   }
 
   /** Immediate authority change used by existing initial/manual/robot semantics. */
   setAlignment(patch: Partial<AlignmentState>) {
-    this.micTrack.alignmentState = { ...this.micTrack.alignmentState, ...patch };
-    if (Object.prototype.hasOwnProperty.call(patch, 'calibratedMicLagMs')) {
-      this.micTrack.calibratedMicLagTargetMs = patch.calibratedMicLagMs ?? null;
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, 'networkCompensationMs')) {
-      this.micTrack.networkCompensationTargetMs = null;
-    }
+    this.micTrack.readHead.setAlignment(patch);
   }
 
-  /**
-   * The uncalibrated fallback's live counterpart of slewCalibratedMicLagTo:
-   * `mixFrame` walks the applied compensation to the target within the
-   * runtime slew bound, so a moving estimate never jumps the read head.
-   */
   slewNetworkCompensationTo(targetMs: number) {
-    if (!Number.isFinite(targetMs)) return;
-    if (!this.running) {
-      this.setAlignment({ networkCompensationMs: targetMs });
-      return;
-    }
-    const current = this.micTrack.alignmentState.networkCompensationMs;
-    if (targetMs !== current && this.micTrack.networkCompensationTargetMs === null) {
-      this.micTrack.noteReadHeadEvent({ kind: 'walk-start', what: 'network', fromMs: current, toMs: targetMs });
-    }
-    this.micTrack.networkCompensationTargetMs = targetMs === current ? null : targetMs;
+    this.micTrack.readHead.walkFallbackTo(targetMs, this.running);
   }
 
-  /** The main Mic's read-head jumps and walks since the last call, oldest first. */
-  drainMicReadHeadEvents() {
-    return this.micTrack.drainReadHeadEvents();
+  drainMicReadHeadEvents() { return this.micTrack.readHead.drainEvents(); }
+  get micReadHeadJumpWaitMs() { return this.micTrack.readHead.jumpWaitMs; }
+  get heardMicAdvanceMs() { return this.micTrack.readHead.heardMicAdvanceMs; }
+  get micReadHeadStatus() { return this.micTrack.readHead.status; }
+  get renderedCalibrationKind() { return this.micTrack.readHead.renderedCalibrationKind; }
+  get networkCompensationTargetMs() { return this.micTrack.readHead.networkCompensationTargetMs; }
+
+  /** No current fallback evidence: withdraw an unheard placement and freeze the emitted component. */
+  freezeFallbackAtHeard() { this.micTrack.readHead.freezeFallbackAtHeard(); }
+  resetFallbackForOwner() { this.micTrack.readHead.resetFallbackForOwner(); }
+
+  acceptMicCalibration(authority: MicCalibrationAuthority | null) {
+    this.micTrack.readHead.acceptCalibration(authority);
   }
 
-  /** How long a pending read-head jump has waited for a quiet moment; 0 when none waits. */
-  get micReadHeadJumpWaitMs() {
-    return this.micTrack.readHeadJumpWaitMs;
+  timingDivergenceMs(desiredLagMs: number | null) {
+    return this.micTrack.readHead.divergenceFrom(desiredLagMs, this.appliedMicAdvanceMs);
   }
 
-  /**
-   * Where the main Mic was last heard. It differs from `appliedMicAdvanceMs`
-   * while a jump waits for a quiet moment; null before any frame.
-   */
-  get heardMicAdvanceMs() {
-    return this.micTrack.heardMicAdvanceMs;
-  }
-
-  /**
-   * A Take freezes what is heard: walks stop where they are, and a jump still
-   * waiting for a quiet moment goes now rather than inside the recording.
-   */
-  settleMicReadHead() {
-    const track = this.micTrack;
-    if (track.alignmentState.calibratedMicLagMs !== null) {
-      track.calibratedMicLagTargetMs = track.alignmentState.calibratedMicLagMs;
-    }
-    track.networkCompensationTargetMs = null;
-    track.flushPendingJump();
-  }
-
-  /** Where a live network-compensation walk is heading; null when none is pending. */
-  get networkCompensationTargetMs() {
-    return this.micTrack.networkCompensationTargetMs;
-  }
-
-  /**
-   * Changes only the target. `mixFrame` advances the applied read head gradually
-   * so live validation cannot skip/repeat the full correction in one frame.
-   */
   slewCalibratedMicLagTo(targetMs: number) {
-    if (!Number.isFinite(targetMs)) return false;
-    const current = this.micTrack.alignmentState.calibratedMicLagMs;
-    if (current === null || !this.running || Math.abs(targetMs - current) > this.micWalkLimitMs) {
-      const changed = current !== targetMs || this.micTrack.calibratedMicLagTargetMs !== targetMs;
-      this.setAlignment({ calibratedMicLagMs: targetMs });
-      return changed;
-    }
-    if (this.micTrack.calibratedMicLagTargetMs === targetMs) return false;
-    if (this.micTrack.calibratedMicLagTargetMs === null || this.micTrack.calibratedMicLagTargetMs === current) {
-      this.micTrack.noteReadHeadEvent({ kind: 'walk-start', what: 'calibration', fromMs: current, toMs: targetMs });
-    }
-    this.micTrack.calibratedMicLagTargetMs = targetMs;
-    return true;
+    return this.micTrack.readHead.walkCalibrationTo(targetMs, this.running);
   }
 
   /** Every advance budget delegates to the canonical singer-owned MicTrack. */
@@ -1081,8 +1021,7 @@ export class AudioSession {
 
   /** Forgets the trajectory the last emitted Mic frame was read along. */
   private resetMicReadContinuity() {
-    this.micTrack.lastEmittedMicAdvanceSamples = null;
-    this.micTrack.lastEmittedMicFrameComplete = false;
+    this.micTrack.readHead.resetContinuity();
   }
 
   /** Where the session clock is now, in session samples since the epoch. */
@@ -1334,12 +1273,8 @@ export class AudioSession {
       ...(duet ? this.secondaryFrameEvidence(duet) : {}),
     };
 
-    this.micTrack.lastEmittedMicAdvanceSamples = boundedRuntimeAdvanceMoved
-      ? advanceSamplesExact
-      : advanceSamples;
-    this.micTrack.lastEmittedMicFrameComplete =
-      micReadEvidence.gapSamples === 0
-      && micReadEvidence.frontierMissingSamples === 0;
+    this.micTrack.readHead.emittedFrame(plan.readHeadFrame, startSample,
+      micReadEvidence.gapSamples === 0 && micReadEvidence.frontierMissingSamples === 0);
 
     this.trim(this.mic, startSample - this.retentionSamples);
     this.trim(this.backing, startSample - this.backingRetentionSamples);
@@ -1415,11 +1350,8 @@ export class AudioSession {
   private finishSecondaryFrame(duet: SecondaryFrame, startSample: number) {
     const { secondary, plan, read } = duet;
     const track = secondary.track;
-    track.lastEmittedMicAdvanceSamples = plan.boundedRuntimeAdvanceMoved
-      ? plan.advanceSamplesExact
-      : plan.advanceSamples;
-    track.lastEmittedMicFrameComplete = read.evidence.gapSamples === 0
-      && read.evidence.frontierMissingSamples === 0;
+    track.readHead.emittedFrame(plan.readHeadFrame, startSample,
+      read.evidence.gapSamples === 0 && read.evidence.frontierMissingSamples === 0);
     if (secondary.audible) {
       secondary.gapSamples += read.evidence.gapSamples;
       secondary.starvedSamples += read.evidence.frontierMissingSamples;
@@ -1430,8 +1362,7 @@ export class AudioSession {
     }
     // Faded out for a jump: B comes back in at the new lag from the next frame.
     if (secondary.pendingLagMs !== null && secondary.blend === 0) {
-      track.alignmentState = { ...track.alignmentState, calibratedMicLagMs: secondary.pendingLagMs };
-      track.calibratedMicLagTargetMs = secondary.pendingLagMs;
+      track.readHead.setAlignment({ calibratedMicLagMs: secondary.pendingLagMs });
       secondary.pendingLagMs = null;
     }
     trimPcmTimeline(track.timeline, startSample - this.retentionSamples);

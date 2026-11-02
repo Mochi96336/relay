@@ -16,6 +16,16 @@ const config = {
   readHeadCrossfadeMs: 5,
 };
 
+function emitAt(track: MicTrack, advanceSamples: number) {
+  const frame = track.readHead.plan({
+    frameSamples: 960, sampleRate: 48_000, startSample: 0,
+    previousAdvanceSamplesExact: advanceSamples - .1,
+    appliedAdvanceMs: advanceSamples * 1000 / 48_000,
+    runtimeCalibrationSlewFraction: .01, readHeadCrossfadeMs: 5,
+  }, 0, { mayWait: false, canKeepReading: () => true, quiet: () => false });
+  track.readHead.emittedFrame(frame, 0, true);
+}
+
 describe('extracted MicTrack owns per-singer components independently', () => {
   test('two tracks allocate separate buffers, per-capture dynamics and clocks', () => {
     const a = new MicTrack(config);
@@ -38,11 +48,10 @@ describe('extracted MicTrack owns per-singer components independently', () => {
     assert.equal(b.timeline.generation, null);
     assert.equal(a.gain.targetDb, 6);
     assert.equal(b.gain.targetDb, 24, 'independent B keeps the Relay default +24 dB');
-    a.alignmentState.calibratedMicLagMs = 220;
-    a.calibratedMicLagTargetMs = 330;
-    a.lastEmittedMicAdvanceSamples = 1234;
+    a.readHead.setAlignment({ calibratedMicLagMs: 220 });
+    a.readHead.walkCalibrationTo(330, true);
+    emitAt(a, 1234);
     a.lastEmittedMicSourceSample = 4321;
-    a.lastEmittedMicFrameComplete = true;
     a.calibrationUnfoldedSamples = 120;
     a.micHeadroomMs = 180;
     a.micConcealedSamples = 220;
@@ -50,11 +59,11 @@ describe('extracted MicTrack owns per-singer components independently', () => {
     a.micUnplayableRunFrames = 6;
     a.micCaptureOriginSample = 88;
     a.micLimiterResetPending = true;
-    assert.equal(b.alignmentState.calibratedMicLagMs, null);
-    assert.equal(b.calibratedMicLagTargetMs, null);
-    assert.equal(b.lastEmittedMicAdvanceSamples, null);
+    assert.equal(b.readHead.alignment.calibratedMicLagMs, null);
+    assert.equal(b.readHead.calibratedMicLagTargetMs, null);
+    assert.equal(b.readHead.emittedAdvanceSamples, null);
     assert.equal(b.lastEmittedMicSourceSample, null);
-    assert.equal(b.lastEmittedMicFrameComplete, false);
+    assert.equal(b.readHead.emittedFrameComplete, false);
     assert.equal(b.calibrationUnfoldedSamples, 0);
     assert.equal(b.micHeadroomMs, 0);
     assert.equal(b.micConcealedSamples, 0);
@@ -213,11 +222,11 @@ describe('extracted MicTrack owns per-singer components independently', () => {
   test('capture edges and calibration slew affect only their own track', () => {
     const a = new MicTrack(config);
     const b = new MicTrack(config);
-    a.alignmentState.calibratedMicLagMs = 100;
-    a.calibratedMicLagTargetMs = 120;
-    a.advanceCalibrationSlew();
-    assert.ok(Math.abs(a.alignmentState.calibratedMicLagMs! - 100.2) < 1e-9);
-    assert.equal(b.alignmentState.calibratedMicLagMs, null);
+    a.readHead.setAlignment({ calibratedMicLagMs: 100 });
+    a.readHead.walkCalibrationTo(120, true);
+    a.readHead.advanceWalks();
+    assert.ok(Math.abs(a.readHead.alignment.calibratedMicLagMs! - 100.2) < 1e-9);
+    assert.equal(b.readHead.alignment.calibratedMicLagMs, null);
 
     a.lastEmittedMicSourceSample = 99;
     a.captureRestarts.queue(100);
@@ -245,8 +254,8 @@ describe('extracted MicTrack owns per-singer components independently', () => {
       track.timeline.chunks.push({ start: 0, samples, positioned: true });
       track.timeline.totalSamples = samples.length;
     }
-    a.alignmentState.calibratedMicLagMs = 120;
-    b.alignmentState.calibratedMicLagMs = -340;
+    a.readHead.setAlignment({ calibratedMicLagMs: 120 });
+    b.readHead.setAlignment({ calibratedMicLagMs: -340 });
     const planA = a.planMicRead(roomSample, false);
     const planB = b.planMicRead(roomSample, false);
     assert.equal(planA.micReadStart, roomSample + advanceA);
@@ -259,15 +268,15 @@ describe('extracted MicTrack owns per-singer components independently', () => {
     assert.equal(frameB.samples[eventWithinFrame], 16_000);
     assert.equal(frameA.evidence.gapSamples, 0);
     assert.equal(frameB.evidence.frontierMissingSamples, 0);
-    assert.equal(a.alignmentState.calibratedMicLagMs, 120);
-    assert.equal(b.alignmentState.calibratedMicLagMs, -340);
+    assert.equal(a.readHead.alignment.calibratedMicLagMs, 120);
+    assert.equal(b.readHead.alignment.calibratedMicLagMs, -340);
   });
 
   test('one singer frontier starvation does not modify another singer planner', () => {
     const a = new MicTrack(config);
     const b = new MicTrack(config);
     for (const track of [a, b]) {
-      track.alignmentState.calibratedMicLagMs = 80;
+      track.readHead.setAlignment({ calibratedMicLagMs: 80 });
       track.timeline.chunks.push({ start: 0, samples: new Int16Array(24_000), positioned: true });
       track.timeline.totalSamples = 24_000;
     }
@@ -479,7 +488,7 @@ describe('extracted MicTrack owns per-singer components independently', () => {
       track.timeline.originOffset = 40;
       track.micCaptureOriginSample = 0;
       track.lastEmittedMicSourceSample = 480;
-      track.lastEmittedMicAdvanceSamples = 15.5;
+      emitAt(track, 15.5);
     }
     a.rebaseCaptureTimeline(120);
     assert.equal(a.timeline.chunks[0].start, 120);
@@ -487,13 +496,13 @@ describe('extracted MicTrack owns per-singer components independently', () => {
     assert.equal(a.timeline.originOffset, 160);
     assert.equal(a.micCaptureOriginSample, 120);
     assert.equal(a.lastEmittedMicSourceSample, 600);
-    assert.equal(a.lastEmittedMicAdvanceSamples, 135.5);
+    assert.equal(a.readHead.emittedAdvanceSamples, 135.5);
     assert.equal(b.timeline.chunks[0].start, 0);
     assert.equal(b.timeline.totalSamples, 960);
     assert.equal(b.timeline.originOffset, 40);
     assert.equal(b.micCaptureOriginSample, 0);
     assert.equal(b.lastEmittedMicSourceSample, 480);
-    assert.equal(b.lastEmittedMicAdvanceSamples, 15.5);
+    assert.equal(b.readHead.emittedAdvanceSamples, 15.5);
     a.rebaseCaptureTimeline(-120);
     assert.equal(a.timeline.chunks[0].start, 0);
     assert.equal(a.timeline.originOffset, 40);

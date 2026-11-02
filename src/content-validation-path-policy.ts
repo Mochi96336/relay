@@ -2,7 +2,6 @@ import type { TimingCalibrationKind } from './timing-runtime.js';
 
 export type ContentValidationPathPrerequisiteInput = {
   enabled: boolean;
-  takeBlocked: boolean;
   bootProbeSettled: boolean;
   robotRouteActive: boolean;
   robotEvidenceMappingReady: boolean;
@@ -32,7 +31,7 @@ export type ContentValidationLivePathInput = {
 export function contentValidationPathPrerequisitesReady(
   input: ContentValidationPathPrerequisiteInput,
 ) {
-  if (!input.enabled || input.takeBlocked) return false;
+  if (!input.enabled) return false;
   if (!input.bootProbeSettled) return false;
   if (input.robotRouteActive && !input.robotEvidenceMappingReady) return false;
   return input.sessionActive && !input.calibrationCollecting;

@@ -10,22 +10,14 @@ import {
   sleep,
   startRelay,
   toInt16,
+  waitForNewMessage,
   type RelayServer,
 } from './helpers/harness.js';
 import { registerPlayback } from './support/client-commands.js';
 
-/**
- * A Take deliberately freezes the mixer alignment for the whole recording,
- * because moving the Mic read head mid-take splices the voice audibly. The
- * mapping underneath is not frozen: the Robot player keeps drifting against the
- * room, and `syncAppliedCalibration()` is refused for the duration.
- *
- * Nothing else in the quality policy witnesses that. The measurement stays
- * valid, so `calibrationStale` is false; the Robot keeps reporting, so
- * `robotDeltaFresh` is true; no transport changes, so no instability event
- * fires. Before this evidence existed the room could record a WAV known to be
- * hundreds of milliseconds out of alignment and still publish it as `clean`.
- */
+/** Recording witnesses the same live timing error as Listen, including quiet
+ * waits and frontier constraints. Passive corrections continue during the Take;
+ * missing mapping evidence cannot invent a new measured divergence. */
 
 const RATE = 48_000;
 const FRAME_SAMPLES = Math.round(RATE * 0.02);
@@ -38,6 +30,9 @@ const MASTER_SECONDS = 60;
 const VIDEO = 'dQw4w9WgXcQ';
 
 const FAST = {
+  // Afford both 270 and 570 ms so this case exercises the normal quiet wait,
+  // rather than a buffer clamp that independently explains the timing error.
+  RELAY_LIVE_PREBUFFER_MS: '1000',
   // Turning the audible boot probe off leaves the Robot route itself intact, so
   // this room goes straight to content authority. That is also the behavioural
   // half of ARCHITECTURE_BOUNDARIES.md section 7: a strategy flag may not
@@ -185,7 +180,9 @@ async function waitForContentAuthority(monitor: RelayClient, expectedMs: number,
     last = statuses.at(-1) ?? last;
     const match = statuses.find((status) => status.calibrationKind === 'content'
       && status.timingMode === 'acoustic-calibration'
-      && Math.abs(Number(status.activeMicLagMs) - expectedMs) <= 60);
+      && Math.abs(Number(status.activeMicLagMs) - expectedMs) <= 60
+      && status.micReadHead?.renderedCalibration?.kind === 'content'
+      && status.micReadHead?.settled?.authority?.kind === 'content');
     if (match) return match;
   }
   throw new Error(`Timed out waiting for content authority. Last=${JSON.stringify(last ?? null)}`);
@@ -214,11 +211,13 @@ async function verifyTakeTimingQuality(driftedDeltaMs: number, withinResidualRan
     ), 10_000);
     const takeId = String(accepted.takeId);
 
-    // The player drifts away from the room while the recording holds its
-    // alignment. Within-range drift changes mapping; beyond-range convergence
-    // removes residual authority. Neither may be published as a clean Take.
+    // The shared live read head follows mapping changes through its normal
+    // policy. The recording preserves any timing error heard along the way.
     stream.driftTo(driftedDeltaMs);
     await sleep(2_500);
+    const statusFrom = room.monitor.messages.length;
+    room.monitor.send({ type: 'timing-calibration-status-request' });
+    const live = await waitForNewMessage(room.monitor, statusFrom, message => message.type === 'timing-calibration-status');
 
     room.singer.send({ type: 'stop-take', takeId });
     const ready = await room.singer.waitFor((message) => (
@@ -254,10 +253,8 @@ async function verifyTakeTimingQuality(driftedDeltaMs: number, withinResidualRan
         `expected a timing-diverged issue, got ${codes.join(',')}`,
       );
       // The drift is charged at its real size rather than as a flag.
-      assert.equal(
-        Math.round(quality.evidence.peakTimingDivergenceMs),
-        driftedDeltaMs - INITIAL_DELTA_MS,
-      );
+      assert.ok(quality.evidence.peakTimingDivergenceMs > 150, 'include any real frontier/quiet-wait error');
+      assert.ok(Number(live.activeMicLagMs) > appliedAtStart, 'recording cannot freeze accepted live correction');
 
       // None of the signals a reader would expect to catch this actually fire:
       // the measurement stayed valid, the Robot kept reporting, and the mixer
@@ -267,12 +264,14 @@ async function verifyTakeTimingQuality(driftedDeltaMs: number, withinResidualRan
     } else {
       assert.ok(quality.evidence.robotDeltaMissingMs > 0, 'convergence must lose residual authority');
       assert.ok(codes.includes('robot-delta-missing'));
-      assert.equal(quality.evidence.timingDivergedMs, 0, 'an unusable delta is not a measured divergence');
-      assert.equal(quality.evidence.peakTimingDivergenceMs, 0);
-      assert.ok(!codes.includes('timing-diverged'));
+      assert.equal(live.desiredCalibratedMicLagMs, null, 'unavailable live mapping has no measurable target');
+      // Earlier frames may already have experienced a real divergence before
+      // residual authority was withdrawn. Do not erase that recorded history.
     }
     assert.notEqual(quality.verdict, 'clean');
-    assert.equal(Number(quality.evidence.networkEstimateMs), 0);
+    if (withinResidualRange) assert.equal(Number(quality.evidence.networkEstimateMs), 0);
+    // With missing mapping, the shared live mixer may legitimately revoke
+    // acoustic authority and fall back during the same recording.
     assert.equal(quality.evidence.events['robot-source-replaced'], 0);
     assert.equal(quality.evidence.events['backing-capture-restarted'], 0);
 
@@ -286,7 +285,7 @@ async function verifyTakeTimingQuality(driftedDeltaMs: number, withinResidualRan
   }
 }
 
-test('a Take whose Robot mapping drifts under its frozen alignment is not published as clean',
+test('a Take records live timing divergence while its read head continues correcting',
   () => verifyTakeTimingQuality(DRIFTED_DELTA_MS, true));
 
 test('a Take whose Robot leaves the residual range records missing authority instead of a false drift measurement',

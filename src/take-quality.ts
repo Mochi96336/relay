@@ -32,9 +32,9 @@ export type TakeQualityFrameState = {
    * Applied mixer alignment subtracted from the alignment the current mapping
    * asks for, or null while there is no applicable answer to compare against.
    *
-   * A recording deliberately freezes the applied value, so this is the one
-   * timing fault with no other witness: the measurement stays valid, every
-   * transport stays up, and the WAV still drifts.
+   * Measures the live target against the emitted read head, including a quiet
+   * wait. Recording observes the same divergence as listeners; it does not
+   * freeze or independently correct the mix.
    */
   timingDivergenceMs: number | null;
   /** Which measurement the mixer applied for this frame, when it applied one. */
@@ -43,7 +43,7 @@ export type TakeQualityFrameState = {
   estimateSource?: 'sample-song' | 'transport';
 };
 
-/** What the room's timing was when the Take started; it stays frozen until Stop. */
+/** Immutable admission snapshot; per-frame provenance follows the live mix. */
 export type TakeTimingAtStart = {
   appliedCalibrationKind: 'none' | 'content' | 'boot-probe';
   estimateSource: 'sample-song' | 'transport' | null;
@@ -379,16 +379,14 @@ export function assessTakeQuality(evidence: TakeQualityEvidence): TakeQualityAss
     });
   }
 
-  // A Take freezes the mixer alignment on purpose, so divergence is not a
-  // transport failure and no other signal reports it. Without this a recording
-  // made against a mapping the room had already left still assessed as clean.
+  // Preserve live timing error even while the normal correction is still pending.
   addDurationIssue(
     issues,
     'timing-diverged',
     evidence.timingDivergedMs,
     `The recorded alignment drifted up to ${Math.round(evidence.peakTimingDivergenceMs)} ms `
     + `from the timing the Robot content mapping asked for - past the ${Math.round(evidence.timingDivergenceToleranceMs)} ms `
-    + 'the mixer would have corrected - while the Take held it frozen.',
+    + 'normal live correction tolerance.',
   );
 
   const instabilityEvents =

@@ -40,8 +40,8 @@ export type ChoirRuntimeDeps = {
     playing: (nowMs: number) => boolean;
     playbackRate: (nowMs: number) => number;
   };
-  /** A Take records or finalizes: alignment holds. */
-  takeBlocksCalibration: () => boolean;
+  /** A Take records or finalizes: do not inject an audible test tone. */
+  audibleProbeBlocked: () => boolean;
   robot: {
     /** The Robot can be asked for notes now (connected, not mid boot probe). */
     available: () => boolean;
@@ -467,7 +467,7 @@ export class ChoirRuntime {
       case 'choir-probe-request': {
         // B's own Realign: only B's test tone; the main Mic's alignment is untouched.
         const generation = deps.session.secondaryMicGeneration;
-        if (generation !== null && !deps.takeBlocksCalibration()
+        if (generation !== null && !deps.audibleProbeBlocked()
           && this.probe.realign(`${joined.secondaryId}:${generation}`, nowMs)) {
           logChoir('b-realign', {});
           deps.productStatusChanged();
@@ -581,7 +581,7 @@ export class ChoirRuntime {
   private tickSecondaryProbe(secondaryId: string, nowMs: number) {
     const { session } = this.deps;
     const generation = session.secondaryMicGeneration;
-    if (generation !== null && !session.secondaryMic?.audible && !this.deps.takeBlocksCalibration()) {
+    if (generation !== null && !session.secondaryMic?.audible && !this.deps.audibleProbeBlocked()) {
       this.probe.begin(`${secondaryId}:${generation}`, nowMs);
     }
     this.probe.tick(nowMs);
@@ -619,7 +619,7 @@ export class ChoirRuntime {
     return { lagMs: session.requestedMicAdvanceMs, source: 'no-song' };
   }
 
-  /** Place B on the shared Listen/Take output, holding alignment during a Take. */
+  /** Place B on the shared Listen/Take output; recording is a passive tap. */
   private placeSecondary(nowMs: number) {
     const { deps } = this;
     const { session } = deps;
@@ -644,7 +644,6 @@ export class ChoirRuntime {
       logChoir('b-lag-source', { source, lagMs: Math.round(lagMs) });
       this.lastLagSource = source;
     }
-    if (deps.takeBlocksCalibration() && session.secondaryMic.audible) return;
     session.setSecondaryMicLag(lagMs);
   }
 }

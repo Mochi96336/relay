@@ -353,8 +353,9 @@ real-device checks remain the gate on enabling the recovery timer unattended.
 
 When no acoustic calibration is applied, the voice is placed by valid matching
 phone/Robot sample-to-YouTube observations. The first estimate for a song is
-taken at once; later ones are walked to at the slew rate. Missing evidence holds
-the last placement. RTT/2 no longer places the voice: it measures neither the
+accepted at once; later small corrections walk and large corrections require
+agreement before a quiet jump. Missing evidence holds the last emitted fallback
+placement. RTT/2 no longer places the voice: it measures neither the
 players' offset nor the phone's own delay. `RELAY_SAMPLE_SONG_FALLBACK` is
 retired and ignored. Boot/content authority retains priority. Existing YouTube
 room-clock RTT estimation is unchanged.
@@ -374,7 +375,11 @@ historical coordinates more than one second old are rejected. Within that
 short interval, individual sample insertions/removals are approximated by the
 current transform. Later estimates within 20 ms are walked to at 0.2% of real
 time; further ones, once they hold for a second, are jumped to at a quiet
-moment. Placement freezes during a Take. Diagnostics in
+moment. Missing or unconfirmed evidence stops a walk at its last emitted
+placement and withdraws a fallback jump that has not yet been heard. A Take taps
+that same live mix: it neither freezes walks nor forces quiet-wait jumps.
+Passive calibration continues during recording; audible test probes wait.
+Diagnostics in
 `timing-calibration-status.sampleSongFallback` include candidate, selected,
 held and active (a sample/song placement in force without acoustic
 calibration). `[mic-read-head]` journals every read-head jump and walk.
@@ -412,12 +417,13 @@ Capture/song counts are separate from row counts. Thirty-second block summaries
 show persistence over time and are not claimed to be independent trials.
 
 Timing diagnostics also expose `desiredCalibratedMicLagMs` (live-coordinate
-calibration target before jitter hold, Take freeze and slew) and
+calibration target before jitter hold, slew and quiet wait) and
 `calibratedMicLagTargetMs` (the mixer's slew target). The collector saves the
 Content target as `contentLiveTargetMs`, which the offline comparison prefers.
 A Content authority label alone does not prove the read head moved. A newly
 confirmed calibration revision now bypasses the Robot jitter hold once, while
-Take freezes and mapping holds retain the pending revision until it can apply.
+Mapping holds retain the pending revision until it can apply. Recording does
+not freeze the shared read head.
 The same authority continues to use the normal jitter policy. Diagnostics expose
 `confirmedCalibrationRevision` and `mixerCalibrationAuthority` so the confirmed
 revision can be compared with the applied revision. For old logs without a live

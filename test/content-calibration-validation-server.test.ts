@@ -140,7 +140,10 @@ describe('continuous content calibration validation server policy', () => {
       refreshLivePath(session);
       await waitForValidationCollection(monitor, collectingFrom, session);
       const stableFrom = monitor.messages.length;
-      const stablePair = laggedPair(8, RATE, baselineLag, 17);
+      // Reuse the original injected lag. The measured baseline also contains
+      // the sockets' relative capture-origin bias; injecting it again would
+      // count that bias twice and manufacture drift on a busy machine.
+      const stablePair = laggedPair(8, RATE, 260, 17);
       await Promise.all([
         sendPcmInChunks(backing, stablePair.backing),
         sendPcmInChunks(publisher, stablePair.mic),
@@ -364,6 +367,13 @@ describe('continuous content calibration validation server policy', () => {
       }
       assert.ok(landed, 'the heard read head should land on the validated lag');
       assert.ok(Math.abs(Number(landed.activeCalibratedMicLagMs) - promotedLag) < 1);
+      const receiptFrom = monitor.messages.length;
+      monitor.send({ type: 'timing-calibration-status-request' });
+      const receipt = await waitForNewMessage(monitor, receiptFrom, m => m.type === 'timing-calibration-status');
+      assert.equal(receipt.micReadHead.renderedCalibration.kind, 'content');
+      assert.equal(receipt.micReadHead.renderedCalibration.revision, receipt.confirmedCalibrationRevision);
+      assert.equal(receipt.micReadHead.settled.authority.revision, receipt.confirmedCalibrationRevision);
+      assert.ok(Number.isSafeInteger(receipt.micReadHead.settled.atSample));
 
       backing.close();
       publisher.close();

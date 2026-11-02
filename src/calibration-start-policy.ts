@@ -69,7 +69,7 @@ export function decideCalibrationStart(
 ): CalibrationStartDecision {
   const mode: CalibrationStartMode = facts.robotProbeTimingActive ? 'boot-probe' : 'content';
 
-  if (facts.takeLifecycle === 'recording' || facts.takeLifecycle === 'finalizing') {
+  if (mode === 'boot-probe' && (facts.takeLifecycle === 'recording' || facts.takeLifecycle === 'finalizing')) {
     return { ok: false, mode, reason: 'take-active' };
   }
   if (facts.bootProbeCalibrationActive) return { ok: false, mode, reason: 'calibration-active' };

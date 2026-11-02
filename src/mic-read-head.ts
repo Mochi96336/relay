@@ -165,7 +165,12 @@ export class MicReadHead {
     this.fallbackBaseline = 0;
   }
 
-  /** New PCM epoch: retire motion and audible receipts, retaining current alignment. */
+  /**
+   * New PCM epoch: retire motion and audible receipts, retaining current
+   * alignment and the authority it was accepted under. Upstream may hold
+   * rather than re-accept an unchanged lag, so forgetting the authority here
+   * would report a retained calibration as none.
+   */
   resetContinuity() {
     this.epoch++;
     this.cancelWalk('calibration');
@@ -177,7 +182,6 @@ export class MicReadHead {
     this.complete = false;
     this.emitted = null;
     this.fallbackBaseline = this.value.networkCompensationMs;
-    this.acceptedAuthority = null;
     this.renderedAuthority = null;
     this.settlement = null;
     this.beginRequest();
@@ -185,6 +189,7 @@ export class MicReadHead {
 
   clear() {
     this.setAlignment({ calibratedMicLagMs: null, networkCompensationMs: 0, fineTuneMs: 0 });
+    this.acceptedAuthority = null;
     this.resetContinuity();
   }
 

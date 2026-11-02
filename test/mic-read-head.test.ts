@@ -153,3 +153,19 @@ test('inactive fallback updates cannot restart a calibration wait or block its e
   assert.equal(f.head.status.phase, 'settled');
   assert.equal(f.head.status.settled?.authority?.revision, 2);
 });
+
+test('a new PCM epoch keeps the authority its retained calibration was accepted under', () => {
+  const f = fixture();
+  f.head.acceptCalibration({ kind: 'boot-probe', revision: 3 });
+  f.head.setAlignment({ calibratedMicLagMs: 120 });
+  f.emit(120);
+  assert.equal(f.head.renderedCalibrationKind, 'boot-probe');
+  // A Boot hold does not re-accept an unchanged lag after the reset.
+  f.head.resetContinuity();
+  assert.equal(f.head.status.acceptedCalibration?.revision, 3);
+  assert.equal(f.head.renderedCalibrationKind, 'none', 'nothing has been heard in the new epoch yet');
+  f.emit(120);
+  assert.equal(f.head.renderedCalibrationKind, 'boot-probe');
+  f.head.clear();
+  assert.equal(f.head.status.acceptedCalibration, null);
+});

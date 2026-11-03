@@ -28,8 +28,8 @@ export declare function decideFollowerAction(
   local: {
     ready: boolean; videoId: string | null; positionSeconds: number;
     playbackRate: number; playerState: number; rateAttempted?: boolean;
-    /** The server asked for a lead the player has not been moved to yet. */
-    leadPending?: boolean;
+    /** How far the lead the player has not been moved to yet moves it, in media seconds. */
+    leadShiftSeconds?: number;
   },
   nowMs: number,
   lastSeekAtMs: number,

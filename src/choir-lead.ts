@@ -12,10 +12,17 @@
  *
  * The lag is read only from anchors taken after B's follower applied the
  * current lead (B reports the lead its player was last moved to), so a
- * measurement from before the move never counts twice.
+ * measurement from before the move never counts twice. B's follower moves its
+ * song by the change in lead from where it is, so the lag moves by exactly as
+ * much.
+ *
+ * The lead belongs to one singer: the same B back (a reload, a media
+ * reconnect) keeps it, since its path is the same and a reset would move its
+ * song back and then ahead again; another singer starts at none.
  */
 export class ChoirLead {
   private lead = 0;
+  private owner: string | null = null;
   /** The lead B's page last said its player runs at. */
   private reported = 0;
   /** Anchors in a row that report the current lead. */
@@ -34,8 +41,18 @@ export class ChoirLead {
   } = { targetMs: -100, lateMs: 100, earlyMs: -600, maxLeadMs: 3_000, settleAnchors: 4 }) {}
 
   get leadMs() { return this.lead; }
-  /** What B's player runs at now, as B reported it; B's probe lag counts it. */
+  /** What B's player runs at now, as B reported it. */
   get appliedMs() { return this.reported; }
+
+  /** B hears its song ahead of the room now: a song plays, and B's player runs at a lead. */
+  playsAhead(songPlaying: boolean) { return songPlaying && this.reported > 0; }
+
+  /** The singer now in the second seat: another singer starts at no lead. */
+  singer(id: string) {
+    if (id === this.owner) return;
+    this.reset();
+    this.owner = id;
+  }
 
   /** A song-time anchor from B's page, with the lead its player was last moved to. */
   anchor(reportedMs: number) {
@@ -58,7 +75,7 @@ export class ChoirLead {
     return next;
   }
 
-  reset() {
+  private reset() {
     this.lead = 0;
     this.reported = 0;
     this.confirmed = 0;

@@ -50,12 +50,13 @@ The room cannot wait for B. The mixer reads at most prebuffer − safety ahead i
 Instead, the server moves B's local song ahead of the room (`choir-lead.ts`):
 - When B's YouTube-time lag is over 100 ms, or under −600 ms, the server sends `choir-secondary-lead { leadMs }` on B's join socket.
 - The new lead puts B's lag at −100 ms. That leaves room for B's device latency (Bluetooth output and input), which YouTube time does not see. A lag below zero only reads B's history.
-- B's follower seeks once to room time + lead, and its anchors report the lead it was last moved to (`leadMs`).
+- B's follower seeks once, by the change in lead from where B's song is, so B's lag moves by exactly as much; a B already out of step (450 ms) goes back to room time + lead. Its anchors report the lead it was last moved to (`leadMs`).
 - The server trusts B's lag only after four anchors at the current lead, so a measurement from before the move never counts twice.
-- A move discards the Content measurement, and B's probe lag counts the lead.
-- A new B voice starts at no lead.
+- A move discards the Content measurement. While B's song plays ahead, YouTube time places B before the probe: the probe measures B's device as if B's player were at room time, and cannot see how far from it B's player was (the reason for the lead). With no song, B hears nothing ahead and the probe places B as before.
+- The lead belongs to the singer: the same B back (a reload, a media reconnect) keeps it, and its page keeps it while the follower is hidden; another singer starts at no lead.
+- Ahead of the room, B's song ends first, and it is not started over.
 
-The journal line is `b-lead`. `b-lag`/`b-lag-source` carry `appliedMs`, the lag the mixer actually reads. `/statusz` has `audio.duetLead`, and `duetSecondary.appliedLagMs`.
+The journal line is `b-lead`. `b-lag`/`b-lag-source` carry `appliedMs`, the lag the mixer actually reads at that moment (it trails a jump in `lagMs` by a fade). `/statusz` has `audio.duetLead`, and `duetSecondary.appliedLagMs`.
 
 Each song is measured afresh; a pause or seek keeps the last Content measurement. While a song plays, a lapse in every source keeps B where it was last placed. A change in B's lag over 100 ms fades B out, jumps and fades B back in, instead of the 1% slew taking minutes over it. While a Take records, an audible B keeps its lag, as A's alignment does.
 

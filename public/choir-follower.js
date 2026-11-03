@@ -26,7 +26,8 @@ let lastPlayAttemptMs = Number.NEGATIVE_INFINITY;
 let lastAction = null;
 let actionSeq = 0;
 // How far ahead of the room B's song plays, as the server asks (the mixer
-// cannot wait for B), and the lead B's player was last moved to.
+// cannot wait for B), and the lead B's player was last moved to. Kept while
+// the follower is hidden: the server says it again when it differs.
 let leadMs = 0;
 let appliedLeadMs = 0;
 let generation = 0;
@@ -117,8 +118,6 @@ function showFollower() {
   if (!visible) {
     startAttempts = 0;
     retryAtMs = 0;
-    leadMs = 0;
-    appliedLeadMs = 0;
     setLocalPlayback(false);
     if (player || starting) resetPlayer();
     setStatus(null);
@@ -345,7 +344,7 @@ function tick() {
       playbackRate: Number(player.getPlaybackRate()),
       playerState: Number(player.getPlayerState()),
       rateAttempted: attemptedRate === room.playbackRate,
-      leadPending: appliedLeadMs !== leadMs,
+      leadShiftSeconds: (leadMs - appliedLeadMs) * room.playbackRate / 1000,
     };
   } catch {
     setStatus('choir.followerLoading');

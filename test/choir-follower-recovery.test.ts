@@ -172,6 +172,15 @@ test('B\'s song moves to the lead the server asks for, and its anchors say so on
   assert.deepEqual(p.calls, ['seek'], 'B at its lead is not moved again');
   f.emit('relay-choir-media-message', { type: 'choir-secondary-lead', leadMs: -5 });
   assert.equal(f.report().leadMs, 1_600, 'a lead below zero is refused');
+  // The follower hides (a control reconnect, B leaving): the lead stays, so a
+  // new player starts at it rather than at the room and then jumps.
+  f.emit('relay-choir-guest-state', { enabled: false });
+  f.emit('relay-choir-guest-state', { enabled: true });
+  await f.advance(500);
+  assert.equal(f.players.length, 2);
+  assert.equal(f.players[1].config.playerVars.start, 81);
+  assert.equal(f.report().leadMs, 1_600);
+  assert.equal(f.report().appliedLeadMs, 1_600);
 });
 
 test('a slow player load keeps being retried, more slowly, and ignores retired iframe callbacks', async () => {

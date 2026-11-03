@@ -169,9 +169,12 @@ export class ChoirRuntime {
         session.attachSecondaryMic();
         if (this.secondaryGainDb !== null) session.setSecondaryMicGainDb(this.secondaryGainDb);
         this.content.reset('b-attached', { hard: true });
-        // A new voice starts at the room's time; a rejoining page may still run ahead.
-        this.lead.reset();
+        this.lead.singer(participantId);
         this.sendLead(nowMs);
+        // A fresh track is placed afresh: its first lag is journaled as a source.
+        this.lastLagSource = null;
+        this.loggedLag = null;
+        this.lagHeld = false;
       }
       const ingested = session.ingestSecondaryMic(frame, sampleRate, nowMs);
       if (!ingested) return;
@@ -367,7 +370,7 @@ export class ChoirRuntime {
       duetContent: this.content.status(),
       duetProbe: this.probe.status(),
       duetYoutube: { lagSource: this.lastLagSource, ...this.sampleSong.diagnostics(nowMs) },
-      duetLead: { leadMs: this.lead.leadMs, appliedMs: this.lead.appliedMs },
+      duetLead: this.seat.active() ? { leadMs: this.lead.leadMs, appliedMs: this.lead.appliedMs } : null,
     };
   }
 
@@ -621,8 +624,8 @@ export class ChoirRuntime {
 
   /**
    * Choose the first usable measurement together with its diagnostic source.
-   * Content is relative to A; B's probe remains valid with or without a song.
-   * YouTube time comes last.
+   * Content is relative to A; B's probe remains valid with or without a song,
+   * until B's song plays ahead. YouTube time comes last.
    */
   private selectSecondaryPlacement(primaryOwnsMic: boolean, youtube: number | null,
     nowMs: number): SecondaryPlacement | null {
@@ -632,10 +635,14 @@ export class ChoirRuntime {
       const offset = this.content.secondaryOffsetMs;
       if (offset !== null) return { lagMs: session.requestedMicAdvanceMs + offset, source: 'content' };
 
-      const probe = this.probe.advanceMs(deps.robot.playerOffsetMs(nowMs), deps.song.playbackRate(nowMs));
-      // The probe measures B's device, as if B heard the room's time; B hears
-      // its song the lead earlier.
-      if (probe !== null) return { lagMs: probe - this.lead.appliedMs, source: 'probe' };
+      // The probe measures B's device as if B's player were at the room's
+      // time. B plays ahead only because YouTube time put B far behind the
+      // room (2026-10-31: 1505 ms), which the probe cannot see; then YouTube
+      // time places B, as the lead was set from it.
+      if (!this.lead.playsAhead(deps.song.playing(nowMs))) {
+        const probe = this.probe.advanceMs(deps.robot.playerOffsetMs(nowMs), deps.song.playbackRate(nowMs));
+        if (probe !== null) return { lagMs: probe, source: 'probe' };
+      }
 
       if (youtube !== null) return { lagMs: youtube, source: 'youtube-time' };
     }

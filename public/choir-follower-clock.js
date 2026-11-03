@@ -48,15 +48,26 @@ export function decideFollowerAction(room, local, nowMs, lastSeekAtMs) {
   if (!Number.isFinite(driftMs)) return { type: 'none', driftMs: null };
   if (!room.playing && local.playerState === 1) return { type: 'pause', driftMs };
   if (local.playerState === 3) return { type: 'none', driftMs }; // buffering
+  // Ahead of the room, B's song ends first: playing it again starts it over.
+  if (local.playerState === 0 && room.durationSeconds !== null
+    && room.positionSeconds >= room.durationSeconds - FOLLOWER_SEEK_THRESHOLD_MS / 1000) {
+    return { type: 'none', driftMs };
+  }
   if (!local.rateAttempted && Math.abs(local.playbackRate - room.playbackRate) > 0.01) {
     return { type: 'rate', playbackRate: room.playbackRate, driftMs };
   }
   // A new lead moves B's song however small it is: the server reads B's lag
-  // only once B says its player moved.
-  if (Math.abs(driftMs) >= FOLLOWER_SEEK_THRESHOLD_MS || local.leadPending === true) {
+  // only once B says its player moved. It moves B by the change from where B
+  // is, so B's lag moves by exactly as much; only a B out of step goes back to
+  // the room.
+  const leadShift = Number.isFinite(local.leadShiftSeconds) ? local.leadShiftSeconds : 0;
+  const outOfStep = Math.abs(driftMs) >= FOLLOWER_SEEK_THRESHOLD_MS;
+  if (outOfStep || leadShift !== 0) {
     const sinceSeekMs = nowMs - lastSeekAtMs;
     if (sinceSeekMs >= FOLLOWER_SEEK_COOLDOWN_MS) {
-      return { type: 'seek', positionSeconds: room.positionSeconds, driftMs };
+      const shifted = Math.max(0, local.positionSeconds + leadShift);
+      return { type: 'seek', driftMs, positionSeconds: outOfStep ? room.positionSeconds
+        : room.durationSeconds === null ? shifted : Math.min(room.durationSeconds, shifted) };
     }
     // Seeking is rate-limited, but starting playback must NOT be rate-limited
     // by that same seek: a freshly cued B player would otherwise remain

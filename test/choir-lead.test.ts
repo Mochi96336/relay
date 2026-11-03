@@ -39,12 +39,31 @@ test('the lead moves only outside the band, and never below zero', () => {
   assert.equal(lead.update(null), null);
 });
 
-test('a reset starts B at the room again', () => {
+test('the same singer keeps its lead; another starts at the room', () => {
   const lead = new ChoirLead();
+  lead.singer('b');
   settled(lead, 0);
-  lead.update(900);
-  lead.reset();
+  assert.equal(lead.update(900), 1_000);
+  settled(lead, 1_000);
+  // B's media reconnects: a new track, the same singer and path.
+  lead.singer('b');
+  assert.equal(lead.leadMs, 1_000);
+  assert.equal(lead.appliedMs, 1_000);
+  assert.equal(lead.update(400), 1_500, 'its anchors still count');
+  lead.singer('c');
   assert.equal(lead.leadMs, 0);
   assert.equal(lead.appliedMs, 0);
-  assert.equal(lead.update(900), null, 'a reset needs settled anchors again');
+  assert.equal(lead.update(900), null, 'a new singer needs settled anchors again');
+});
+
+test('B hears its song ahead only while a song plays and its player runs at a lead', () => {
+  const lead = new ChoirLead();
+  settled(lead, 0);
+  assert.equal(lead.playsAhead(true), false);
+  lead.update(1_505);
+  assert.equal(lead.playsAhead(true), false, 'asked for, not yet applied');
+  settled(lead, 1_610);
+  assert.equal(lead.playsAhead(true), true);
+  // No song: B hears nothing ahead, and its probe lag is its device alone.
+  assert.equal(lead.playsAhead(false), false);
 });

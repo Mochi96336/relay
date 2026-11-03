@@ -43,6 +43,20 @@ B's join socket (its ordinary page socket) carries the join, the claim and B's r
 3. **YouTube time**: B's page reports which capture sample was recorded at which point of its local YouTube (`choir-secondary-song-anchor`), the Robot reports the same for the backing, and the difference places B within seconds of the song playing.
 4. **No song**: B reads at A's advance, and B's own frontier correction holds it back as far as B's audio actually arrives.
 
+### B's song plays ahead when B is too late
+
+The room cannot wait for B. The mixer reads at most prebuffer − safety ahead in B's audio (`RELAY_LIVE_PREBUFFER_MS` 400 − 200 = 200 ms live), and the rest of a larger lag is heard late. On 2026-10-31, B's YouTube-time lag was 1505 ms, so B was heard about 1.3 s late.
+
+Instead, the server moves B's local song ahead of the room (`choir-lead.ts`):
+- When B's YouTube-time lag is over 100 ms, or under −600 ms, the server sends `choir-secondary-lead { leadMs }` on B's join socket.
+- The new lead puts B's lag at −100 ms. That leaves room for B's device latency (Bluetooth output and input), which YouTube time does not see. A lag below zero only reads B's history.
+- B's follower seeks once to room time + lead, and its anchors report the lead it was last moved to (`leadMs`).
+- The server trusts B's lag only after four anchors at the current lead, so a measurement from before the move never counts twice.
+- A move discards the Content measurement, and B's probe lag counts the lead.
+- A new B voice starts at no lead.
+
+The journal line is `b-lead`. `b-lag`/`b-lag-source` carry `appliedMs`, the lag the mixer actually reads. `/statusz` has `audio.duetLead`, and `duetSecondary.appliedLagMs`.
+
 Each song is measured afresh; a pause or seek keeps the last Content measurement. While a song plays, a lapse in every source keeps B where it was last placed. A change in B's lag over 100 ms fades B out, jumps and fades B back in, instead of the 1% slew taking minutes over it. While a Take records, an audible B keeps its lag, as A's alignment does.
 
 ## What Listen and Take hear
@@ -56,7 +70,7 @@ Each song is measured afresh; a pause or seek keeps the last Content measurement
 ## Diagnostics
 
 - `/statusz` `audio.duetSecondary` is B's track; `audio.duetIngress` counts B's accepted and rejected packets and its codec; `audio.duetContent`, `audio.duetProbe` and `audio.duetYoutube` show each placement source, and `duetYoutube.lagSource` which one B uses now.
-- The server logs each step as `[choir] {"event":…}`: `b-joined`/`b-join-refused`, `b-claim`/`b-claim-refused`, `b-media-registered`, `b-media-disconnected`, `b-probe`, `b-realign`, `b-lag-source` (`content`, `probe`, `youtube-time` or `no-song`), `b-lag` (B's lag moved 20 ms or more; at most once a second), `b-lag-held` (song-time anchors lapsed, so B is held where it was), `b-heard`/`b-silent`, `b-pcm-stalled`/`b-pcm-resumed`, `b-revoked`, `b-left`. `b-page` is what B's page shows and plays (its local player state), so a B who hears no song can be explained. Its `lastAction` is the follower's last cue/pause/rate/seek/play with B's drift from the room at that moment, and `coasting` is true while B's song keeps playing on a room packet older than 1.5 s.
+- The server logs each step as `[choir] {"event":…}`: `b-joined`/`b-join-refused`, `b-claim`/`b-claim-refused`, `b-media-registered`, `b-media-disconnected`, `b-probe`, `b-realign`, `b-lag-source` (`content`, `probe`, `youtube-time` or `no-song`), `b-lag` (B's lag, or what the mixer reads of it, moved 20 ms or more; at most once a second), `b-lead` (B's song moved ahead or back), `b-lag-held` (song-time anchors lapsed, so B is held where it was), `b-heard`/`b-silent`, `b-pcm-stalled`/`b-pcm-resumed`, `b-revoked`, `b-left`. `b-page` is what B's page shows and plays (its local player state), so a B who hears no song can be explained. Its `lastAction` is the follower's last cue/pause/rate/seek/play with B's drift from the room at that moment, and `coasting` is true while B's song keeps playing on a room packet older than 1.5 s.
 
 ## Not done yet
 

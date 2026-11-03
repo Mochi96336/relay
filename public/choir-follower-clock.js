@@ -7,7 +7,8 @@ export const FOLLOWER_ROOM_COAST_MS = 10_000;
 export const FOLLOWER_SEEK_THRESHOLD_MS = 450;
 export const FOLLOWER_SEEK_COOLDOWN_MS = 3_000;
 
-export function projectFollowerRoom(room, receivedAtMs, nowMs) {
+// leadMs: how far ahead of the room B's song plays (choir-secondary-lead).
+export function projectFollowerRoom(room, receivedAtMs, nowMs, leadMs = 0) {
   if (!room || room.connected !== true || room.handoffState !== 'idle'
     || !/^[A-Za-z0-9_-]{11}$/.test(room.videoId)
     || !Number.isSafeInteger(room.revision) || room.revision < 0
@@ -19,7 +20,8 @@ export function projectFollowerRoom(room, receivedAtMs, nowMs) {
   const ageMs = nowMs - receivedAtMs;
   if (ageMs < 0 || ageMs > FOLLOWER_ROOM_COAST_MS) return null;
   const projected = room.serverTime
-    + (room.state === 1 ? ageMs * room.playbackRate / 1000 : 0);
+    + (room.state === 1 ? ageMs * room.playbackRate / 1000 : 0)
+    + (Number.isFinite(leadMs) ? leadMs : 0) * room.playbackRate / 1000;
   const duration = Number(room.duration);
   return {
     videoId: room.videoId,
@@ -49,7 +51,9 @@ export function decideFollowerAction(room, local, nowMs, lastSeekAtMs) {
   if (!local.rateAttempted && Math.abs(local.playbackRate - room.playbackRate) > 0.01) {
     return { type: 'rate', playbackRate: room.playbackRate, driftMs };
   }
-  if (Math.abs(driftMs) >= FOLLOWER_SEEK_THRESHOLD_MS) {
+  // A new lead moves B's song however small it is: the server reads B's lag
+  // only once B says its player moved.
+  if (Math.abs(driftMs) >= FOLLOWER_SEEK_THRESHOLD_MS || local.leadPending === true) {
     const sinceSeekMs = nowMs - lastSeekAtMs;
     if (sinceSeekMs >= FOLLOWER_SEEK_COOLDOWN_MS) {
       return { type: 'seek', positionSeconds: room.positionSeconds, driftMs };

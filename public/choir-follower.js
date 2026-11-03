@@ -25,6 +25,10 @@ let lastPlayAttemptMs = Number.NEGATIVE_INFINITY;
 // B's song stood against the room when the follower corrected it.
 let lastAction = null;
 let actionSeq = 0;
+// How far ahead of the room B's song plays, as the server asks (the mixer
+// cannot wait for B), and the lead B's player was last moved to.
+let leadMs = 0;
+let appliedLeadMs = 0;
 let generation = 0;
 let apiPromise = null;
 let autoplayBlocked = false;
@@ -102,7 +106,7 @@ function resetPlayer() {
   setStatus(null);
 }
 function currentRoom() {
-  return projectFollowerRoom(latestRoom, roomReceivedAtMs, performance.now());
+  return projectFollowerRoom(latestRoom, roomReceivedAtMs, performance.now(), leadMs);
 }
 function showFollower() {
   const visible = eligible && role === 'observer'
@@ -113,6 +117,8 @@ function showFollower() {
   if (!visible) {
     startAttempts = 0;
     retryAtMs = 0;
+    leadMs = 0;
+    appliedLeadMs = 0;
     setLocalPlayback(false);
     if (player || starting) resetPlayer();
     setStatus(null);
@@ -193,6 +199,7 @@ async function startPlayer() {
     // never plays. origin is the page's, again as the main player.
     localVideoId = room.videoId;
     lastSeekAtMs = performance.now();
+    appliedLeadMs = leadMs;
     player = new YT.Player(mount, {
       width: '320', height: '180',
       videoId: room.videoId,
@@ -303,7 +310,7 @@ function publishReport() {
       autoplayBlocked, failedVideo: failedVideoId !== null, errorCode: lastErrorCode, videoErrors,
       status: statusKey, sound: soundState,
       localPlayback: localBackingAudibleRole, roomVideo: latestRoom?.videoId ?? null,
-      coasting: room !== null && !room.fresh, lastAction,
+      coasting: room !== null && !room.fresh, lastAction, leadMs, appliedLeadMs,
     },
   }));
 }
@@ -338,6 +345,7 @@ function tick() {
       playbackRate: Number(player.getPlaybackRate()),
       playerState: Number(player.getPlayerState()),
       rateAttempted: attemptedRate === room.playbackRate,
+      leadPending: appliedLeadMs !== leadMs,
     };
   } catch {
     setStatus('choir.followerLoading');
@@ -359,7 +367,7 @@ function tick() {
     window.dispatchEvent(new CustomEvent('relay-choir-song-anchor', {
       detail: {
         videoId: localVideoId, state: 1, currentTime: local.positionSeconds,
-        playbackRate: local.playbackRate, sampledAtPerformanceMs,
+        playbackRate: local.playbackRate, sampledAtPerformanceMs, leadMs: appliedLeadMs,
       },
     }));
   }
@@ -377,6 +385,7 @@ function tick() {
         localNotPlayingSinceMs = null;
         localVideoId = action.videoId;
         lastSeekAtMs = nowMs;
+        appliedLeadMs = leadMs;
         player.cueVideoById({ videoId: action.videoId, startSeconds: action.positionSeconds });
         note();
         break;
@@ -392,6 +401,7 @@ function tick() {
         break;
       case 'seek':
         lastSeekAtMs = nowMs;
+        appliedLeadMs = leadMs;
         player.seekTo(action.positionSeconds, true);
         note();
         break;
@@ -453,6 +463,11 @@ window.addEventListener('relay:playback-view', (event) => {
   roomReceivedAtMs = event.detail?.roomReceivedAtMs ?? null;
   showFollower();
   tick();
+});
+window.addEventListener('relay-choir-media-message', (event) => {
+  if (event.detail?.type !== 'choir-secondary-lead') return;
+  const next = Number(event.detail.leadMs);
+  if (Number.isFinite(next) && next >= 0 && next <= 5_000) leadMs = next;
 });
 window.addEventListener('relay-locale-changed', () => {
   const previous = statusKey;

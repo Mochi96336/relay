@@ -56,6 +56,20 @@ test('B follows by cue/play/pause/seek, never by Mic read-head changes', () => {
   assert.equal(decideFollowerAction(null, local, 6000, -Infinity).type, 'none');
 });
 
+test('a lead puts B\'s song ahead of the room, and a new lead moves it however small', () => {
+  assert.equal(projectFollowerRoom(base, 1000, 1500, 1_600)?.positionSeconds, 82.1);
+  assert.equal(projectFollowerRoom({ ...base, playbackRate: 2 }, 1000, 1000, 500)?.positionSeconds, 81);
+  const room = projectFollowerRoom(base, 1000, 1000, 200)!;
+  // 200 ms off is inside the seek threshold: only a pending lead moves it.
+  assert.equal(decideFollowerAction(room, local, 9000, -Infinity).type, 'none');
+  const moved = decideFollowerAction(room, { ...local, leadPending: true }, 9000, -Infinity);
+  assert.equal(moved.type, 'seek');
+  assert.equal(moved.type === 'seek' && moved.positionSeconds, 80.2);
+  assert.ok(Math.abs((moved.driftMs ?? 0) + 200) < 1e-6);
+  assert.equal(decideFollowerAction(room, { ...local, leadPending: true }, 9000, 8000).type, 'none',
+    'the seek cooldown still holds');
+});
+
 test('a coasting room keeps B\'s song as it is: no cue, seek, pause or play', () => {
   const room = projectFollowerRoom(base, 1000, 1000 + FOLLOWER_ROOM_MAX_AGE_MS + 500)!;
   assert.equal(room.fresh, false);

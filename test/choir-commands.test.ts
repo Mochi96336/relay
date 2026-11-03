@@ -18,10 +18,10 @@ test('each second Mic command carries only its own fields', () => {
   }), { type: 'choir-probe-played', requestId: 7, generation: 3, timingDiagnostics: { a: 1 } });
   assert.deepEqual(choirCommandMessage({
     type: 'choir-secondary-song-anchor', videoId: 'v', state: 1, currentTime: 2, playbackRate: 1,
-    captureAnchor: { sampleIndex: 9 }, ...extra,
+    captureAnchor: { sampleIndex: 9 }, leadMs: 1600, ...extra,
   }), {
     type: 'choir-secondary-song-anchor', videoId: 'v', state: 1, currentTime: 2, playbackRate: 1,
-    captureAnchor: { sampleIndex: 9 },
+    captureAnchor: { sampleIndex: 9 }, leadMs: 1600,
   });
 });
 

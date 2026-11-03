@@ -1,5 +1,9 @@
 // Browser-only local song following. This is NOT Mic/Content calibration.
 export const FOLLOWER_ROOM_MAX_AGE_MS = 1_500;
+// Past FOLLOWER_ROOM_MAX_AGE_MS, B's song keeps playing uncorrected for this
+// long: B's whole link blips for ~2 s (2026-10-31), and pausing there stopped
+// the song B was singing to.
+export const FOLLOWER_ROOM_COAST_MS = 10_000;
 export const FOLLOWER_SEEK_THRESHOLD_MS = 450;
 export const FOLLOWER_SEEK_COOLDOWN_MS = 3_000;
 
@@ -13,7 +17,7 @@ export function projectFollowerRoom(room, receivedAtMs, nowMs) {
     || room.playbackRate > 4
     || !Number.isFinite(receivedAtMs) || !Number.isFinite(nowMs)) return null;
   const ageMs = nowMs - receivedAtMs;
-  if (ageMs < 0 || ageMs > FOLLOWER_ROOM_MAX_AGE_MS) return null;
+  if (ageMs < 0 || ageMs > FOLLOWER_ROOM_COAST_MS) return null;
   const projected = room.serverTime
     + (room.state === 1 ? ageMs * room.playbackRate / 1000 : 0);
   const duration = Number(room.duration);
@@ -26,12 +30,15 @@ export function projectFollowerRoom(room, receivedAtMs, nowMs) {
     durationSeconds: Number.isFinite(duration) && duration > 0 ? duration : null,
     playing: room.state === 1,
     ageMs,
+    fresh: ageMs <= FOLLOWER_ROOM_MAX_AGE_MS,
   };
 }
 
 // Actions affect only B's local player. They never send room commands.
 export function decideFollowerAction(room, local, nowMs, lastSeekAtMs) {
   if (!room || !local?.ready) return { type: 'none', driftMs: null };
+  // A coasting room is a guess: leave B's player exactly as it is.
+  if (!room.fresh) return { type: 'none', driftMs: null };
   if (local.videoId !== room.videoId) {
     return { type: 'cue', videoId: room.videoId, positionSeconds: room.positionSeconds, driftMs: null };
   }

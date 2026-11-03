@@ -16,7 +16,7 @@ const COMMANDS = new Map([
   ['choir-secondary-page', (p) => ({ page: p.page })],
   ['choir-secondary-song-anchor', (p) => ({
     videoId: p.videoId, state: p.state, currentTime: p.currentTime,
-    playbackRate: p.playbackRate, captureAnchor: p.captureAnchor,
+    playbackRate: p.playbackRate, captureAnchor: p.captureAnchor, leadMs: p.leadMs,
   })],
   ['choir-probe-request', () => ({})],
   ['choir-probe-played', (p) => ({

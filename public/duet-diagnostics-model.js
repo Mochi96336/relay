@@ -22,6 +22,7 @@ const english = diagnosticsTranslator('en');
 
 /** B's compensation still moving toward its target by at least this much. */
 const SETTLING_MS = 5;
+const CLAMPED_MS = 20;
 
 function signedDb(db) {
   const rounded = Math.round(db * 10) / 10 || 0;
@@ -181,8 +182,14 @@ export function describeDuetTiming({ product, source, statusz } = {}, t = englis
     if (lag !== null && target !== null && Math.abs(target - lag) >= SETTLING_MS) {
       notes.push(t('diag.duet.timing.settling', { value: signedMs(target) }));
     }
+    // The mixer reads at most its read-ahead into B's audio; past it B is late.
+    const applied = finite(secondary?.appliedLagMs);
+    const late = lag !== null && applied !== null ? Math.round(lag - applied) : 0;
+    if (late >= CLAMPED_MS) notes.push(t('diag.duet.timing.clamped', { ms: late }));
+    const lead = finite(audio.duetLead?.appliedMs);
+    if (lead !== null && lead > 0) notes.push(t('diag.duet.timing.lead', { ms: Math.round(lead) }));
     rows.push(row('duetSecondOffset', label, signedMs(shown), notes.join(t('diag.sentenceGap')),
-      lagSource === 'content' || lagSource === 'probe' ? 'ok' : 'neutral'));
+      late >= CLAMPED_MS ? 'warn' : lagSource === 'content' || lagSource === 'probe' ? 'ok' : 'neutral'));
   }
 
   return { title: t('diag.duet.timing.title'), rows, advanced: describeDuetTimingAdvanced(audio, t) };

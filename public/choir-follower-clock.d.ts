@@ -21,12 +21,15 @@ export declare function projectFollowerRoom(
   } | null,
   receivedAtMs: number | null,
   nowMs: number,
+  leadMs?: number,
 ): ProjectedFollowerRoom | null;
 export declare function decideFollowerAction(
   room: ProjectedFollowerRoom | null,
   local: {
     ready: boolean; videoId: string | null; positionSeconds: number;
     playbackRate: number; playerState: number; rateAttempted?: boolean;
+    /** How far the lead the player has not been moved to yet moves it, in media seconds. */
+    leadShiftSeconds?: number;
   },
   nowMs: number,
   lastSeekAtMs: number,

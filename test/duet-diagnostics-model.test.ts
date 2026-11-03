@@ -119,6 +119,25 @@ describe('second Mic diagnostics', () => {
     assert.equal(rows.duetSecondOffset.tone, 'ok');
   });
 
+  it('says when B is heard late past what the mix can wait for, and how far ahead its song plays', () => {
+    const clamped = byKey(describeDuetTiming(duetFacts((f) => {
+      f.statusz.audio.duetYoutube.lagSource = 'youtube-time';
+      f.statusz.audio.duetSecondary.lagMs = 1505;
+      f.statusz.audio.duetSecondary.targetLagMs = 1505;
+      f.statusz.audio.duetSecondary.appliedLagMs = 200;
+    }))!.rows);
+    assert.match(clamped.duetSecondOffset.note, /Heard 1305 ms late/);
+    assert.equal(clamped.duetSecondOffset.tone, 'warn');
+
+    const led = byKey(describeDuetTiming(duetFacts((f) => {
+      f.statusz.audio.duetSecondary.appliedLagMs = 180;
+      f.statusz.audio.duetLead = { leadMs: 1610, appliedMs: 1610 };
+    }), zh)!.rows);
+    assert.doesNotMatch(led.duetSecondOffset.note, /晚/);
+    assert.match(led.duetSecondOffset.note, /早 1610 ms 播放/);
+    assert.equal(led.duetSecondOffset.tone, 'ok');
+  });
+
   it('never presents a YouTube time estimate as a Content measurement', () => {
     const rows = byKey(describeDuetTiming(duetFacts((f) => {
       f.statusz.audio.duetYoutube.lagSource = 'youtube-time';

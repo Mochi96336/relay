@@ -32,7 +32,7 @@ B's join socket (its ordinary page socket) carries the join, the claim and B's r
 - **Ingress** (`choir-ingress.ts`): B's packets, AudioPacket v2 PCM or Opus v3 (as the main Mic sends), checked and decoded. A bound socket carries nothing but B's packets, and never falls through to the main Mic or Robot routes. It carries B while B's join allows it, song or no song.
 - **Room output**: B is a second `MicTrack` in the N=1 `AudioSession`, so Listen, Take and timing need no separate path. `MicTrack` holds each singer's PCM timeline, gain, limiter and read head.
 - On B's page, `public/choir-ui.js` holds the second Mic's controls, `public/choir-media-client.js` claims and drives B's media socket, and `public/choir-secondary-capture.js` captures B's Mic.
-- B's page plays the room's YouTube locally inside the normal Song player (`public/choir-follower.js`). It starts **muted**, which any browser lets a script play, so B keeps time at once; it is then unmuted. Where sound needs a tap (iOS pauses a scripted unmute), it plays on muted and B is asked to tap the YouTube player. B's playback position is never treated as room time.
+- B's page plays the room's YouTube locally inside the normal Song player (`public/choir-follower.js`). It starts **muted**, which any browser lets a script play, so B keeps time at once; it is then unmuted. Where sound needs a tap (iOS pauses a scripted unmute), it plays on muted and B is asked to tap the YouTube player. B's playback position is never treated as room time. When room packets stop arriving, B's song keeps playing uncorrected for 10 s before it pauses, because a link blip of a couple of seconds must not stop the song B is singing to.
 
 ## Where B is placed
 
@@ -56,7 +56,7 @@ Each song is measured afresh; a pause or seek keeps the last Content measurement
 ## Diagnostics
 
 - `/statusz` `audio.duetSecondary` is B's track; `audio.duetIngress` counts B's accepted and rejected packets and its codec; `audio.duetContent`, `audio.duetProbe` and `audio.duetYoutube` show each placement source, and `duetYoutube.lagSource` which one B uses now.
-- The server logs each step as `[choir] {"event":…}`: `b-joined`/`b-join-refused`, `b-claim`/`b-claim-refused`, `b-media-registered`, `b-media-disconnected`, `b-probe`, `b-realign`, `b-lag-source` (`content`, `probe`, `youtube-time` or `no-song`), `b-heard`/`b-silent`, `b-pcm-stalled`/`b-pcm-resumed`, `b-revoked`, `b-left`. `b-page` is what B's page shows and plays (its local player state), so a B who hears no song can be explained.
+- The server logs each step as `[choir] {"event":…}`: `b-joined`/`b-join-refused`, `b-claim`/`b-claim-refused`, `b-media-registered`, `b-media-disconnected`, `b-probe`, `b-realign`, `b-lag-source` (`content`, `probe`, `youtube-time` or `no-song`), `b-lag` (B's lag moved 20 ms or more; at most once a second), `b-lag-held` (song-time anchors lapsed, so B is held where it was), `b-heard`/`b-silent`, `b-pcm-stalled`/`b-pcm-resumed`, `b-revoked`, `b-left`. `b-page` is what B's page shows and plays (its local player state), so a B who hears no song can be explained. Its `lastAction` is the follower's last cue/pause/rate/seek/play with B's drift from the room at that moment, and `coasting` is true while B's song keeps playing on a room packet older than 1.5 s.
 
 ## Not done yet
 

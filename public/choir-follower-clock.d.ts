@@ -6,8 +6,11 @@ export type ProjectedFollowerRoom = {
   durationSeconds: number | null;
   playing: boolean;
   ageMs: number;
+  /** False while coasting past FOLLOWER_ROOM_MAX_AGE_MS. */
+  fresh: boolean;
 };
 export declare const FOLLOWER_ROOM_MAX_AGE_MS: number;
+export declare const FOLLOWER_ROOM_COAST_MS: number;
 export declare const FOLLOWER_SEEK_THRESHOLD_MS: number;
 export declare const FOLLOWER_SEEK_COOLDOWN_MS: number;
 export declare function projectFollowerRoom(

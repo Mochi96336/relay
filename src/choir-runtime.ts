@@ -82,6 +82,10 @@ export function refuseChoirMessage(payload: Record<string, unknown>,
   return true;
 }
 
+/** B's lag is journaled when it moves this far, at most once per interval. */
+const LAG_LOG_MOVE_MS = 20;
+const LAG_LOG_INTERVAL_MS = 1_000;
+
 /** One line per Choir step, so a real two-device run can be read back. */
 function logChoir(event: string, fields: Record<string, unknown> = {}) {
   console.log('[choir]', JSON.stringify({ event, ...fields }));
@@ -130,6 +134,9 @@ export class ChoirRuntime {
   private lastAudible = false;
   private lastRecentlyHeard = false;
   private lastLagSource: SecondaryPlacement['source'] | null = null;
+  /** B's last journaled lag; moves are journaled, not only source changes. */
+  private loggedLag: { lagMs: number; atMs: number } | null = null;
+  private lagHeld = false;
   private lastPageReport = '';
 
   constructor(private readonly deps: ChoirRuntimeDeps) {
@@ -638,12 +645,25 @@ export class ChoirRuntime {
     }
 
     const placement = this.selectSecondaryPlacement(pair.primaryId, nowMs);
-    if (placement === null) return;
+    if (placement === null) {
+      // B stays where it was while its song-time anchors lapse.
+      const held = session.secondaryMic.targetLagMs;
+      if (!this.lagHeld && held != null) logChoir('b-lag-held', { lagMs: Math.round(held) });
+      this.lagHeld = true;
+      return;
+    }
     const { lagMs, source } = placement;
+    const logged = this.loggedLag;
     if (source !== this.lastLagSource) {
       logChoir('b-lag-source', { source, lagMs: Math.round(lagMs) });
       this.lastLagSource = source;
+      this.loggedLag = { lagMs, atMs: nowMs };
+    } else if (!logged || this.lagHeld || (Math.abs(lagMs - logged.lagMs) >= LAG_LOG_MOVE_MS
+      && nowMs - logged.atMs >= LAG_LOG_INTERVAL_MS)) {
+      logChoir('b-lag', { source, lagMs: Math.round(lagMs), fromMs: logged ? Math.round(logged.lagMs) : null });
+      this.loggedLag = { lagMs, atMs: nowMs };
     }
+    this.lagHeld = false;
     if (deps.takeBlocksCalibration() && session.secondaryMic.audible) return;
     session.setSecondaryMicLag(lagMs);
   }

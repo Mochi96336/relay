@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import {
   projectFollowerRoom, decideFollowerAction,
-  FOLLOWER_ROOM_MAX_AGE_MS,
+  FOLLOWER_ROOM_MAX_AGE_MS, FOLLOWER_ROOM_COAST_MS,
 } from '../public/choir-follower-clock.js';
 
 const base = {
@@ -19,7 +19,9 @@ test('room song projects only from an actually fresh server room packet', () => 
   assert.equal(projectFollowerRoom(base, 1000, 1500)?.positionSeconds, 80.5);
   assert.equal(projectFollowerRoom(base, 1000, 1500)?.durationSeconds, 220);
   assert.equal(projectFollowerRoom({ ...base, state: 2 }, 1000, 1500)?.positionSeconds, 80);
-  assert.equal(projectFollowerRoom(base, 1000, 1000 + FOLLOWER_ROOM_MAX_AGE_MS + 1), null);
+  assert.equal(projectFollowerRoom(base, 1000, 1500)?.fresh, true);
+  assert.equal(projectFollowerRoom(base, 1000, 1000 + FOLLOWER_ROOM_MAX_AGE_MS + 1)?.fresh, false);
+  assert.equal(projectFollowerRoom(base, 1000, 1000 + FOLLOWER_ROOM_COAST_MS + 1), null);
   assert.equal(projectFollowerRoom(base, null, 1000), null);
   assert.equal(projectFollowerRoom({ ...base, connected: false }, 1000, 1100), null);
   assert.equal(projectFollowerRoom({ ...base, handoffState: 'committing' }, 1000, 1100), null);
@@ -54,6 +56,17 @@ test('B follows by cue/play/pause/seek, never by Mic read-head changes', () => {
   assert.equal(decideFollowerAction(null, local, 6000, -Infinity).type, 'none');
 });
 
+test('a coasting room keeps B\'s song as it is: no cue, seek, pause or play', () => {
+  const room = projectFollowerRoom(base, 1000, 1000 + FOLLOWER_ROOM_MAX_AGE_MS + 500)!;
+  assert.equal(room.fresh, false);
+  for (const player of [
+    { ...local, videoId: null },
+    { ...local, positionSeconds: 70 },
+    { ...local, playerState: 2 },
+  ]) assert.deepEqual(decideFollowerAction(room, player, 9000, -Infinity), { type: 'none', driftMs: null });
+  assert.equal(decideFollowerAction({ ...room, playing: false }, local, 9000, -Infinity).type, 'none');
+});
+
 test('B playback remains separate from production room song commands and monitor', async () => {
   const ui = await readFile(new URL('../public/choir-follower.js', import.meta.url), 'utf8');
   const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
@@ -62,7 +75,7 @@ test('B playback remains separate from production room song commands and monitor
   assert.match(html, /id="choir-follower-player" hidden/);
   assert.match(html, /id="choir-follower-position" hidden/);
   assert.doesNotMatch(html, /choir-follower-panel|choir-follower-start|啟用伴奏/);
-  assert.match(ui, /if \(!player && !starting && currentRoom\(\)\) void startPlayer\(\)/);
+  assert.match(ui, /if \(!player && !starting && currentRoom\(\)\?\.fresh\) void startPlayer\(\)/);
   assert.match(ui, /relay-choir-guest-state/);
   assert.doesNotMatch(ui, /startButton|userEnabled|relay:room-song-command-intent/);
   assert.match(ui, /role !== 'observer'/);

@@ -385,6 +385,7 @@ export class AudioSession {
     this.running = false;
     this.micTrack.alignmentState = { networkCompensationMs: 0, calibratedMicLagMs: null, fineTuneMs: 0 };
     this.micTrack.calibratedMicLagTargetMs = null;
+    this.micTrack.networkCompensationTargetMs = null;
     this.micTrack.calibrationUnfoldedSamples = 0;
     this.clearTimeline(this.mic);
     this.clearTimeline(this.backing);
@@ -407,6 +408,7 @@ export class AudioSession {
     // A pending correction belongs to the old mix epoch. Preserve the value
     // already being applied but do not continue walking an old target forward.
     this.micTrack.calibratedMicLagTargetMs = this.micTrack.alignmentState.calibratedMicLagMs;
+    this.micTrack.networkCompensationTargetMs = null;
     this.bus.reset();
     this.micGain.reset();
     if (this.secondary) this.resetSecondary(this.secondary, false);
@@ -573,6 +575,7 @@ export class AudioSession {
     track.frontier.reset(track.timeline.generation);
     track.gain.reset();
     track.calibratedMicLagTargetMs = track.alignmentState.calibratedMicLagMs;
+    track.networkCompensationTargetMs = null;
     secondary.pendingLagMs = null;
     // Its PCM is gone, and the frame count may restart.
     secondary.heardAtFrame = null;
@@ -610,6 +613,24 @@ export class AudioSession {
     if (Object.prototype.hasOwnProperty.call(patch, 'calibratedMicLagMs')) {
       this.micTrack.calibratedMicLagTargetMs = patch.calibratedMicLagMs ?? null;
     }
+    if (Object.prototype.hasOwnProperty.call(patch, 'networkCompensationMs')) {
+      this.micTrack.networkCompensationTargetMs = null;
+    }
+  }
+
+  /**
+   * The uncalibrated fallback's live counterpart of slewCalibratedMicLagTo:
+   * `mixFrame` walks the applied compensation to the target within the
+   * runtime slew bound, so a moving estimate never jumps the read head.
+   */
+  slewNetworkCompensationTo(targetMs: number) {
+    if (!Number.isFinite(targetMs)) return;
+    if (!this.running) {
+      this.setAlignment({ networkCompensationMs: targetMs });
+      return;
+    }
+    this.micTrack.networkCompensationTargetMs =
+      targetMs === this.micTrack.alignmentState.networkCompensationMs ? null : targetMs;
   }
 
   /**

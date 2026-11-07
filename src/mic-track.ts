@@ -90,6 +90,8 @@ export class MicTrack {
     fineTuneMs: 0,
   };
   calibratedMicLagTargetMs: number | null = null;
+  /** Where a live network-compensation slew is heading; null when none is pending. */
+  networkCompensationTargetMs: number | null = null;
   /** Calibration offset accounted for by folded capture loss. */
   calibrationUnfoldedSamples = 0;
   /** Previously emitted per-singer read-head trajectory. */
@@ -479,6 +481,25 @@ export class MicTrack {
       : current + Math.sign(deltaMs) * maximumStepMs;
   }
 
+  /**
+   * The same per-frame bound for the uncalibrated fallback. A larger step
+   * between two frames is classified as a read-head jump, and its crossfade
+   * blends the voice with itself a millisecond apart: an audible dip each time.
+   */
+  advanceNetworkCompensationSlew() {
+    const target = this.networkCompensationTargetMs;
+    if (target === null) return;
+    const current = this.alignmentState.networkCompensationMs;
+    const maximumStepMs = this.frameMs * this.slewFraction;
+    const deltaMs = target - current;
+    if (Math.abs(deltaMs) <= maximumStepMs) {
+      this.alignmentState.networkCompensationMs = target;
+      this.networkCompensationTargetMs = null;
+      return;
+    }
+    this.alignmentState.networkCompensationMs = current + Math.sign(deltaMs) * maximumStepMs;
+  }
+
   /** What the alignment asks for, before the buffer's limits are applied. */
   get requestedMicAdvanceMs() {
     const calibrated = this.alignmentState.calibratedMicLagMs;
@@ -577,6 +598,7 @@ export class MicTrack {
       previouslyEmittedAdvanceSamples ?? modeledPreviousAdvanceSamplesExact;
 
     this.advanceCalibrationSlew();
+    this.advanceNetworkCompensationSlew();
     this.updateFrontierCorrection(startSample, expected);
 
     const appliedAdvanceMs = this.appliedMicAdvanceMs;

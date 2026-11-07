@@ -1925,7 +1925,6 @@ function retireMicCaptureTiming() {
 const sampleSongFallback = new SampleSongFallback();
 let sampleSongCandidateMs: number | null = null;
 let sampleSongSelected = false;
-let sampleSongLastAppliedAt = performance.now();
 let robotSongObservation: Record<string, unknown> | null = null;
 let sampleSongEpoch: number | null = null;
 let sampleSongMicOwner: string | null = null;
@@ -1944,17 +1943,21 @@ function refreshLiveMicNetworkCompensation() {
       (side, a) => session.sampleSongPosition(side, a.generation, a.sampleIndex, a.sampleRate), session.sampleRate)
     : null;
   const selected = mode === 'sample-song' && sampleSongCandidateMs !== null;
-  const now = performance.now();
-  const elapsed = Math.max(0, Math.min(100, now - sampleSongLastAppliedAt));
-  sampleSongLastAppliedAt = now;
-  if (mode === 'sample-song' && takeBlocksCalibration()) return;
+  if (mode === 'sample-song' && takeBlocksCalibration()) {
+    // A Take freezes alignment, including a walk already under way.
+    session.slewNetworkCompensationTo(session.alignment.networkCompensationMs);
+    return;
+  }
   sampleSongSelected = selected;
   const target = selected ? sampleSongCandidateMs! : Number.isFinite(transportEstimateMs)
     ? Math.max(0, Math.min(MAX_OFFSET_MS, transportEstimateMs)) : 0;
-  const current = session.alignment.networkCompensationMs;
-  const applied = mode === 'sample-song' && session.active
-    ? current + Math.max(-elapsed * .01, Math.min(elapsed * .01, target - current)) : target;
-  session.setAlignment({ networkCompensationMs: applied });
+  // The mixer walks a live target per frame. Stepping it here by 1% of the
+  // time since the last call depended on how calls arrive: the live Robot
+  // capture lands 40 ms batches about every 42.7 ms, and 1% of that is just
+  // past the per-frame slew bound, so steps became crossfaded read-head
+  // jumps: the pops heard from singers whose boot probe failed.
+  if (mode === 'sample-song' && session.active) session.slewNetworkCompensationTo(target);
+  else session.setAlignment({ networkCompensationMs: target });
 }
 
 function startLiveSource() {

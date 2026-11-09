@@ -21,6 +21,10 @@ let localVideoId = null;
 let failedVideoId = null;
 let lastSeekAtMs = Number.NEGATIVE_INFINITY;
 let lastPlayAttemptMs = Number.NEGATIVE_INFINITY;
+// The last cue/pause/rate/seek/play on B's player, for the server log: where
+// B's song stood against the room when the follower corrected it.
+let lastAction = null;
+let actionSeq = 0;
 let generation = 0;
 let apiPromise = null;
 let autoplayBlocked = false;
@@ -114,7 +118,7 @@ function showFollower() {
     setStatus(null);
     return;
   }
-  if (!player && !starting && currentRoom()) void startPlayer();
+  if (!player && !starting && currentRoom()?.fresh) void startPlayer();
 }
 
 function loadYouTubeAPI() {
@@ -174,7 +178,7 @@ async function startPlayer() {
   try {
     const YT = await loadYouTubeAPI();
     const room = currentRoom();
-    if (!eligible || role !== 'observer' || ownGeneration !== generation || !room) {
+    if (!eligible || role !== 'observer' || ownGeneration !== generation || !room?.fresh) {
       if (ownGeneration === generation) {
         clearTimeout(readyTimer);
         readyTimer = null;
@@ -292,12 +296,14 @@ function reconcileSound(playerState) {
 function publishReport() {
   let playerState = null;
   try { playerState = playerReady ? Number(player.getPlayerState()) : null; } catch {}
+  const room = currentRoom();
   window.dispatchEvent(new CustomEvent('relay-choir-follower-report', {
     detail: {
       eligible, role, playerReady, starting, playerState, startAttempts,
       autoplayBlocked, failedVideo: failedVideoId !== null, errorCode: lastErrorCode, videoErrors,
       status: statusKey, sound: soundState,
       localPlayback: localBackingAudibleRole, roomVideo: latestRoom?.videoId ?? null,
+      coasting: room !== null && !room.fresh, lastAction,
     },
   }));
 }
@@ -359,6 +365,9 @@ function tick() {
   }
   const nowMs = performance.now();
   const action = decideFollowerAction(room, local, nowMs, lastSeekAtMs);
+  const note = () => {
+    lastAction = { seq: ++actionSeq, type: action.type, driftMs: action.driftMs === null ? null : Math.round(action.driftMs) };
+  };
   try {
     switch (action.type) {
       case 'cue':
@@ -369,23 +378,28 @@ function tick() {
         localVideoId = action.videoId;
         lastSeekAtMs = nowMs;
         player.cueVideoById({ videoId: action.videoId, startSeconds: action.positionSeconds });
+        note();
         break;
       case 'pause':
         player.pauseVideo();
+        note();
         break;
       case 'rate':
         // A refused/unsupported rate must not starve play or seek forever.
         attemptedRate = action.playbackRate;
         try { player.setPlaybackRate(action.playbackRate); } catch {}
+        note();
         break;
       case 'seek':
         lastSeekAtMs = nowMs;
         player.seekTo(action.positionSeconds, true);
+        note();
         break;
       case 'play':
         if (nowMs - lastPlayAttemptMs >= 5_000) {
           lastPlayAttemptMs = nowMs;
           player.playVideo();
+          note();
         }
         break;
       default:

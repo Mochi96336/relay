@@ -103,9 +103,19 @@ test('B keeps ordinary Song layout and follows automatically after consent', asy
   await expect(page.locator('#choir-follower-status')).toBeHidden();
   await expect.poll(() => page.evaluate(() =>
     document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  // Short control-link blips must not stop the song B is singing to.
+  const callsBeforeCoast = await page.evaluate(() => window.__followerCalls
+    .filter(([action]) => ['cue', 'play', 'pause', 'rate', 'seek'].includes(action)));
   await page.evaluate(() => window.__emitFollowerRoom({ ageMs: 2000 }));
-  await expect.poll(async () => (await page.evaluate(() => window.__followerCalls))
-    .some(x => x[0] === 'pause')).toBe(true);
+  expect(await page.evaluate(() => window.__followerCalls
+    .filter(([action]) => ['cue', 'play', 'pause', 'rate', 'seek'].includes(action))))
+    .toEqual(callsBeforeCoast);
+  expect(await page.evaluate(() => window.__localFollower.state)).toBe(1);
+  // Once the room clock is over 10 s old, B must pause instead of coasting.
+  await page.evaluate(() => window.__emitFollowerRoom({ ageMs: 10_500 }));
+  await expect.poll(() => page.evaluate(() => window.__followerCalls
+    .some(([action]) => action === 'pause'))).toBe(true);
+  await expect.poll(() => page.evaluate(() => window.__choirLocalAudibility.at(-1))).toBe(false);
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('relay-choir-guest-state', {
     detail: { enabled: false },
   })));

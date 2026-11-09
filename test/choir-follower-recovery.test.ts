@@ -62,7 +62,7 @@ async function fixture() {
   emit('relay-choir-guest-state', { enabled: true });
   await Promise.resolve();
   return {
-    players, room, tick: () => tick(), emit,
+    players, room, tick: () => tick(), emit, events,
     active: () => events.filter(event => event.type === 'relay-choir-local-playback').at(-1)?.detail.active ?? false,
     status: () => nodes.get('#choir-follower-status').textContent,
     report: () => events.filter(event => event.type === 'relay-choir-follower-report').at(-1)?.detail,
@@ -147,6 +147,40 @@ test('a link blip keeps B\'s song playing; only a long silence pauses it', async
   assert.deepEqual(p.calls, ['pause']);
   assert.equal(f.status(), 'choir.followerRoomStale');
   assert.equal(f.active(), false);
+});
+
+test('B\'s song moves to the lead the server asks for, and its anchors say so only after the move', async () => {
+  const f = await fixture();
+  const p = f.players[0];
+  p.config.events.onReady();
+  p.state = 1;
+  await f.advance(3_000); // past the seek cooldown from the player's creation
+  const anchors = () => f.events.filter(event => event.type === 'relay-choir-song-anchor')
+    .map(event => event.detail.leadMs);
+  assert.equal(anchors().at(-1), 0);
+  f.emit('relay-choir-media-message', { type: 'choir-secondary-lead', leadMs: 1_600 });
+  p.calls.length = 0;
+  const before = anchors().length;
+  await f.advance(500);
+  assert.deepEqual(p.calls, ['seek']);
+  assert.equal(p.position, 81.6);
+  // The seeking tick's anchor was taken before the seek, at no lead.
+  assert.deepEqual(anchors().slice(before), [0, 1_600]);
+  assert.equal(f.report().leadMs, 1_600);
+  await f.advance(500);
+  assert.equal(anchors().at(-1), 1_600);
+  assert.deepEqual(p.calls, ['seek'], 'B at its lead is not moved again');
+  f.emit('relay-choir-media-message', { type: 'choir-secondary-lead', leadMs: -5 });
+  assert.equal(f.report().leadMs, 1_600, 'a lead below zero is refused');
+  // The follower hides (a control reconnect, B leaving): the lead stays, so a
+  // new player starts at it rather than at the room and then jumps.
+  f.emit('relay-choir-guest-state', { enabled: false });
+  f.emit('relay-choir-guest-state', { enabled: true });
+  await f.advance(500);
+  assert.equal(f.players.length, 2);
+  assert.equal(f.players[1].config.playerVars.start, 81);
+  assert.equal(f.report().leadMs, 1_600);
+  assert.equal(f.report().appliedLeadMs, 1_600);
 });
 
 test('a slow player load keeps being retried, more slowly, and ignores retired iframe callbacks', async () => {

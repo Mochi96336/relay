@@ -296,7 +296,7 @@ window.relayIdentityReady = (async () => {
     }
     if ([
       'choir-media-ready', 'choir-media-rejected',
-      'choir-secondary-media-claim', 'choir-probe',
+      'choir-secondary-media-claim', 'choir-probe', 'choir-secondary-lead',
     ].includes(message.type)) {
       if (choirAvailable) window.dispatchEvent(new CustomEvent(
         'relay-choir-media-message', { detail: message },

@@ -2,6 +2,7 @@ import WebSocket from 'ws';
 import type { AudioSession } from './audio-session.js';
 import { ChoirContent, createChoirContentWorkerAnalyzer } from './choir-content.js';
 import { ChoirIngress } from './choir-ingress.js';
+import { ChoirLead } from './choir-lead.js';
 import { ChoirMediaClaims } from './choir-media-claims.js';
 import { ChoirProbe, type ProbeLegConfig } from './choir-probe.js';
 import { ChoirSeat } from './choir-seat.js';
@@ -123,6 +124,9 @@ export class ChoirRuntime {
    * places B in the room output within seconds.
    */
   private readonly sampleSong = new SampleSongFallback();
+  /** How far ahead of the room B's local song plays, so B's lag fits the mixer. */
+  private readonly lead = new ChoirLead();
+  private lastLeadSentMs = Number.NEGATIVE_INFINITY;
   private sampleSongOwner: string | null = null;
   /** B's own remembered Mic gain, from its media registration; null keeps the default. */
   private secondaryGainDb: number | null = null;
@@ -135,7 +139,7 @@ export class ChoirRuntime {
   private lastRecentlyHeard = false;
   private lastLagSource: SecondaryPlacement['source'] | null = null;
   /** B's last journaled lag; moves are journaled, not only source changes. */
-  private loggedLag: { lagMs: number; atMs: number } | null = null;
+  private loggedLag: { lagMs: number; appliedMs: number | null; atMs: number } | null = null;
   private lagHeld = false;
   private lastPageReport = '';
 
@@ -165,6 +169,12 @@ export class ChoirRuntime {
         session.attachSecondaryMic();
         if (this.secondaryGainDb !== null) session.setSecondaryMicGainDb(this.secondaryGainDb);
         this.content.reset('b-attached', { hard: true });
+        this.lead.singer(participantId);
+        this.sendLead(nowMs);
+        // A fresh track is placed afresh: its first lag is journaled as a source.
+        this.lastLagSource = null;
+        this.loggedLag = null;
+        this.lagHeld = false;
       }
       const ingested = session.ingestSecondaryMic(frame, sampleRate, nowMs);
       if (!ingested) return;
@@ -360,6 +370,7 @@ export class ChoirRuntime {
       duetContent: this.content.status(),
       duetProbe: this.probe.status(),
       duetYoutube: { lagSource: this.lastLagSource, ...this.sampleSong.diagnostics(nowMs) },
+      duetLead: this.seat.active() ? { leadMs: this.lead.leadMs, appliedMs: this.lead.appliedMs } : null,
     };
   }
 
@@ -512,6 +523,10 @@ export class ChoirRuntime {
           generation: Number(a.generation), sampleRate: Number(a.sampleRate),
           sampleIndex: Number(a.sampleIndex), uncertaintyMs: Number(a.uncertaintyMs),
         }, nowMs);
+        const reportedLeadMs = Number(payload.leadMs);
+        this.lead.anchor(Number.isFinite(reportedLeadMs) ? reportedLeadMs : 0);
+        // A reloaded page runs at no lead: tell it again, at most once a second.
+        if (this.lead.mismatched && nowMs - this.lastLeadSentMs >= 1_000) this.sendLead(nowMs);
       }
     }
   }
@@ -529,6 +544,14 @@ export class ChoirRuntime {
     if (!socket) return;
     this.lastMediaReadySentMs = nowMs;
     this.deps.send(socket, { type: 'choir-media-ready' });
+  }
+
+  /** Tells B's page how far ahead of the room its song plays (choir-secondary-lead). */
+  private sendLead(nowMs: number) {
+    const socket = this.joinSocket();
+    if (!socket) return;
+    this.lastLeadSentMs = nowMs;
+    this.deps.send(socket, { type: 'choir-secondary-lead', leadMs: this.lead.leadMs });
   }
 
   private sampleSongLagMs(nowMs: number): number | null {
@@ -601,21 +624,26 @@ export class ChoirRuntime {
 
   /**
    * Choose the first usable measurement together with its diagnostic source.
-   * Content is relative to A; B's probe remains valid with or without a song.
-   * YouTube anchors are queried only when neither measurement is available.
+   * Content is relative to A; B's probe remains valid with or without a song,
+   * until B's song plays ahead. YouTube time comes last.
    */
-  private selectSecondaryPlacement(primaryId: string, nowMs: number): SecondaryPlacement | null {
+  private selectSecondaryPlacement(primaryOwnsMic: boolean, youtube: number | null,
+    nowMs: number): SecondaryPlacement | null {
     const { deps } = this;
     const { session } = deps;
-    const primaryOwnsMic = deps.mic.ownerId() === primaryId && deps.mic.mediaOwnerId() === primaryId;
     if (primaryOwnsMic) {
       const offset = this.content.secondaryOffsetMs;
       if (offset !== null) return { lagMs: session.requestedMicAdvanceMs + offset, source: 'content' };
 
-      const probe = this.probe.advanceMs(deps.robot.playerOffsetMs(nowMs), deps.song.playbackRate(nowMs));
-      if (probe !== null) return { lagMs: probe, source: 'probe' };
+      // The probe measures B's device as if B's player were at the room's
+      // time. B plays ahead only because YouTube time put B far behind the
+      // room (2026-10-31: 1505 ms), which the probe cannot see; then YouTube
+      // time places B, as the lead was set from it.
+      if (!this.lead.playsAhead(deps.song.playing(nowMs))) {
+        const probe = this.probe.advanceMs(deps.robot.playerOffsetMs(nowMs), deps.song.playbackRate(nowMs));
+        if (probe !== null) return { lagMs: probe, source: 'probe' };
+      }
 
-      const youtube = this.sampleSongLagMs(nowMs);
       if (youtube !== null) return { lagMs: youtube, source: 'youtube-time' };
     }
     // A lapse in song-time anchors must not move an already placed singer.
@@ -644,7 +672,11 @@ export class ChoirRuntime {
       return;
     }
 
-    const placement = this.selectSecondaryPlacement(pair.primaryId, nowMs);
+    const primaryOwnsMic = deps.mic.ownerId() === pair.primaryId && deps.mic.mediaOwnerId() === pair.primaryId;
+    const youtube = primaryOwnsMic ? this.sampleSongLagMs(nowMs) : null;
+    // A Take holds B's lag; moving B's song under it would put B off.
+    if (!deps.takeBlocksCalibration()) this.steerLead(youtube, nowMs);
+    const placement = this.selectSecondaryPlacement(primaryOwnsMic, youtube, nowMs);
     if (placement === null) {
       // B stays where it was while its song-time anchors lapse.
       const held = session.secondaryMic.targetLagMs;
@@ -653,18 +685,43 @@ export class ChoirRuntime {
       return;
     }
     const { lagMs, source } = placement;
-    const logged = this.loggedLag;
-    if (source !== this.lastLagSource) {
-      logChoir('b-lag-source', { source, lagMs: Math.round(lagMs) });
-      this.lastLagSource = source;
-      this.loggedLag = { lagMs, atMs: nowMs };
-    } else if (!logged || this.lagHeld || (Math.abs(lagMs - logged.lagMs) >= LAG_LOG_MOVE_MS
-      && nowMs - logged.atMs >= LAG_LOG_INTERVAL_MS)) {
-      logChoir('b-lag', { source, lagMs: Math.round(lagMs), fromMs: logged ? Math.round(logged.lagMs) : null });
-      this.loggedLag = { lagMs, atMs: nowMs };
-    }
+    if (!deps.takeBlocksCalibration() || !session.secondaryMic.audible) session.setSecondaryMicLag(lagMs);
+    this.journalLag(source, lagMs, nowMs);
     this.lagHeld = false;
-    if (deps.takeBlocksCalibration() && session.secondaryMic.audible) return;
-    session.setSecondaryMicLag(lagMs);
+  }
+
+  /**
+   * Moves B's song ahead when B's YouTube-time lag is more than the mixer can
+   * absorb, and back when B is far ahead. Content measured before the move no
+   * longer describes B, so it is measured again.
+   */
+  private steerLead(youtube: number | null, nowMs: number) {
+    const from = this.lead.leadMs;
+    const next = this.lead.update(youtube);
+    if (next === null) return;
+    logChoir('b-lead', { leadMs: next, fromMs: from, lagMs: youtube === null ? null : Math.round(youtube) });
+    this.content.reset('b-lead', { hard: true });
+    this.sendLead(nowMs);
+  }
+
+  /**
+   * B's lag as asked and as the mixer reads it (`appliedMs`): a lag past the
+   * mixer's read-ahead is clamped, and B is heard late by the difference.
+   */
+  private journalLag(source: SecondaryPlacement['source'], lagMs: number, nowMs: number) {
+    const applied = this.deps.session.secondaryMic?.appliedLagMs ?? null;
+    const appliedMs = applied === null ? null : Math.round(applied);
+    const logged = this.loggedLag;
+    const moved = (a: number | null, b: number | null) => a !== b && (a === null || b === null
+      || Math.abs(a - b) >= LAG_LOG_MOVE_MS);
+    if (source !== this.lastLagSource) {
+      logChoir('b-lag-source', { source, lagMs: Math.round(lagMs), appliedMs });
+      this.lastLagSource = source;
+    } else if (!logged || this.lagHeld || ((moved(lagMs, logged.lagMs) || moved(appliedMs, logged.appliedMs))
+      && nowMs - logged.atMs >= LAG_LOG_INTERVAL_MS)) {
+      logChoir('b-lag', { source, lagMs: Math.round(lagMs), appliedMs,
+        fromMs: logged ? Math.round(logged.lagMs) : null });
+    } else return;
+    this.loggedLag = { lagMs, appliedMs, atMs: nowMs };
   }
 }

@@ -558,11 +558,7 @@ export class AudioSession {
   /** B's session position for one of its recent capture samples (sample/song anchors). */
   secondarySampleSongPosition(generation: number, index: number, rate: number) {
     const timeline = this.secondary?.track.timeline;
-    if (!timeline || timeline.generation !== generation || timeline.sourceRate !== rate
-        || timeline.sourceFrontier === null || !Number.isFinite(index)
-        || index < 0 || index > timeline.sourceFrontier
-        || timeline.sourceFrontier - index > rate) return null;
-    return timeline.totalSamples - (timeline.sourceFrontier - index) * this.sampleRate / rate;
+    return timeline ? this.captureSamplePosition(timeline, generation, index, rate) : null;
   }
 
   /** What the second singer is doing in the mix; null with no B attached. */
@@ -613,15 +609,23 @@ export class AudioSession {
     }
   }
 
-  /** Recent capture coordinate mapped through the current ingest transform.
-   * Only a short neighborhood is valid: historical trim/fold transforms differ. */
+  /** Recent capture coordinate mapped through the current ingest transform. */
   sampleSongPosition(source: 'mic' | 'backing', generation: number, index: number, rate: number) {
-    const timeline = source === 'mic' ? this.mic : this.backing;
+    return this.captureSamplePosition(source === 'mic' ? this.mic : this.backing, generation, index, rate);
+  }
+
+  /**
+   * Only a short neighborhood is valid: historical trim/fold transforms differ.
+   * `'ahead'` is a sample of this capture whose PCM has not arrived yet: an
+   * anchor can outrun its audio, and it maps once the audio is here.
+   */
+  private captureSamplePosition(timeline: PcmTimeline, generation: number, index: number, rate: number) {
     if (timeline.generation !== generation || timeline.sourceRate !== rate
-        || timeline.sourceFrontier === null || !Number.isFinite(index)
-        || index < 0 || index > timeline.sourceFrontier
-        || timeline.sourceFrontier - index > rate) return null;
-    return timeline.totalSamples - (timeline.sourceFrontier - index) * this.sampleRate / rate;
+        || timeline.sourceFrontier === null || !Number.isFinite(index) || index < 0) return null;
+    const behind = timeline.sourceFrontier - index;
+    if (behind < 0) return -behind <= rate ? 'ahead' as const : null;
+    if (behind > rate) return null;
+    return timeline.totalSamples - behind * this.sampleRate / rate;
   }
 
   get alignment(): AlignmentState {

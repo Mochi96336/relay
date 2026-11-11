@@ -242,12 +242,9 @@ function sendPcm(pcm: Buffer) {
   // everything that follows earlier on the timeline.
   if (!registered || socket?.readyState !== WebSocket.OPEN) return;
 
+  // The song clock pairs the end of this PCM with the wall clock now; the
+  // player's song time is read against the same clock.
   const observedAtUnixMs = Date.now();
-  if (ROBOT_BACKING && observedAtUnixMs - lastSongClockAt >= 250) {
-    lastSongClockAt = observedAtUnixMs;
-    socket.send(JSON.stringify({ type: 'backing-song-clock', generation,
-      sampleIndex: firstSampleIndex + pcm.byteLength / 2, sampleRate: SAMPLE_RATE, observedAtUnixMs }));
-  }
   const frame = encodePcmFrame(generation, firstSampleIndex, pcm);
   if (realtimeFrameWouldExceedBacklog(
     socket.bufferedAmount,
@@ -277,6 +274,15 @@ function sendPcm(pcm: Buffer) {
   }
 
   socket.send(frame);
+  // After the PCM it timestamps, on the same socket: the server can map an
+  // index only once it holds that sample, and a clock sent first left every
+  // refresh it triggered without one. A dropped frame sends no clock; the
+  // next frame does.
+  if (ROBOT_BACKING && observedAtUnixMs - lastSongClockAt >= 250) {
+    lastSongClockAt = observedAtUnixMs;
+    socket.send(JSON.stringify({ type: 'backing-song-clock', generation,
+      sampleIndex: firstSampleIndex + pcm.byteLength / 2, sampleRate: SAMPLE_RATE, observedAtUnixMs }));
+  }
 }
 
 function consume(chunk: Buffer) {

@@ -1935,10 +1935,17 @@ function refreshLiveMicNetworkCompensation() {
   }
   const timeline = currentTimelineStatus();
   const videoId = String(timeline.videoId);
-  sampleSongCandidateMs = robotRouteActive() && timeline.connected && timeline.state === 1
+  const candidateMs = robotRouteActive() && timeline.connected && timeline.state === 1
     ? sampleSongFallback.estimate(performance.now(), videoId,
       (side, a) => session.sampleSongPosition(side, a.generation, a.sampleIndex, a.sampleRate), session.sampleRate)
     : null;
+  // An anchor that outran its PCM is no lapse: holding here withdrew the walk
+  // and reset the far-candidate confirmation, and with the Robot's clock
+  // landing before its audio every 250 ms, no correction past the walk limit
+  // could ever be confirmed. The PCM's own refresh maps it; an anchor whose
+  // audio never comes goes stale within a second, and that is a lapse.
+  if (sampleSongFallback.rejection === 'awaiting-audio') return;
+  sampleSongCandidateMs = candidateMs;
   sampleSongSelected = sampleSongCandidateMs !== null;
   // The transport estimate (half the control socket's RTT) once stood in
   // for a missing candidate, but it measures neither the players' offset nor

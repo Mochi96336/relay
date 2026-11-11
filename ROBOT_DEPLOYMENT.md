@@ -371,7 +371,10 @@ for Boot/content calibration.
 Three consistent observations per side are required. Stale evidence, changed
 capture/rate/song or a player-clock discontinuity withdraws the estimate.
 Recent source coordinates are mapped through the current ingest frontier;
-historical coordinates more than one second old are rejected. Within that
+historical coordinates more than one second old are rejected. An observation
+whose sample has not arrived yet is awaited, not counted as missing evidence:
+the PCM that brings it maps it, or the observation goes stale. The bridge sends
+each song clock after the PCM frame it timestamps. Within that
 short interval, individual sample insertions/removals are approximated by the
 current transform. Later estimates within 20 ms are walked to at 0.2% of real
 time; further ones, once they hold for a second, are jumped to at a quiet

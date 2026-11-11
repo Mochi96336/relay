@@ -214,6 +214,10 @@ test(proofName, async () => {
     RELAY_TAKE_DIR: takeDir,
     RELAY_TAKE_MIN_FREE_GIB: '0',
     RELAY_LIVE_PREBUFFER_MS: '40',
+    // The plateaus are DC, which a low cut removes by design. This proof
+    // pins the path's exact gain and positions; test/mic-low-cut.test.ts
+    // proves the low cut itself.
+    RELAY_MIC_LOW_CUT_HZ: '0',
     ...directMediaEnv,
   });
   const browser = await launchChromium({

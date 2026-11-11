@@ -157,8 +157,8 @@ export type AudioSessionOptions = {
   backingRetentionMs?: number;
   /**
    * High-pass corner applied to every Mic as its PCM is placed (see
-   * `mic-low-cut.ts`). The live room passes `MIC_LOW_CUT_HZ`; omitted, Mic PCM
-   * is placed exactly as it arrived.
+   * `mic-low-cut.ts`). The live room passes `RELAY_MIC_LOW_CUT_HZ`, by default
+   * `MIC_LOW_CUT_HZ`; omitted or 0, Mic PCM is placed exactly as it arrived.
    */
   micLowCutHz?: number | null;
 };

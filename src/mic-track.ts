@@ -118,7 +118,7 @@ export class MicTrack {
     safetyMs: number;
     slewFraction: number;
     readHeadCrossfadeMs: number;
-    /** High-pass corner for this singer's PCM; omitted or null keeps it raw. */
+    /** High-pass corner for this singer's PCM; omitted, null or 0 keeps it raw. */
     lowCutHz?: number | null;
   }) {
     const { sampleRate, frameMs, frameSamples, sourceEdgeFadeSamples, safetyMs, slewFraction } = options;

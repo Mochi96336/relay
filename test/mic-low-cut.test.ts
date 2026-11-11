@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
 import { AudioSession } from '../src/audio-session.js';
+import { loadRelayConfig } from '../src/config.js';
 import { MicLimiter } from '../src/mic-limiter.js';
 import { MIC_LOW_CUT_HZ, MicLowCut } from '../src/mic-low-cut.js';
 import { MicTrack } from '../src/mic-track.js';
@@ -247,8 +248,15 @@ describe('AudioSession low cut', () => {
     );
   });
 
-  test('the live room turns the low cut on', () => {
+  test('the live room turns the low cut on, at a corner the operator can move', () => {
     const server = readSourceContract('src/server.ts');
-    assert.match(variableInitializerCode(server, 'session'), /\bmicLowCutHz:\s*MIC_LOW_CUT_HZ\b/);
+    assert.match(variableInitializerCode(server, 'session'), /\bmicLowCutHz:\s*relayConfig\.micLowCutHz\b/);
+    assert.equal(loadRelayConfig({}).micLowCutHz, MIC_LOW_CUT_HZ);
+    assert.equal(loadRelayConfig({ RELAY_MIC_LOW_CUT_HZ: '60' }).micLowCutHz, 60);
+    assert.equal(loadRelayConfig({ RELAY_MIC_LOW_CUT_HZ: '0' }).micLowCutHz, 0);
+    assert.throws(() => loadRelayConfig({ RELAY_MIC_LOW_CUT_HZ: '-1' }), /RELAY_MIC_LOW_CUT_HZ/);
+
+    const off = new MicTrack({ ...trackConfig, lowCutHz: 0 });
+    assert.equal(off.lowCut, null, '0 places Mic PCM as it arrived');
   });
 });

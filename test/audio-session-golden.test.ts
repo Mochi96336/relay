@@ -8,6 +8,7 @@ import {
   type IngestResult,
   type MixFrameEvidence,
 } from '../src/audio-session.js';
+import { MIC_LOW_CUT_HZ } from '../src/mic-low-cut.js';
 import type { PcmFrame } from '../src/pcm-frame.js';
 import { random } from './support/seeded-random.js';
 
@@ -36,6 +37,7 @@ function makeSession(overrides: Partial<AudioSessionOptions> = {}) {
     backingGain: 0.65,
     retentionMs: 3_000,
     backingRetentionMs: 6_000,
+    micLowCutHz: MIC_LOW_CUT_HZ,
     ...overrides,
   });
 }
@@ -581,26 +583,26 @@ test('golden: a steady Robot room with everything a singer does to it', () => {
   assert.ok(exercises.backingClockCorrections > 0, 'corrects the slow song clock');
   assert.ok(exercises.backingGapSamples > 0, 'declicks lost song packets');
   assert.ok(exercises.trimSamples > 0, 'trims the Mic capture clock');
-  assert.equal(digest, '1db4a3c9284107ded6020560f49b092734d2b68eecbfeb92b581fd344529e50f');
+  assert.equal(digest, 'bf67cb006be163bf1d3a7b85fe3dd863fec52c85389dda99ad87a731e498135e');
 });
 
 test('golden: late, stalled, recovered and silent Mic arrival', () => {
   const { digest, exercises } = lateStalledRecovered();
   assert.ok(exercises.maxCorrectionMs > 0, 'holds a late stream back');
   assert.ok(exercises.micStarvedSamples > 0, 'reports the outage as starvation');
-  assert.equal(digest, 'd8e8d4bc180e85f26c8e51c5cf8124f048dfdcaca287396f7f2d1f0ac9095473');
+  assert.equal(digest, '15a64da24ba49d344abc219dad5f8736be827751703dc6dda0a046fc4255c69c');
 });
 
 test('golden: a slow capture clock spending the headroom', () => {
   const { digest, exercises } = slowCaptureClock();
   assert.ok(exercises.maxCorrectionMs > 0, 'takes the gradual overrun');
-  assert.equal(digest, 'e1a01da9048815515a9b63dcec4aa4bdfca1dcfcd7da6f45d53ff65b375670fb');
+  assert.equal(digest, '55a9b0476bd219fabf6d3270c8dc2c80606cc56285ed1fbf60f13315ada4e108');
 });
 
 test('golden: confirmed capture loss folded into the timeline', () => {
   const { digest, exercises } = captureLossFolded();
   assert.ok(exercises.folds >= 2, 'folds confirmed loss more than once');
-  assert.equal(digest, 'a28a6bc646df5a84048cb25288af7489490bd997a9a30da4eeca7f43c69cf3f4');
+  assert.equal(digest, '88098f8f75b44115e6ec770ad498d16cd7dd3841626d51332788678b1a502ffe');
 });
 
 test('golden: capture restarts, replacements and handovers', () => {
@@ -609,7 +611,7 @@ test('golden: capture restarts, replacements and handovers', () => {
   assert.ok(exercises.backingRestarts >= 1, 'restarts the song capture in band');
   assert.ok(exercises.unheaderedSamples > 0, 'mixes unheadered PCM');
   assert.equal(exercises.maxCorrectionMs, 0, 'a Mic expected again is not chased into retained audio');
-  assert.equal(digest, 'f5f6b12ae1e86e008157bcbc626cf7178f26cadbe013e68d75477806add5c641');
+  assert.equal(digest, '99329f0f1ee112422fb3ae94537bb01f2b94e5aee5e3e3b88722b05301d72034');
 });
 
 test('golden: captures resampled to the mix rate', () => {
@@ -617,5 +619,5 @@ test('golden: captures resampled to the mix rate', () => {
   assert.ok(exercises.micRestarts >= 1, 'changes capture rate mid-room');
   assert.ok(exercises.concealedSamples > 0, 'conceals loss at a resampled rate');
   assert.ok(exercises.unheaderedSamples > 0, 'resamples headerless PCM packet by packet');
-  assert.equal(digest, '0debe6de941646694db894f2fb4eb63cfdacc0f589e717ae7bb1c5adbe9addb2');
+  assert.equal(digest, '8834dccd410200453a08a150479c41916f16ccd71ca131dde39087fb5c154687');
 });

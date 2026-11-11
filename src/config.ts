@@ -1,5 +1,7 @@
 import process from 'node:process';
 
+import { MIC_LOW_CUT_HZ } from './mic-low-cut.js';
+
 export type Env = Readonly<Record<string, string | undefined>>;
 
 type NumberOptions = {
@@ -118,6 +120,8 @@ export function loadRelayConfig(env: Env = process.env) {
     // The second Mic (CHOIR.md).
     choir: envBoolean(env, 'RELAY_CHOIR', false),
     micRetentionMs: envNumber(env, 'RELAY_MIC_RETENTION_MS', 3_000, { min: 1 }),
+    // High-pass corner on every Mic (mic-low-cut.ts); 0 turns it off.
+    micLowCutHz: envNumber(env, 'RELAY_MIC_LOW_CUT_HZ', MIC_LOW_CUT_HZ, { min: 0, max: 1_000 }),
     calibrationTimeoutMs: envNumber(env, 'RELAY_CALIBRATION_TIMEOUT_MS', 20_000, { min: 1 }),
     heartbeatMs: envNumber(env, 'RELAY_HEARTBEAT_MS', 8_000, { min: 100 }),
     participantGraceMs: envNumber(env, 'RELAY_PARTICIPANT_GRACE_MS', 5_000, { min: 1 }),

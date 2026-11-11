@@ -252,6 +252,8 @@ const session = new AudioSession({
   // none of it. The probe analysis cannot run until the timeline covers its
   // whole search window, so anything it will look at has to survive that wait.
   backingRetentionMs: BACKING_RETENTION_MS,
+  // Browser voice processing is off, and its high-pass with it.
+  micLowCutHz: relayConfig.micLowCutHz,
 });
 
 /**

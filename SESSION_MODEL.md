@@ -118,6 +118,8 @@ A real ownership change invalidates microphone timing evidence before it can aff
 
 Mic gain follows the device, because capture level differs widely between devices. The Mic page stores each gain its owner sets in its own browser storage and sends it as `micGainDb` when it registers. A real ownership change applies the gain the new owner's registration named, clamped like `set-mix`, or the default when it named none. A release leaves the last gain in place. Relay keeps no per-participant gain, so a restart forgets nothing the device remembers.
 
+Before that gain, every Mic passes an 80 Hz low cut (`mic-low-cut.ts`). The Mic page turns the browser's voice processing off, and its high-pass with it, so breath on a headset boom otherwise reaches the limiter as inaudible pressure that it holds under the ceiling at the voice's expense. A premixed local-file capture skips the cut: its bass is the song.
+
 ## Scope boundary
 
 This model intentionally does not introduce:

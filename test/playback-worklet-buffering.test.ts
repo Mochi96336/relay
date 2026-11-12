@@ -241,7 +241,8 @@ test('de-clicks Listen queue-overflow catch-up without hiding dropped PCM', asyn
   const beforeOverflow = outputBlock();
   processor.process([], beforeOverflow);
   assert.ok(
-    beforeOverflow[0][0].every((sample) => Math.abs(sample - 0.5) < 1e-6),
+    beforeOverflow[0][0].slice(96).every((sample) => Math.abs(sample - 0.5) < 1e-6),
+    'past the 2 ms fade-in from silence, the output is on +0.5',
   );
   assert.equal(processor.queuedSamples, 128);
   assert.equal(processor.playing, true);
@@ -296,7 +297,7 @@ test('live timeline reset de-clicks queue discard and recovered Listen PCM', asy
   const beforeReset = outputBlock();
   processor.process([], beforeReset);
   assert.ok(
-    beforeReset[0][0].every((sample) => Math.abs(sample - 0.5) < 1e-6),
+    beforeReset[0][0].slice(96).every((sample) => Math.abs(sample - 0.5) < 1e-6),
     'pre-reset output establishes an audible +0.5 trajectory',
   );
   assert.equal(processor.queuedSamples, 128);
@@ -339,6 +340,28 @@ test('live timeline reset de-clicks queue discard and recovered Listen PCM', asy
     recoveredSamples.slice(96).every((sample) => Math.abs(sample + 0.5) < 1e-6),
     'only the new live-edge PCM survives the queue reset',
   );
+});
+
+test('the first audio after silence fades in, at the very start and after an ordinary reset', async () => {
+  const processor = await makeProcessor({ minPrebufferMs: 1, initialPrebufferMs: 1, maxPrebufferMs: 10 });
+  const start = () => {
+    // A listener joins mid-song: the first sample is nowhere near zero.
+    processor.push(new Float32Array(256).fill(0.5));
+    const block = outputBlock();
+    processor.process([], block);
+    return Array.from(block[0][0]);
+  };
+  for (const when of ['at the very start', 'after an ordinary reset']) {
+    const output = start();
+    assert.ok(Math.abs(output[0]) < 1e-6, `${when}: starts from the silence before it`);
+    assert.ok(Math.abs(output[95] - 0.5) < 1e-6, `${when}: reaches the audio within 2 ms`);
+    assert.ok(output.slice(96).every((sample) => Math.abs(sample - 0.5) < 1e-6), `${when}: then untouched`);
+    let largest = 0;
+    for (let index = 1; index < output.length; index += 1) largest = Math.max(largest, Math.abs(output[index] - output[index - 1]));
+    assert.ok(largest < 0.01, `${when}: stepped by ${largest}`);
+    processor.port.onmessage?.({ data: { type: 'reset' } });
+    processor.process([], outputBlock());
+  }
 });
 
 test('ordinary playback reset remains a hard temporal reset', async () => {

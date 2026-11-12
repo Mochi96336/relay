@@ -615,10 +615,12 @@ class PlaybackProcessor extends AudioWorkletProcessor {
       }
       this.playing = true;
       this.concealPeriod = null;
-      if (this.needsOutputRecoveryFade) {
-        this.beginRecoveryFade();
-        this.needsOutputRecoveryFade = false;
-      }
+      // Playback always starts from whatever was last put out: the tail of a
+      // fade after an underrun, or silence at the very start and after a
+      // reset. A listener joins mid-song, so the first sample is rarely near
+      // zero, and starting on it as it is was a step from silence.
+      this.beginRecoveryFade();
+      this.needsOutputRecoveryFade = false;
       this.port.postMessage({ type: 'playing' });
     }
 

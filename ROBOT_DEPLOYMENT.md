@@ -337,8 +337,15 @@ Use the journal and timer state as the operator evidence surface:
 
 ```bash
 systemctl --user status relay-robot-semantic-recovery.timer
-journalctl --user -u relay-robot-semantic-recovery.service --since -10min --no-pager
+journalctl --user -u relay-robot-semantic-recovery.service --since -2h --no-pager
 ```
+
+A healthy run that looks like the last journaled one is not journaled; it is
+counted, and the next line reports the count as `quietRuns`. A change, any run
+that is not routine, and an hourly heartbeat are journaled. The unit keeps only
+notice and above, so the user manager's own per-run lines are dropped as well;
+a failed run still shows. The mark is `relay-robot-semantic-recovery-live.json.journal`
+beside the state file; deleting it only adds a line.
 
 ## Experimental sample/song fallback
 

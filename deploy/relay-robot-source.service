@@ -33,6 +33,10 @@ ExecStartPre=/usr/bin/curl --fail --silent --show-error --retry 30 --retry-delay
 ExecStart=/bin/bash scripts/robot-source.sh
 Restart=on-failure
 RestartSec=5
+# The launcher's cleanup trap exits with the TERM status, 143. A stop is a
+# clean end, not a failure; a TERM from anything else still restarts the route.
+SuccessExitStatus=143
+RestartForceExitStatus=143
 # The launcher cleans up its own children and its own sink module on a signal,
 # but a SIGKILL never runs that trap. Leave KillMode at the default so the
 # cgroup sweep catches Chromium either way.

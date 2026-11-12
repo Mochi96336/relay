@@ -34,3 +34,8 @@ ExecStart=/usr/bin/bash %h/relay/scripts/robot-semantic-recovery-live.sh
 # crossed, so the service boundary must be wider than the inner logical bound.
 TimeoutStartSec=5min
 SyslogIdentifier=relay-robot-semantic-recovery
+# The runner's own lines are notices, and nothing below a notice is kept: the
+# user manager's Starting/Finished/Consumed lines for every ~12 s run were a
+# third of the journal. A failed run is still logged, at warning.
+SyslogLevel=notice
+LogLevelMax=notice

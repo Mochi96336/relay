@@ -9,6 +9,50 @@ const DRIFT_WINDOW_MS = 30_000;
 const MIN_DRIFT_SPAN_MS = 8_000;
 const PHASE_CORRECTION_THRESHOLD_MS = 450;
 const PHASE_CORRECTION_CONFIRMATIONS = 3;
+/**
+ * Anchor refinement. The anchor is one report: its position, placed on the
+ * server clock by assuming it travelled for half the page's best round trip.
+ * A report can be delayed past that and never arrive before it was sent, so
+ * an anchor taken from a delayed report sits behind the player by that delay,
+ * for the whole song: nothing under the 450 ms phase threshold moved it. Over
+ * a jittery control path a simulated 14-31% of song starts were more than
+ * 50 ms behind, and a boot calibration is wrong by the same amount, because
+ * the Robot follows this clock and its offset is measured against it.
+ *
+ * Later reports are delayed too, each by its own amount, so the least delayed
+ * of them shows where the player is. When even the least delayed recent
+ * reports put the player ahead of the clock, the clock moves up to them.
+ *
+ * Forward only. Reports that are all late may be a congested uplink, which
+ * says nothing about the player. And a report counts as ahead only as far as
+ * it is ahead under the transport estimate the anchor was taken with: a round
+ * trip that grew since (a congested downlink) makes every report look
+ * fresher without the player having moved.
+ *
+ * Only while the anchor is new. A delayed anchor shows from the first reports
+ * after it. Reports that turn up ahead later are a path that got faster
+ * before the page measured its new round trip, and moving for those left the
+ * clock ahead once it did (44 ms in simulation, for a 60 ms faster uplink).
+ */
+/**
+ * Report de-jittering. Each report says when the page sampled the player, on
+ * the page's own clock. Arrival minus that is the clock offset plus the
+ * report's travel time, and the smallest recent value is the offset plus the
+ * path's best: how much a report exceeds it is how much longer it travelled,
+ * whatever the two clocks read. Without it every report was assumed to have
+ * travelled for half the best round trip, so a report held up for 200 ms
+ * put the player 200 ms behind: the Robot follows the newest report, its
+ * offset is measured against it, and a boot calibration moved with every
+ * stretch of late reports ("delta moved").
+ */
+const CLOCK_OFFSET_WINDOW_MS = 60_000;
+/** Longer than this is a stalled page or a stepped clock, not travel time: start over. */
+const CLOCK_EXCESS_LIMIT_MS = 1_000;
+const REFINE_THRESHOLD_MS = 30;
+/** Reports (2 s) whose second-furthest ahead decides a move. */
+const REFINE_REPORTS = 8;
+/** How long after anchoring the reports may still move the anchor. */
+const REFINE_SETTLE_MS = 6_000;
 
 type TimelineAnchor = {
   videoId: string;
@@ -16,6 +60,10 @@ type TimelineAnchor = {
   serverAtMs: number;
   state: number;
   playbackRate: number;
+  /** How long the anchoring report was assumed to have travelled. */
+  transportEstimateMs: number;
+  /** When the anchoring report arrived. */
+  anchoredAtMs: number;
 };
 
 type LatestTelemetry = {
@@ -70,6 +118,14 @@ export class YouTubeTimelineTracker {
   private phaseConfirmations = 0;
   private phaseCorrections = 0;
   private lastPhaseCorrectionMs: number | null = null;
+  /** Whose clock `clockOffsets` are on: one page load of one playback tab. */
+  private clockKey: string | null = null;
+  /** For recent reports: arrival minus the page's sample time, and half the round trip the page reported. */
+  private clockOffsets: { atMs: number; offsetMs: number; halfRttMs: number }[] = [];
+  /** Phase errors of the reports since the anchor last moved, newest last. */
+  private refineWindow: number[] = [];
+  private refinements = 0;
+  private lastRefinementMs: number | null = null;
   /**
    * Last evidence that a PLAYING media clock itself moved.
    *
@@ -100,9 +156,9 @@ export class YouTubeTimelineTracker {
     const timelineDeltaSeconds = finiteNumber(payload.timelineDeltaSeconds, 0);
     const networkRtt = finiteNumber(payload.networkRttMs ?? payload.clockRttMs, Number.NaN);
     const networkRttMs = Number.isFinite(networkRtt) ? Math.max(0, networkRtt) : null;
-    const transportEstimateMs = networkRttMs === null ? 0 : networkRttMs / 2;
-    const estimatedSampleAtServerMs = nowMs - transportEstimateMs;
     const previous = this.latest;
+    const transportEstimateMs = this.reportTransportMs(payload, networkRttMs, nowMs, previous);
+    const estimatedSampleAtServerMs = nowMs - transportEstimateMs;
 
     this.latest = {
       videoId,
@@ -159,13 +215,15 @@ export class YouTubeTimelineTracker {
     // Small per-packet rate errors can accumulate indefinitely without a seek.
     // Require fresh, advancing evidence on the same side of the room clock;
     // a frozen player or a single late/noisy report must not move its anchor.
-    const phaseDirection = !videoChanged && !stateChanged && !rateChanged
+    const comparablePhaseErrorMs = !videoChanged && !stateChanged && !rateChanged
       && !abruptCorrection && state === PLAYING && previous
       && nowMs > previous.receivedAtServerMs
       && nowMs - previous.receivedAtServerMs <= STALE_AFTER_MS
       && currentTime - previous.currentTime >= MIN_PLAYING_PROGRESS_SECONDS
-      && phaseErrorMs !== null && Math.abs(phaseErrorMs) > PHASE_CORRECTION_THRESHOLD_MS
-      ? Math.sign(phaseErrorMs) : 0;
+      ? phaseErrorMs : null;
+    const phaseDirection = comparablePhaseErrorMs !== null
+      && Math.abs(comparablePhaseErrorMs) > PHASE_CORRECTION_THRESHOLD_MS
+      ? Math.sign(comparablePhaseErrorMs) : 0;
     this.phaseConfirmations = phaseDirection === 0 ? 0
       : phaseDirection === this.phaseDirection ? this.phaseConfirmations + 1 : 1;
     this.phaseDirection = phaseDirection;
@@ -197,9 +255,12 @@ export class YouTubeTimelineTracker {
         serverAtMs: estimatedSampleAtServerMs,
         state,
         playbackRate,
+        transportEstimateMs,
+        anchoredAtMs: nowMs,
       };
       this.phaseConfirmations = 0;
       this.phaseDirection = 0;
+      this.refineWindow = [];
       if (phaseCorrection) {
         this.phaseCorrections += 1;
         this.lastPhaseCorrectionMs = phaseErrorMs;
@@ -222,7 +283,80 @@ export class YouTubeTimelineTracker {
     if (state === PLAYING) this.pushRateSample(nowMs, currentTime);
     else this.rateHistory = [];
 
-    this.lastReason = 'tracking';
+    this.lastReason = this.refineAnchor(comparablePhaseErrorMs, transportEstimateMs, nowMs) ? 'refined' : 'tracking';
+    return true;
+  }
+
+  /**
+   * How long this report travelled, by the page's sample clock.
+   *
+   * Arrival minus sample time is the offset between the two clocks plus the
+   * travel time. The smallest recent value belongs to the path's best, and a
+   * report's excess over it is how much longer it took. The path's best is
+   * half the smallest round trip the page reported in the same window, so a
+   * round trip that rises for a while (a congested downlink) moves nothing.
+   * An uplink that gets faster is seen here at once and by the page a few
+   * seconds later: until then reports look that much older than they are, as
+   * they did before this estimate existed. A report without a sample time is
+   * assumed, as before, to have travelled half its round trip.
+   */
+  private reportTransportMs(
+    payload: Record<string, unknown>, networkRttMs: number | null, nowMs: number, previous: LatestTelemetry | null,
+  ) {
+    const halfRttMs = networkRttMs === null ? 0 : networkRttMs / 2;
+    const sampledAtMs = Number(payload.sampledAtPerformanceMs);
+    if (payload.sampledAtPerformanceMs === undefined || payload.sampledAtPerformanceMs === null
+      || !Number.isFinite(sampledAtMs) || sampledAtMs < 0) {
+      this.clockKey = null;
+      this.clockOffsets = [];
+      return halfRttMs;
+    }
+    const key = `${String(payload.playbackTransportId ?? '')}|${String(payload.playbackGeneration ?? '')}`;
+    const offsetMs = nowMs - sampledAtMs;
+    // Another page or reload is another clock; after a silence the page may
+    // have slept, and its clock with it.
+    if (key !== this.clockKey || !previous || nowMs - previous.receivedAtServerMs > STALE_AFTER_MS) {
+      this.clockKey = key;
+      this.clockOffsets = [];
+    }
+    while (this.clockOffsets.length > 0 && this.clockOffsets[0].atMs < nowMs - CLOCK_OFFSET_WINDOW_MS) {
+      this.clockOffsets.shift();
+    }
+    let bestOffsetMs = offsetMs;
+    let bestHalfRttMs = halfRttMs;
+    for (const earlier of this.clockOffsets) {
+      bestOffsetMs = Math.min(bestOffsetMs, earlier.offsetMs);
+      bestHalfRttMs = Math.min(bestHalfRttMs, earlier.halfRttMs);
+    }
+    if (offsetMs - bestOffsetMs > CLOCK_EXCESS_LIMIT_MS) {
+      this.clockOffsets = [{ atMs: nowMs, offsetMs, halfRttMs }];
+      return halfRttMs;
+    }
+    this.clockOffsets.push({ atMs: nowMs, offsetMs, halfRttMs });
+    return bestHalfRttMs + offsetMs - bestOffsetMs;
+  }
+
+  /**
+   * Moves the anchor to where the least delayed recent reports put the
+   * player. Not a correction: the song did not jump, the room's estimate of
+   * it improved, so the room song revision stays.
+   */
+  private refineAnchor(phaseErrorMs: number | null, transportEstimateMs: number, nowMs: number) {
+    if (!this.anchor || phaseErrorMs === null || nowMs - this.anchor.anchoredAtMs > REFINE_SETTLE_MS) {
+      this.refineWindow = [];
+      return false;
+    }
+    const estimateGrowthMs = Math.max(0, transportEstimateMs - this.anchor.transportEstimateMs);
+    this.refineWindow.push(phaseErrorMs - estimateGrowthMs * this.anchor.playbackRate);
+    if (this.refineWindow.length > REFINE_REPORTS) this.refineWindow.shift();
+    if (this.refineWindow.length < REFINE_REPORTS) return false;
+    // The second furthest ahead: one odd reading cannot move the clock.
+    const aheadMs = [...this.refineWindow].sort((a, b) => b - a)[1];
+    if (aheadMs <= REFINE_THRESHOLD_MS) return false;
+    this.anchor.positionSeconds += aheadMs / 1000;
+    this.refinements += 1;
+    this.lastRefinementMs = aheadMs;
+    this.refineWindow = [];
     return true;
   }
 
@@ -295,6 +429,8 @@ export class YouTubeTimelineTracker {
       hardResyncs: this.corrections,
       phaseCorrections: this.phaseCorrections,
       lastPhaseCorrectionMs: this.lastPhaseCorrectionMs,
+      refinements: this.refinements,
+      lastRefinementMs: this.lastRefinementMs,
       lastReason: this.lastReason,
     };
   }

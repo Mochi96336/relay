@@ -381,6 +381,8 @@ export class SongSession {
     const roomPayload = dormantPromotion ? {
       ...payload, state: before.state, currentTime: before.serverTime,
       duration: before.duration, playbackRate: before.playbackRate, timelineDeltaSeconds: 0,
+      // The room's position now, not a reading the page sampled then.
+      sampledAtPerformanceMs: undefined,
     } : projectedPayload;
     if (!this.timeline.update(roomPayload, nowMs)) {
       return { accepted: false, reason: 'invalid-telemetry', leaderChanged: false };
@@ -439,7 +441,7 @@ export class SongSession {
     if (payload.videoId !== room.videoId || !(state === CUED_STATE
         || state === 2 && Number.isFinite(time) && Math.abs(time - this.parked.mediaPosition) <= 0.1)) return payload;
     return { ...payload, state: room.state, currentTime: room.serverTime,
-      duration: room.duration, timelineDeltaSeconds: 0 };
+      duration: room.duration, timelineDeltaSeconds: 0, sampledAtPerformanceMs: undefined };
   }
 
   detach(identityInput: PlaybackIdentity) {

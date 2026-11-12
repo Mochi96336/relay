@@ -423,6 +423,19 @@ is required before the next correction. Sustained room-clock phase errors are
 corrected after three fresh, advancing, same-sign observations beyond 450 ms.
 The threshold is media time, including when playback rate differs from 1×.
 
+Each report from the playback page carries the time the page sampled its
+player, on the page's own clock. The room clock takes a report's travel time
+from that: the smallest recent arrival-minus-sample value is the path's best,
+taken to be half the smallest round trip the page reported in the same minute,
+and a report's excess over it is how much longer it travelled. A report held
+up on the way is therefore known to be older, and neither a congested uplink
+nor a round trip that rises for a while moves the Robot's target. A new page
+load, 1.5 s without reports, or more than a second of excess starts the
+estimate over. For six seconds after an anchor (play, pause, seek, new song,
+handoff), reports that put the player more than 30 ms ahead of it move it
+forward; this is not a correction and does not change the room song revision
+(`refinements`, `lastRefinementMs` in the timeline status).
+
 Boot probe scheduling separates browser preparation from network transit:
 `sent + (RTT - processing) / 2 + schedulingDelay + lead`. Browser durations must
 satisfy `0 <= schedulingDelay <= processing <= RTT`; missing or inconsistent

@@ -447,6 +447,15 @@ the current attempt so probe IDs and capture generations do not label an older
 measurement. Hidden publisher pages explicitly reject a probe instead of silently
 waiting for an ACK timeout.
 
+When the singer's own page is the one whose playback reports drive the room
+clock, the Mic probe is timed on that page's clock instead (`method:
+page-clock` in the probe evidence): the room clock already knows how that
+clock sits against the server's, from a minute of reports, so neither leg of
+the probe exchange has to be assumed. The offset is used only if it is
+consistent with the exchange (the request was not received before it was sent,
+nor acknowledged after the reply arrived); otherwise the estimate above
+applies. `RELAY_SONG_REPORT_TRAVEL_TIME=0` turns this off as well.
+
 ### Timing diagnostics and capture restart evidence
 
 The main timing surface shows the applied alignment and YouTube playback clocks.

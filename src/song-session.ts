@@ -761,6 +761,15 @@ export class SongSession {
       && timeline.connected === true;
   }
 
+  /**
+   * The leader page's clock against the server's, with whose page it is. A
+   * probe played by that same page can be timed on it.
+   */
+  leaderPageClock(nowMs = performance.now()) {
+    const clock = this.leader ? this.timeline.pageClock(nowMs) : null;
+    return clock && this.leader ? { participantId: this.leader.participantId, offsetMs: clock.offsetMs } : null;
+  }
+
   /** The playback tab whose telemetry drives the room song. */
   leaderIdentity(): PlaybackIdentity | null {
     return this.leader ? {

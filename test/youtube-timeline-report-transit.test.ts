@@ -140,3 +140,30 @@ test('RELAY_SONG_REPORT_TRAVEL_TIME=0 keeps the old reading of every report', as
   assert.ok(Math.abs((status.serverTime - 15.33) * 1000 + 180) < 1, String(status.serverTime));
   assert.ok(Math.abs((status.youtubeTime - 15.33) * 1000 + 180) < 1, String(status.youtubeTime));
 });
+
+test('the page clock is known after two seconds of reports and forgotten when they stop', () => {
+  const tracker = new YouTubeTimelineTracker();
+  const next = seeded(5);
+  const report = (t: number) => ({ videoId: 'dQw4w9WgXcQ', state: 1, duration: 1000, currentTime: 10 + t / 1000,
+    playbackRate: 1, networkRttMs: 300, sampledAtPerformanceMs: t + 50_000, playbackTransportId: 'tab', playbackGeneration: 3 });
+  let arrived = 0;
+  for (let t = 0; t <= 10_000; t += 250) {
+    arrived = t + 150 - 25 * Math.log(1 - next());
+    tracker.update(report(t), arrived);
+    if (t < 1_750) assert.equal(tracker.pageClock(arrived), null, `after ${t} ms`);
+  }
+  const clock = tracker.pageClock(arrived)!;
+  assert.equal(clock.key, 'tab|3');
+  // The page clock reads 50,000 more than the server's: within the least jitter seen in ten seconds.
+  assert.ok(Math.abs(clock.offsetMs + 50_000) < 5, String(clock.offsetMs));
+  assert.equal(tracker.pageClock(arrived + 1_501), null, 'reports stopped');
+  assert.equal(new YouTubeTimelineTracker({ reportTravelTime: false }).pageClock(0), null);
+});
+
+test('the song session names whose page the clock belongs to', async () => {
+  const { SongSession } = await import('../src/song-session.js');
+  const { readFileSync } = await import('node:fs');
+  assert.equal(new SongSession().leaderPageClock(0), null, 'no leader, no clock');
+  const source = readFileSync(new URL('../src/song-session.ts', import.meta.url), 'utf8').replace(/\s+/g, ' ');
+  assert.match(source, /const clock = this\.leader \? this\.timeline\.pageClock\(nowMs\) : null; return clock && this\.leader \? \{ participantId: this\.leader\.participantId, offsetMs: clock\.offsetMs \} : null;/);
+});

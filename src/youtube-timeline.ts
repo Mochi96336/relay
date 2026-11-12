@@ -46,8 +46,14 @@ const PHASE_CORRECTION_CONFIRMATIONS = 3;
  * stretch of late reports ("delta moved").
  */
 const CLOCK_OFFSET_WINDOW_MS = 60_000;
-/** Longer than this is a stalled page or a stepped clock, not travel time: start over. */
-const CLOCK_EXCESS_LIMIT_MS = 1_000;
+/**
+ * A report cannot have been sampled before the one that arrived before it,
+ * so its excess is at most the previous report's plus the time since that
+ * one arrived (a stalled connection that floods: 1.2 s of excess after 1.4 s
+ * of silence). More than that, with this much slack, is not travel time: the
+ * page's clock stepped, and the estimate starts over.
+ */
+const CLOCK_CAUSALITY_SLACK_MS = 50;
 const REFINE_THRESHOLD_MS = 30;
 /** Reports (2 s) whose second-furthest ahead decides a move. */
 const REFINE_REPORTS = 8;
@@ -137,6 +143,8 @@ export class YouTubeTimelineTracker {
   private clockKey: string | null = null;
   /** For recent reports: arrival minus the page's sample time, and half the round trip the page reported. */
   private clockOffsets: { atMs: number; offsetMs: number; halfRttMs: number }[] = [];
+  /** How much longer than the path's best the previous report travelled. */
+  private lastReportExcessMs = 0;
   /** Phase errors of the reports since the anchor last moved, newest last. */
   private refineWindow: number[] = [];
   private refinements = 0;
@@ -215,7 +223,11 @@ export class YouTubeTimelineTracker {
       previous.videoId === videoId &&
       Math.abs(previous.playbackRate - playbackRate) < 0.0001
     ) {
-      const serverDeltaSeconds = Math.max(0, nowMs - previous.receivedAtServerMs) / 1000;
+      // Between when the two reports were sampled, as far as that is known: a
+      // connection that stalls and floods delivers reports sampled 250 ms
+      // apart within the same millisecond, 1.4 s after the one before them,
+      // and by arrival times that read as the player having jumped back.
+      const serverDeltaSeconds = Math.max(0, estimatedSampleAtServerMs - previous.estimatedSampleAtServerMs) / 1000;
       const expectedMediaDelta = previous.state === PLAYING
         ? serverDeltaSeconds * previous.playbackRate
         : 0;
@@ -333,6 +345,7 @@ export class YouTubeTimelineTracker {
     if (key !== this.clockKey || !previous || nowMs - previous.receivedAtServerMs > STALE_AFTER_MS) {
       this.clockKey = key;
       this.clockOffsets = [];
+      this.lastReportExcessMs = 0;
     }
     while (this.clockOffsets.length > 0 && this.clockOffsets[0].atMs < nowMs - CLOCK_OFFSET_WINDOW_MS) {
       this.clockOffsets.shift();
@@ -343,12 +356,16 @@ export class YouTubeTimelineTracker {
       bestOffsetMs = Math.min(bestOffsetMs, earlier.offsetMs);
       bestHalfRttMs = Math.min(bestHalfRttMs, earlier.halfRttMs);
     }
-    if (offsetMs - bestOffsetMs > CLOCK_EXCESS_LIMIT_MS) {
+    const excessMs = offsetMs - bestOffsetMs;
+    const sincePreviousMs = previous ? nowMs - previous.receivedAtServerMs : 0;
+    if (excessMs > this.lastReportExcessMs + sincePreviousMs + CLOCK_CAUSALITY_SLACK_MS) {
       this.clockOffsets = [{ atMs: nowMs, offsetMs, halfRttMs }];
+      this.lastReportExcessMs = 0;
       return halfRttMs;
     }
+    this.lastReportExcessMs = excessMs;
     this.clockOffsets.push({ atMs: nowMs, offsetMs, halfRttMs });
-    return bestHalfRttMs + offsetMs - bestOffsetMs;
+    return bestHalfRttMs + excessMs;
   }
 
   /**

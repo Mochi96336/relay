@@ -8,7 +8,8 @@ const PAGE_CLOCK_BEHIND_MS = 987_654;
 
 /**
  * The phone plays from t = 0 at 1x and reports every 250 ms with the time it
- * sampled its player. Each report travels `transit(t)` ms. `targetError` is
+ * sampled its player. Each report travels `transit(t)` ms, in order, as on
+ * the control socket. `targetError` is
  * what the Robot follows (the newest report, projected) minus where the
  * player really is, at every 50 ms.
  */
@@ -30,7 +31,8 @@ function run(options: {
       sampledAtPerformanceMs: options.pageClock ? options.pageClock(t) : t - PAGE_CLOCK_BEHIND_MS + 2_000_000,
       playbackTransportId: 'tab', playbackGeneration: options.generation?.(t) ?? 1 } });
   }
-  reports.sort((a, b) => a.arrive - b.arrive);
+  // One ordered connection carries them: a report held up holds up those sent after it.
+  for (let i = 1; i < reports.length; i += 1) reports[i].arrive = Math.max(reports[i].arrive, reports[i - 1].arrive);
   const targetError: Record<number, number> = {};
   let next = 0;
   for (let now = 0; now <= untilMs; now += 50) {
@@ -93,10 +95,26 @@ test('another page load is another clock, and a silence may have stopped the old
   assert.ok(Math.abs(worst(slept.after(14_500))) < 1, String(worst(slept.after(14_500))));
 });
 
-test('more than a second over the best is a stepped clock or a stalled page: the estimate starts over', () => {
-  // The page clock loses 1.5 s at 10 s without a gap in the reports.
-  const { after } = run({ transit: () => 150, pageClock: t => (t >= 10_000 ? t - 1_500 : t) + 50_000 });
+test('a page clock that steps cannot be travel time, and the estimate starts over at once', () => {
+  // The page clock loses 1.5 s at 10 s without a gap in the reports: no report can be 1.5 s older than
+  // one that arrived 250 ms before it.
+  const { after, status } = run({ transit: () => 150, pageClock: t => (t >= 10_000 ? t - 1_500 : t) + 50_000 });
   assert.ok(Math.abs(worst(after(1_000))) < 1, String(worst(after(1_000))));
+  assert.equal(status.corrections, 0);
+});
+
+test('a connection that stalls for 1.2 s and floods is neither a jump nor a player that fell behind', () => {
+  // Nothing sent from 10 s arrives before 11.2 s; then everything arrives at once, 1.45 s after the last report.
+  const stalled = run({ transit: t => 150 + (t >= 10_000 && t < 11_200 ? 11_200 - t : 0) });
+  for (const at of [11_400, 12_000, 15_000]) {
+    assert.ok(Math.abs(stalled.targetError[at]) < 1, `${at}: ${stalled.targetError[at]}`);
+  }
+  // No seek was seen, so the room clock was not re-anchored and the room song revision did not move.
+  assert.equal(stalled.status.corrections, 0);
+  assert.equal(stalled.status.reanchors, 0);
+  // Without sample times the same burst reads as the player jumping back 1.2 s and then forward again.
+  const legacy = run({ transit: t => 150 + (t >= 10_000 && t < 11_200 ? 11_200 - t : 0), pageClock: () => undefined });
+  assert.ok(legacy.status.corrections >= 1, JSON.stringify(legacy.status.corrections));
 });
 
 test('a sample time that is not a usable number falls back to half the round trip', () => {

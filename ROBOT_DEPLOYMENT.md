@@ -386,6 +386,9 @@ Diagnostics in
 `timing-calibration-status.sampleSongFallback` include candidate, selected,
 held and active (a sample/song placement in force without acoustic
 calibration). `[mic-read-head]` journals every read-head jump and walk.
+`[mic-calibration]` journals which calibration places the voice (none, content
+or boot probe), whether it applies, holds or is revoked, and the inputs of that
+decision, each time one of them changes or the applied lag moves 20 ms.
 Reload the phone after updating so it publishes capture anchors.
 
 To capture concurrent shadow evidence without restarting services or changing

@@ -316,6 +316,9 @@ describe('unattended boot', () => {
       assert.doesNotMatch(text, /RELAY_KEY=/, `${name} is in the repository and must not carry the key`);
     }
     assert.match(unit('relay-server.service'), /ExecStart=\/usr\/bin\/npm start/);
+    // The launcher exits 143 from its TERM trap: a stop is clean, an outside TERM restarts.
+    assert.match(unit('relay-robot-source.service'), /^SuccessExitStatus=143$/m);
+    assert.match(unit('relay-robot-source.service'), /^RestartForceExitStatus=143$/m);
   });
 
   test('systemd accepts the unit files', { skip: systemdVerifySkip() }, () => {

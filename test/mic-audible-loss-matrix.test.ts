@@ -18,9 +18,11 @@ import { AudioSession } from '../src/audio-session.js';
 import {
   burstyLoss,
   clean,
+  delayedFrom,
   PACKET_MS,
   randomLoss,
   simulateMicUplink,
+  stalled,
   WARMUP_PACKETS,
   type Scenario,
 } from './helpers/mic-loss-network.js';
@@ -332,6 +334,33 @@ function assertAudible(measurement: Measurement, { clickFree = true } = {}) {
 
 const scenarios: { scenario: Scenario; options?: RunOptions; clickFree?: boolean }[] = [
   { scenario: { name: 'clean', seconds: 6, uplink: clean(40, 10), downlink: clean(40, 10) } },
+  // Paths that change while the song plays. Nothing is lost on the wire: what
+  // arrives after its place in the mix has passed is missing all the same,
+  // and what arrives in a flood must not be heard as one.
+  {
+    scenario: {
+      name: 'a 300 ms stall, then a flood',
+      seconds: 8,
+      uplink: stalled(3_000, 300, 40, 10),
+      downlink: clean(40, 10),
+    },
+  },
+  {
+    scenario: {
+      name: 'a 1 s stall, then a flood',
+      seconds: 8,
+      uplink: stalled(3_000, 1_000, 40, 10),
+      downlink: clean(40, 10),
+    },
+  },
+  {
+    scenario: {
+      name: 'a route 150 ms longer from 3 s on',
+      seconds: 8,
+      uplink: delayedFrom(3_000, 150, 40, 10),
+      downlink: clean(40, 10),
+    },
+  },
   {
     scenario: {
       name: 'random 5% loss',

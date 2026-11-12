@@ -49,6 +49,12 @@ export type Direction = {
   jitterMs: number;
   /** Decides whether one packet is lost, given the send time. */
   lose: (nowMs: number, kind: PacketKind, sequence: number) => boolean;
+  /**
+   * Extra one-way delay for a packet sent at `nowMs`: a path that changes
+   * while the song plays (a stalled link, a longer route), where `delayMs`
+   * and `jitterMs` describe one that does not.
+   */
+  extraDelayMs?: (nowMs: number) => number;
 };
 
 export type Scenario = {
@@ -180,7 +186,10 @@ export async function simulateMicUplink(run: UplinkRun): Promise<Outcome> {
 
   const relayRequest = (request: { captureGeneration: number; attempt: number; sequences: number[] }) => {
     if (downlink.lose(nowMs, 'request', request.sequences[0] ?? 0)) return;
-    downlinkQueue.push({ at: nowMs + downlink.delayMs + jitter.request() * downlink.jitterMs, request });
+    downlinkQueue.push({
+      at: nowMs + downlink.delayMs + (downlink.extraDelayMs?.(nowMs) ?? 0) + jitter.request() * downlink.jitterMs,
+      request,
+    });
   };
 
   const mic = new MicRuntime({
@@ -253,7 +262,7 @@ export async function simulateMicUplink(run: UplinkRun): Promise<Outcome> {
         continue;
       }
       uplinkQueue.push({
-        at: nowMs + uplink.delayMs + jitter[kind]() * uplink.jitterMs,
+        at: nowMs + uplink.delayMs + (uplink.extraDelayMs?.(nowMs) ?? 0) + jitter[kind]() * uplink.jitterMs,
         bytes: Buffer.from(bytes),
         path: mediaPath(),
       });
@@ -392,3 +401,22 @@ export const burstyLoss = (enterBurst: number, meanBurstPackets: number, delayMs
     },
   };
 };
+
+/**
+ * A link that stalls: nothing sent in [atMs, atMs + forMs) arrives before the
+ * stall ends, and then all of it arrives at once.
+ */
+export const stalled = (atMs: number, forMs: number, delayMs: number, jitterMs = 0) => (): Direction => ({
+  delayMs,
+  jitterMs,
+  lose: () => false,
+  extraDelayMs: (nowMs) => (nowMs >= atMs && nowMs < atMs + forMs ? atMs + forMs - nowMs : 0),
+});
+
+/** A path that takes `extraMs` longer from `atMs` on, as after a change of route. */
+export const delayedFrom = (atMs: number, extraMs: number, delayMs: number, jitterMs = 0) => (): Direction => ({
+  delayMs,
+  jitterMs,
+  lose: () => false,
+  extraDelayMs: (nowMs) => (nowMs >= atMs ? extraMs : 0),
+});

@@ -1,4 +1,5 @@
 import { FallbackPlacement, FallbackTargetJournal, SampleSongFallback } from './sample-song-fallback.js';
+import { CalibrationAuthorityJournal } from './calibration-authority-journal.js';
 import { ChoirRuntime, refuseChoirMessage } from './choir-runtime.js';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -1921,6 +1922,7 @@ let robotSongObservation: Record<string, unknown> | null = null;
 let sampleSongEpoch: number | null = null;
 let sampleSongMicOwner: string | null = null;
 const fallbackTargetJournal = new FallbackTargetJournal();
+const calibrationAuthorityJournal = new CalibrationAuthorityJournal();
 
 function refreshLiveMicNetworkCompensation() {
   const ownerChanged = sampleSongMicOwner !== participants.micOwnerId;
@@ -2008,6 +2010,32 @@ function noteFallbackTarget(timeline: ReturnType<typeof currentTimelineStatus>) 
     heardMicAdvanceMs: session.heardMicAdvanceMs === null ? null : Math.round(session.heardMicAdvanceMs),
     micAnchorAgeMs: evidence.mic ? Math.round(evidence.mic.ageMs) : null,
     backingAnchorAgeMs: evidence.backing ? Math.round(evidence.backing.ageMs) : null,
+  }));
+}
+
+/**
+ * Logs which calibration places the voice and what decided it. A calibration
+ * applied, withdrawn or moved is heard as a read-head jump or walk; this is
+ * the reason behind it.
+ */
+function noteCalibrationAuthority(nowMs: number) {
+  if (!session.active || !participants.micOwnerId) {
+    calibrationAuthorityJournal.reset();
+    return;
+  }
+  const { applicability, evidence } = calibrationAlignment.applicabilityDecision();
+  const appliedMs = session.alignment.calibratedMicLagMs;
+  const change = calibrationAuthorityJournal.note({ kind: evidence.kind, applicability, appliedMs }, nowMs);
+  if (!change) return;
+  const desiredMs = calibrationAlignment.desiredLagMs(nowMs);
+  console.warn('[mic-calibration]', JSON.stringify({
+    change,
+    applicability,
+    appliedMs: appliedMs === null ? null : Math.round(appliedMs),
+    desiredMs: desiredMs === null ? null : Math.round(desiredMs),
+    pathDifferenceMs: bootProbe.pathDifferenceMs === null ? null : Math.round(bootProbe.pathDifferenceMs),
+    robotDeltaMs: robotDeltaIsFresh(nowMs) ? Math.round(robotPlayerOffset.offsetMs(nowMs)!) : null,
+    ...evidence,
   }));
 }
 
@@ -2555,6 +2583,7 @@ const youtubeTimelineTimer = setInterval(() => {
   const nowMs = performance.now();
   choir?.tick(nowMs);
   refreshLiveMicNetworkCompensation();
+  noteCalibrationAuthority(nowMs);
   logMicReadHeadEvents();
 
   refreshPreparedSongHandoff(nowMs);

@@ -130,3 +130,49 @@ test('a song clock that arrives before its audio neither lapses the fallback nor
     await server.stop();
   }
 });
+
+test('an awaited song clock does not outlive the song: a pause right after it still holds the voice', async () => {
+  const server = await startRelay({
+    RELAY_AUTO_CALIBRATE: '0', RELAY_CALIBRATION_PROBE: '0', RELAY_CALIBRATION_VALIDATION: '0' });
+  const clients: RelayClient[] = [];
+  try {
+    const { phone, backing, robot, telemetry, status } = await joinSampleSongRoom(server, clients);
+    for (let i = 0; i < 5; i++) {
+      const pcm = Buffer.alloc(12000 * 2);
+      phone.sendPcm(pcm); backing.sendPcm(pcm);
+      const at = Date.now();
+      robot.send({ type: 'robot-player-offset', offsetMs: 200, songObservation: {
+        videoId, state: 1, mediaSeconds: (i + 1) * .25 + .2, playbackRate: 1, observedAtUnixMs: at } });
+      telemetry(1, (i + 1) * .25, { generation: 1, sampleRate: 48000,
+        sampleIndex: (i + 1) * 12000, mediaDeltaSeconds: 0, uncertaintyMs: 40 });
+      await sleep(30);
+      backing.send({ type: 'backing-song-clock', generation: 1, sampleRate: 48000,
+        sampleIndex: (i + 1) * 12000, observedAtUnixMs: at });
+      await sleep(220);
+    }
+    assert.equal((await status()).sampleSongFallback.selected, true);
+    // A clock for PCM that has not arrived, and then the song pauses before it does.
+    const at = Date.now();
+    robot.send({ type: 'robot-player-offset', offsetMs: 200, songObservation: {
+      videoId, state: 1, mediaSeconds: 6 * .25 + .2, playbackRate: 1, observedAtUnixMs: at } });
+    backing.send({ type: 'backing-song-clock', generation: 1, sampleRate: 48000,
+      sampleIndex: 6 * 12000, observedAtUnixMs: at });
+    await sleep(40);
+    assert.equal((await status()).sampleSongFallback.evidence.backing.sampleIndex, 6 * 12000);
+    phone.send({ type: 'room-song-command', commandId: 'sample-pause', expectedRevision: 2, action: 'pause' });
+    await phone.waitFor(m => m.type === 'room-song-command-apply' && m.commandId === 'sample-pause');
+    telemetry(2, 1.5);
+    await phone.waitFor(m => m.type === 'room-song-command-complete' && m.commandId === 'sample-pause');
+    await sleep(150);
+    const paused = await status();
+    assert.equal(paused.sampleSongFallback.candidateMs, null, JSON.stringify(paused.sampleSongFallback));
+    assert.equal(paused.sampleSongFallback.selected, false);
+    assert.equal(paused.sampleSongFallback.held, true);
+    const journal = server.stderr().split('\n').filter(line => line.startsWith('[mic-fallback-target] '))
+      .map(line => JSON.parse(line.slice('[mic-fallback-target] '.length)));
+    assert.equal(journal.at(-1)?.reason, 'not-playing', JSON.stringify(journal.slice(-3)));
+  } finally {
+    for (const c of clients) c.close();
+    await server.stop();
+  }
+});

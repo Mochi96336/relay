@@ -53,10 +53,13 @@ test('Mic gain is the rail immediately above Room sound', async () => {
     readFile(new URL('../public/live-ia.js', import.meta.url), 'utf8'),
   ]);
 
-  assert.match(
-    css,
-    /body\[data-self-mic="live"\] \.performance-stage > \.mic-live-control[\s\S]*grid-template-columns:\s*44px minmax\(0, 1fr\) auto/,
-  );
+  // iOS 16 WebKit and Chromium before 131 ignore display: grid on <details>;
+  // the rail then stacked into rows and spilled out of its 44px height.
+  const railShell = css.match(/\.performance-stage > \.mic-live-control \{([^}]*)\}/)?.[1] ?? '';
+  assert.match(railShell, /display:\s*block !important/);
+  assert.match(railShell, /height:\s*44px/);
+  assert.doesNotMatch(railShell, /display:\s*(grid|flex)/, 'the Mic rail must not depend on <details> honouring grid or flex');
+  assert.match(css, /\.mic-live-control > \.mic-live-control-body \{[^}]*padding:\s*0 52px/);
   assert.match(css, /\.mic-live-control #mic-gain[\s\S]*height:\s*44px/);
   assert.match(css, /\.live-actions \.local-sound-control[\s\S]*height:\s*44px/);
   assert.match(css, /\.live-actions[\s\S]*margin-top:\s*0 !important/);

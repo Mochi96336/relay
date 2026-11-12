@@ -144,6 +144,8 @@ export function loadRelayConfig(env: Env = process.env) {
       { min: 1 },
     ),
     probeCalibrate: envBoolean(env, 'RELAY_CALIBRATION_PROBE', true),
+    // Off treats every playback report as having travelled half the page's best round trip.
+    songReportTravelTime: envBoolean(env, 'RELAY_SONG_REPORT_TRAVEL_TIME', true),
     probeRetryMs: envNumber(env, 'RELAY_CALIBRATION_PROBE_RETRY_MS', 100, { min: 1 }),
     probeLeadMs: envNumber(env, 'RELAY_CALIBRATION_PROBE_LEAD_MS', 200, { min: 1 }),
     probeSearchMarginMs: envNumber(env, 'RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS', 3_000, { min: 1 }),

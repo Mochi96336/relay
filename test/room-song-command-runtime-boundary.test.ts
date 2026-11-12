@@ -27,7 +27,7 @@ test('RoomSongCommandRuntime owns command revision without absorbing room or tra
   );
 
   // Playback leader/media-clock authority and socket side effects remain server composition work.
-  assert.match(server, /const youtubeTimeline = new SongSession\(\);/);
+  assert.match(server, /const youtubeTimeline = new SongSession\(\{ reportTravelTime: relayConfig\.songReportTravelTime \}\);/);
   assert.match(server, /participants\.micOwnerId/);
   assert.match(server, /playbackTransport\.send\(/);
   assert.match(server, /broadcastJson\(/);

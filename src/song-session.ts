@@ -1,6 +1,6 @@
 import { performance } from 'node:perf_hooks';
 
-import { YouTubeTimelineTracker } from './youtube-timeline.js';
+import { YouTubeTimelineTracker, type YouTubeTimelineOptions } from './youtube-timeline.js';
 import { playbackTargetState, playbackStartPosition } from '../shared/song-playback-target.js';
 
 const LEADER_STALE_AFTER_MS = 1_500;
@@ -132,7 +132,12 @@ export function normalizePlaybackGeneration(value: unknown) {
  * target playback proof completes the handoff.
  */
 export class SongSession {
-  private readonly timeline = new YouTubeTimelineTracker();
+  private readonly timeline: YouTubeTimelineTracker;
+
+  constructor(private readonly timelineOptions: YouTubeTimelineOptions = {}) {
+    this.timeline = new YouTubeTimelineTracker(timelineOptions);
+  }
+
   private leader: Leader | null = null;
   private handoff: Handoff | null = null;
   // A dormant controller is cued, not a second media clock. Keep the room's
@@ -241,7 +246,7 @@ export class SongSession {
     const plan = this.handoffPlan(nowMs);
     if (!plan || plan.state === this.handoff.announcedState) return null;
     this.handoff.announcedState = plan.state;
-    this.handoff.targetTimeline = new YouTubeTimelineTracker();
+    this.handoff.targetTimeline = new YouTubeTimelineTracker(this.timelineOptions);
     return { phase: this.handoff.state, plan };
   }
 
@@ -257,7 +262,7 @@ export class SongSession {
     if (this.handoff.state === 'preparing') return false;
     this.handoff.state = 'preparing';
     this.handoff.commitStartedAtMs = null;
-    this.handoff.targetTimeline = new YouTubeTimelineTracker();
+    this.handoff.targetTimeline = new YouTubeTimelineTracker(this.timelineOptions);
     this.bump();
     return true;
   }
@@ -381,6 +386,8 @@ export class SongSession {
     const roomPayload = dormantPromotion ? {
       ...payload, state: before.state, currentTime: before.serverTime,
       duration: before.duration, playbackRate: before.playbackRate, timelineDeltaSeconds: 0,
+      // The room's position now, not a reading the page sampled then.
+      sampledAtPerformanceMs: undefined,
     } : projectedPayload;
     if (!this.timeline.update(roomPayload, nowMs)) {
       return { accepted: false, reason: 'invalid-telemetry', leaderChanged: false };
@@ -439,7 +446,7 @@ export class SongSession {
     if (payload.videoId !== room.videoId || !(state === CUED_STATE
         || state === 2 && Number.isFinite(time) && Math.abs(time - this.parked.mediaPosition) <= 0.1)) return payload;
     return { ...payload, state: room.state, currentTime: room.serverTime,
-      duration: room.duration, timelineDeltaSeconds: 0 };
+      duration: room.duration, timelineDeltaSeconds: 0, sampledAtPerformanceMs: undefined };
   }
 
   detach(identityInput: PlaybackIdentity) {
@@ -710,7 +717,7 @@ export class SongSession {
       commitStartedAtMs: null,
       readyAcknowledged: false,
       announcedState: playbackTargetState(this.timeline.statusPayload(nowMs).state),
-      targetTimeline: new YouTubeTimelineTracker(),
+      targetTimeline: new YouTubeTimelineTracker(this.timelineOptions),
     };
   }
 

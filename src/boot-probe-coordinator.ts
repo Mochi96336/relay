@@ -396,11 +396,15 @@ export class BootProbeCoordinator {
 
     if (this.config.debug) {
       const controlSeconds = 20;
+      const timing = this.evidence[analysis.target];
       const recent = timeline.read(reached - this.config.sampleRate * controlSeconds, this.config.sampleRate * controlSeconds);
       console.log(
         `[probe] ${analysis.target} correlation=${correlation.toFixed(3)} latencyMs=${latencyMs.toFixed(0)}`
         + ` windowPeak=${this.peakMagnitude(window)} recent${controlSeconds}sPeak=${this.peakMagnitude(recent)}`
-        + ` windowStart=${analysis.windowStart} needed=${needed} reached=${reached}`,
+        + ` windowStart=${analysis.windowStart} needed=${needed} reached=${reached}`
+        // How the probe was located, and the exchange it was located from.
+        + ` timed=${timing?.schedule.method ?? 'unknown'} roundTripMs=${timing ? Math.round(timing.roundTripMs) : 'unknown'}`
+        + ` oneWayMs=${timing ? Math.round(timing.schedule.transportOneWayMs) : 'unknown'}`,
       );
     }
 

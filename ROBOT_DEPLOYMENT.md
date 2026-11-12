@@ -435,6 +435,8 @@ estimate over. For six seconds after an anchor (play, pause, seek, new song,
 handoff), reports that put the player more than 30 ms ahead of it move it
 forward; this is not a correction and does not change the room song revision
 (`refinements`, `lastRefinementMs` in the timeline status).
+`RELAY_SONG_REPORT_TRAVEL_TIME=0` turns both off: every report is again taken
+to have travelled half the page's best round trip.
 
 Boot probe scheduling separates browser preparation from network transit:
 `sent + (RTT - processing) / 2 + schedulingDelay + lead`. Browser durations must

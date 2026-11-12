@@ -116,3 +116,27 @@ test('the room song session gives its own readings no page sample time', async (
   assert.equal(rewrites.length, 2, rewrites.join('\n'));
   for (const rewrite of rewrites) assert.match(rewrite, /sampledAtPerformanceMs: undefined/);
 });
+
+test('RELAY_SONG_REPORT_TRAVEL_TIME=0 keeps the old reading of every report', async () => {
+  const { loadRelayConfig } = await import('../src/config.js');
+  assert.equal(loadRelayConfig({}).songReportTravelTime, true);
+  assert.equal(loadRelayConfig({ RELAY_SONG_REPORT_TRAVEL_TIME: '0' }).songReportTravelTime, false);
+  const { readFileSync } = await import('node:fs');
+  assert.match(readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8'),
+    /new SongSession\(\{ reportTravelTime: relayConfig\.songReportTravelTime \}\)/);
+  const { SongSession } = await import('../src/song-session.js');
+  assert.match(readFileSync(new URL('../src/song-session.ts', import.meta.url), 'utf8').replace(/\s+/g, ' '),
+    /this\.timeline = new YouTubeTimelineTracker\(timelineOptions\)/);
+  assert.ok(new SongSession({ reportTravelTime: false }));
+  // Off: a late report is taken as on time, and a late anchor is not moved.
+  const tracker = new YouTubeTimelineTracker({ reportTravelTime: false });
+  for (let t = 0; t <= 5_000; t += 250) {
+    tracker.update({ videoId: 'dQw4w9WgXcQ', state: 1, duration: 1000, currentTime: 10 + t / 1000, playbackRate: 1,
+      networkRttMs: 300, sampledAtPerformanceMs: t + 9_000, playbackTransportId: 'tab', playbackGeneration: 1 },
+    t + (t === 0 || t === 5_000 ? 330 : 150));
+  }
+  const status = tracker.statusPayload(5_330) as Record<string, any>;
+  assert.equal(status.refinements, 0);
+  assert.ok(Math.abs((status.serverTime - 15.33) * 1000 + 180) < 1, String(status.serverTime));
+  assert.ok(Math.abs((status.youtubeTime - 15.33) * 1000 + 180) < 1, String(status.youtubeTime));
+});

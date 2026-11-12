@@ -1,6 +1,6 @@
 import { performance } from 'node:perf_hooks';
 
-import { YouTubeTimelineTracker } from './youtube-timeline.js';
+import { YouTubeTimelineTracker, type YouTubeTimelineOptions } from './youtube-timeline.js';
 import { playbackTargetState, playbackStartPosition } from '../shared/song-playback-target.js';
 
 const LEADER_STALE_AFTER_MS = 1_500;
@@ -132,7 +132,12 @@ export function normalizePlaybackGeneration(value: unknown) {
  * target playback proof completes the handoff.
  */
 export class SongSession {
-  private readonly timeline = new YouTubeTimelineTracker();
+  private readonly timeline: YouTubeTimelineTracker;
+
+  constructor(private readonly timelineOptions: YouTubeTimelineOptions = {}) {
+    this.timeline = new YouTubeTimelineTracker(timelineOptions);
+  }
+
   private leader: Leader | null = null;
   private handoff: Handoff | null = null;
   // A dormant controller is cued, not a second media clock. Keep the room's
@@ -241,7 +246,7 @@ export class SongSession {
     const plan = this.handoffPlan(nowMs);
     if (!plan || plan.state === this.handoff.announcedState) return null;
     this.handoff.announcedState = plan.state;
-    this.handoff.targetTimeline = new YouTubeTimelineTracker();
+    this.handoff.targetTimeline = new YouTubeTimelineTracker(this.timelineOptions);
     return { phase: this.handoff.state, plan };
   }
 
@@ -257,7 +262,7 @@ export class SongSession {
     if (this.handoff.state === 'preparing') return false;
     this.handoff.state = 'preparing';
     this.handoff.commitStartedAtMs = null;
-    this.handoff.targetTimeline = new YouTubeTimelineTracker();
+    this.handoff.targetTimeline = new YouTubeTimelineTracker(this.timelineOptions);
     this.bump();
     return true;
   }
@@ -712,7 +717,7 @@ export class SongSession {
       commitStartedAtMs: null,
       readyAcknowledged: false,
       announcedState: playbackTargetState(this.timeline.statusPayload(nowMs).state),
-      targetTimeline: new YouTubeTimelineTracker(),
+      targetTimeline: new YouTubeTimelineTracker(this.timelineOptions),
     };
   }
 

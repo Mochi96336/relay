@@ -107,7 +107,22 @@ function metadataText(value: unknown, maxLength: number) {
   return Array.from(normalized).slice(0, maxLength).join('');
 }
 
+export type YouTubeTimelineOptions = {
+  /**
+   * Measure each report's travel time from the page's sample clock and settle
+   * new anchors. Off treats every report as having travelled half the page's
+   * best round trip, as before 2026-11-12.
+   */
+  reportTravelTime?: boolean;
+};
+
 export class YouTubeTimelineTracker {
+  private readonly reportTravelTime: boolean;
+
+  constructor(options: YouTubeTimelineOptions = {}) {
+    this.reportTravelTime = options.reportTravelTime ?? true;
+  }
+
   private anchor: TimelineAnchor | null = null;
   private latest: LatestTelemetry | null = null;
   private rateHistory: RateSample[] = [];
@@ -305,7 +320,7 @@ export class YouTubeTimelineTracker {
   ) {
     const halfRttMs = networkRttMs === null ? 0 : networkRttMs / 2;
     const sampledAtMs = Number(payload.sampledAtPerformanceMs);
-    if (payload.sampledAtPerformanceMs === undefined || payload.sampledAtPerformanceMs === null
+    if (!this.reportTravelTime || payload.sampledAtPerformanceMs === undefined || payload.sampledAtPerformanceMs === null
       || !Number.isFinite(sampledAtMs) || sampledAtMs < 0) {
       this.clockKey = null;
       this.clockOffsets = [];
@@ -342,7 +357,8 @@ export class YouTubeTimelineTracker {
    * it improved, so the room song revision stays.
    */
   private refineAnchor(phaseErrorMs: number | null, transportEstimateMs: number, nowMs: number) {
-    if (!this.anchor || phaseErrorMs === null || nowMs - this.anchor.anchoredAtMs > REFINE_SETTLE_MS) {
+    if (!this.reportTravelTime || !this.anchor || phaseErrorMs === null
+      || nowMs - this.anchor.anchoredAtMs > REFINE_SETTLE_MS) {
       this.refineWindow = [];
       return false;
     }

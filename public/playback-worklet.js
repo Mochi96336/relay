@@ -18,6 +18,11 @@ const TRIM_CROSSFADE_MS = 5;
 // for CONCEAL_HOLD_MS, then fades to silence by CONCEAL_MAX_MS, so a brief
 // stall sounds like a held note rather than a dropout. It needs a clear period
 // in the last CONCEAL_HISTORY_MS of output; noise and DC keep the 2 ms fade.
+// A song and a voice together are never exactly periodic: the repeated period
+// does not start where the last real sample left off, and repeating it as it
+// is stepped the output at the underrun and again at every repeat. Each
+// repeat therefore starts from where the previous sample was heading and
+// eases into the period over CONCEAL_SPLICE_MS.
 const CONCEAL_HISTORY_MS = 30;
 const CONCEAL_WINDOW_MS = 10;
 const CONCEAL_MIN_PERIOD_HZ = 400;
@@ -25,6 +30,7 @@ const CONCEAL_MAX_PERIOD_HZ = 60;
 const CONCEAL_MIN_CORRELATION = 0.8;
 const CONCEAL_HOLD_MS = 10;
 const CONCEAL_MAX_MS = 40;
+const CONCEAL_SPLICE_MS = 2;
 
 // Listen starts with a small buffer and continuously measures PCM arrival
 // variation. The estimator is RTP-like: compare each observed inter-arrival
@@ -74,6 +80,10 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.concealCycle = null;
     this.concealPeriod = null;
     this.concealEmittedSamples = 0;
+    // How far the period's first sample is from continuing its last one, and
+    // over how many samples each repeat absorbs that.
+    this.concealStep = 0;
+    this.concealSpliceSamples = 1;
     this.concealHoldSamples = Math.round((sampleRate * CONCEAL_HOLD_MS) / 1000);
     this.concealMaxSamples = Math.round((sampleRate * CONCEAL_MAX_MS) / 1000);
     this.concealedSamples = 0;
@@ -498,6 +508,15 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     const recent = this.unrolledHistory();
     this.concealCycle = recent.slice(recent.length - period);
     this.concealPeriod = period;
+    // In the real audio the period's first sample followed the one before
+    // it. The last real sample stands in that one's place now, at the
+    // underrun and at every repeat alike, so the step is the same each time.
+    const beforeCycle = recent.length - period - 1;
+    this.concealStep = beforeCycle >= 0 ? recent[recent.length - 1] - recent[beforeCycle] : 0;
+    this.concealSpliceSamples = Math.max(1, Math.min(
+      Math.floor(period / 2),
+      Math.round((sampleRate * CONCEAL_SPLICE_MS) / 1000),
+    ));
     this.concealEmittedSamples = 0;
     this.silenceFadeRemainingSamples = 0;
     this.recoveryFadeRemainingSamples = 0;
@@ -516,7 +535,11 @@ class PlaybackProcessor extends AudioWorkletProcessor {
       const gain = emitted < this.concealHoldSamples
         ? 1
         : Math.max(0, 1 - (emitted - this.concealHoldSamples + 1) / fadeSamples);
-      output[index] = this.concealCycle[emitted % this.concealPeriod] * gain;
+      const position = emitted % this.concealPeriod;
+      const splice = position < this.concealSpliceSamples
+        ? this.concealStep * (1 - position / this.concealSpliceSamples)
+        : 0;
+      output[index] = (this.concealCycle[position] + splice) * gain;
       this.concealEmittedSamples += 1;
       this.concealedSamples += 1;
     }

@@ -698,6 +698,39 @@ test('a short underrun in a sung note keeps the note going, then fades it out', 
   assert.ok(Math.abs(health.concealedMs - 40) < 0.1, `reported ${health.concealedMs} ms concealed`);
 });
 
+test('a voice over a song is continued without a step at the underrun or at each repeat', async () => {
+  // A 165 Hz vowel with vibrato over a three-note chord: periodic enough to be
+  // continued, never exactly periodic. Repeated as it was, its last period
+  // stepped the output by three times anything the program does on its own.
+  const harmonics = [1, 0.8, 0.6, 0.9, 0.5, 0.3, 0.25, 0.35, 0.2, 0.12];
+  const program = (n: number) => {
+    const t = n / SAMPLE_RATE;
+    const phase = 2 * Math.PI * 165 * (t - (0.02 / (2 * Math.PI * 5)) * Math.cos(2 * Math.PI * 5 * t));
+    let vowel = 0;
+    harmonics.forEach((level, k) => { vowel += level * Math.sin((k + 1) * phase); });
+    return 0.06 * vowel
+      + 0.1 * (Math.sin(2 * Math.PI * 147 * t) + Math.sin(2 * Math.PI * 185 * t) + Math.sin(2 * Math.PI * 220 * t));
+  };
+  let ownStep = 0;
+  for (let n = 1; n < SAMPLE_RATE; n += 1) ownStep = Math.max(ownStep, Math.abs(program(n) - program(n - 1)));
+
+  let stepped = 0;
+  // Underruns at different points of the program: the splice differs each time.
+  for (const startMs of [0, 137, 392, 505, 811, 1203]) {
+    const processor = await makeProcessor({ minPrebufferMs: 1, initialPrebufferMs: 1, maxPrebufferMs: 10 });
+    const first = samplesFromMs(startMs);
+    processor.push(Float32Array.from({ length: samplesFromMs(60) }, (_, n) => program(first + n)));
+    const rendered = renderQuanta(processor, 40);
+    const starveAt = samplesFromMs(60);
+    if (processor.concealedSamples === 0) continue;
+    stepped += 1;
+    const worst = largestStep(rendered, starveAt - 1, starveAt + samplesFromMs(40) + 1);
+    assert.ok(worst <= ownStep * 1.2, `from ${startMs} ms: stepped by ${worst.toFixed(4)}, the program by ${ownStep.toFixed(4)}`);
+    assert.ok(rendered.slice(starveAt + samplesFromMs(40)).every((sample) => sample === 0));
+  }
+  assert.ok(stepped >= 3, `only ${stepped} of the underruns were concealed at all`);
+});
+
 test('an underrun in noise keeps the plain 2 ms fade instead of a repeated buzz', async () => {
   const processor = await makeProcessor({ minPrebufferMs: 1, initialPrebufferMs: 1, maxPrebufferMs: 10 });
   let seed = 3;

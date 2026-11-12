@@ -430,8 +430,11 @@ taken to be half the smallest round trip the page reported in the same minute,
 and a report's excess over it is how much longer it travelled. A report held
 up on the way is therefore known to be older, and neither a congested uplink
 nor a round trip that rises for a while moves the Robot's target. A new page
-load, 1.5 s without reports, or more than a second of excess starts the
-estimate over. For six seconds after an anchor (play, pause, seek, new song,
+load, 1.5 s without reports, or a report older than the previous one could
+have let it be (a stepped page clock) starts the estimate over. The player is
+also checked for jumps between the times two reports were sampled, not the
+times they arrived, so a connection that stalls and then floods is not read
+as a seek. For six seconds after an anchor (play, pause, seek, new song,
 handoff), reports that put the player more than 30 ms ahead of it move it
 forward; this is not a correction and does not change the room song revision
 (`refinements`, `lastRefinementMs` in the timeline status).

@@ -438,6 +438,10 @@ as a seek. For six seconds after an anchor (play, pause, seek, new song,
 handoff), reports that put the player more than 30 ms ahead of it move it
 forward; this is not a correction and does not change the room song revision
 (`refinements`, `lastRefinementMs` in the timeline status).
+`[robot-offset-delay]` journals, every 30 s while a song plays, how stale the
+Robot's target was when it measured its offset (median, 90th percentile and
+maximum of the status's way to the page, the page's wait, and the report's way
+back). Nothing subtracts that delay yet; the line says whether it is worth it.
 `RELAY_SONG_REPORT_TRAVEL_TIME=0` turns both off: every report is again taken
 to have travelled half the page's best round trip.
 

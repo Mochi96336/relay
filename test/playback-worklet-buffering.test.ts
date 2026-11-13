@@ -241,7 +241,8 @@ test('de-clicks Listen queue-overflow catch-up without hiding dropped PCM', asyn
   const beforeOverflow = outputBlock();
   processor.process([], beforeOverflow);
   assert.ok(
-    beforeOverflow[0][0].every((sample) => Math.abs(sample - 0.5) < 1e-6),
+    beforeOverflow[0][0].slice(96).every((sample) => Math.abs(sample - 0.5) < 1e-6),
+    'past the 2 ms fade-in from silence, the output is on +0.5',
   );
   assert.equal(processor.queuedSamples, 128);
   assert.equal(processor.playing, true);
@@ -296,7 +297,7 @@ test('live timeline reset de-clicks queue discard and recovered Listen PCM', asy
   const beforeReset = outputBlock();
   processor.process([], beforeReset);
   assert.ok(
-    beforeReset[0][0].every((sample) => Math.abs(sample - 0.5) < 1e-6),
+    beforeReset[0][0].slice(96).every((sample) => Math.abs(sample - 0.5) < 1e-6),
     'pre-reset output establishes an audible +0.5 trajectory',
   );
   assert.equal(processor.queuedSamples, 128);
@@ -339,6 +340,28 @@ test('live timeline reset de-clicks queue discard and recovered Listen PCM', asy
     recoveredSamples.slice(96).every((sample) => Math.abs(sample + 0.5) < 1e-6),
     'only the new live-edge PCM survives the queue reset',
   );
+});
+
+test('the first audio after silence fades in, at the very start and after an ordinary reset', async () => {
+  const processor = await makeProcessor({ minPrebufferMs: 1, initialPrebufferMs: 1, maxPrebufferMs: 10 });
+  const start = () => {
+    // A listener joins mid-song: the first sample is nowhere near zero.
+    processor.push(new Float32Array(256).fill(0.5));
+    const block = outputBlock();
+    processor.process([], block);
+    return Array.from(block[0][0]);
+  };
+  for (const when of ['at the very start', 'after an ordinary reset']) {
+    const output = start();
+    assert.ok(Math.abs(output[0]) < 1e-6, `${when}: starts from the silence before it`);
+    assert.ok(Math.abs(output[95] - 0.5) < 1e-6, `${when}: reaches the audio within 2 ms`);
+    assert.ok(output.slice(96).every((sample) => Math.abs(sample - 0.5) < 1e-6), `${when}: then untouched`);
+    let largest = 0;
+    for (let index = 1; index < output.length; index += 1) largest = Math.max(largest, Math.abs(output[index] - output[index - 1]));
+    assert.ok(largest < 0.01, `${when}: stepped by ${largest}`);
+    processor.port.onmessage?.({ data: { type: 'reset' } });
+    processor.process([], outputBlock());
+  }
 });
 
 test('ordinary playback reset remains a hard temporal reset', async () => {
@@ -698,6 +721,39 @@ test('a short underrun in a sung note keeps the note going, then fades it out', 
   assert.ok(Math.abs(health.concealedMs - 40) < 0.1, `reported ${health.concealedMs} ms concealed`);
 });
 
+test('a voice over a song is continued without a step at the underrun or at each repeat', async () => {
+  // A 165 Hz vowel with vibrato over a three-note chord: periodic enough to be
+  // continued, never exactly periodic. Repeated as it was, its last period
+  // stepped the output by three times anything the program does on its own.
+  const harmonics = [1, 0.8, 0.6, 0.9, 0.5, 0.3, 0.25, 0.35, 0.2, 0.12];
+  const program = (n: number) => {
+    const t = n / SAMPLE_RATE;
+    const phase = 2 * Math.PI * 165 * (t - (0.02 / (2 * Math.PI * 5)) * Math.cos(2 * Math.PI * 5 * t));
+    let vowel = 0;
+    harmonics.forEach((level, k) => { vowel += level * Math.sin((k + 1) * phase); });
+    return 0.06 * vowel
+      + 0.1 * (Math.sin(2 * Math.PI * 147 * t) + Math.sin(2 * Math.PI * 185 * t) + Math.sin(2 * Math.PI * 220 * t));
+  };
+  let ownStep = 0;
+  for (let n = 1; n < SAMPLE_RATE; n += 1) ownStep = Math.max(ownStep, Math.abs(program(n) - program(n - 1)));
+
+  let stepped = 0;
+  // Underruns at different points of the program: the splice differs each time.
+  for (const startMs of [0, 137, 392, 505, 811, 1203]) {
+    const processor = await makeProcessor({ minPrebufferMs: 1, initialPrebufferMs: 1, maxPrebufferMs: 10 });
+    const first = samplesFromMs(startMs);
+    processor.push(Float32Array.from({ length: samplesFromMs(60) }, (_, n) => program(first + n)));
+    const rendered = renderQuanta(processor, 40);
+    const starveAt = samplesFromMs(60);
+    if (processor.concealedSamples === 0) continue;
+    stepped += 1;
+    const worst = largestStep(rendered, starveAt - 1, starveAt + samplesFromMs(40) + 1);
+    assert.ok(worst <= ownStep * 1.2, `from ${startMs} ms: stepped by ${worst.toFixed(4)}, the program by ${ownStep.toFixed(4)}`);
+    assert.ok(rendered.slice(starveAt + samplesFromMs(40)).every((sample) => sample === 0));
+  }
+  assert.ok(stepped >= 3, `only ${stepped} of the underruns were concealed at all`);
+});
+
 test('an underrun in noise keeps the plain 2 ms fade instead of a repeated buzz', async () => {
   const processor = await makeProcessor({ minPrebufferMs: 1, initialPrebufferMs: 1, maxPrebufferMs: 10 });
   let seed = 3;
@@ -737,3 +793,78 @@ test('worklet health echoes reset/configure epochs so pending old reports can be
   processor.report(0);
   assert.equal(processor.port.messages.at(-1).healthEpoch, 4);
 });
+
+/**
+ * The whole playout against the downlink, as a listener hears it: a voice
+ * over a song, sent as 20 ms chunks on one ordered connection whose delay
+ * varies, rendered in real 128-sample quanta. Whatever the buffer does about
+ * it (rebuffer, conceal, drop to catch up, trim), the output must never step
+ * further than the programme itself does.
+ */
+function listenerProgram(n: number) {
+  const t = n / SAMPLE_RATE;
+  const phase = 2 * Math.PI * 165 * (t - (0.02 / (2 * Math.PI * 5)) * Math.cos(2 * Math.PI * 5 * t));
+  let vowel = 0;
+  [1, 0.8, 0.6, 0.9, 0.5, 0.3, 0.25, 0.35, 0.2, 0.12].forEach((level, k) => { vowel += level * Math.sin((k + 1) * phase); });
+  return 0.06 * vowel
+    + 0.1 * (Math.sin(2 * Math.PI * 147 * t) + Math.sin(2 * Math.PI * 185 * t) + Math.sin(2 * Math.PI * 220 * t));
+}
+
+const stallAt = (atMs: number, forMs: number) => (sentMs: number) =>
+  (sentMs >= atMs && sentMs < atMs + forMs ? atMs + forMs - sentMs : 0);
+const downlinks: { name: string; delay: (sentMs: number, random: () => number) => number; underruns: boolean }[] = [
+  { name: 'steady', delay: () => 0, underruns: false },
+  { name: 'jitter averaging 60 ms', delay: (_t, random) => -60 * Math.log(1 - random()), underruns: true },
+  { name: 'jitter with 2% spikes of 300-900 ms',
+    delay: (_t, random) => -40 * Math.log(1 - random()) + (random() < 0.02 ? 300 + random() * 600 : 0), underruns: true },
+  { name: 'a 300 ms stall', delay: stallAt(4_000, 300), underruns: true },
+  { name: 'a 1.5 s stall that floods past the queue', delay: stallAt(4_000, 1_500), underruns: true },
+  { name: 'a 400 ms stall every 3 s', delay: (t) => (t > 2_000 && t % 3_000 < 400 ? 400 - (t % 3_000) : 0), underruns: true },
+  { name: 'a route 300 ms longer from 4 s on', delay: (t) => (t >= 4_000 ? 300 : 0), underruns: true },
+  { name: 'chunks arriving five at a time', delay: (t) => (100 - (t % 100)) % 100, underruns: false },
+];
+
+for (const downlink of downlinks) {
+  test(`a listener hears no step the programme did not make: ${downlink.name}`, async () => {
+    let ownStep = 0;
+    for (let n = 1; n < SAMPLE_RATE; n += 1) ownStep = Math.max(ownStep, Math.abs(listenerProgram(n) - listenerProgram(n - 1)));
+    let seed = 4099;
+    const random = () => {
+      seed = (Math.imul(seed, 1_664_525) + 1_013_904_223) >>> 0;
+      return seed / 0x1_0000_0000;
+    };
+    const processor = await makeProcessor();
+    const seconds = 10;
+    const chunkSamples = samplesFromMs(20);
+    const arrivals: number[] = [];
+    for (let index = 0; index * 20 < seconds * 1000; index += 1) {
+      // One ordered connection: a chunk held up holds up those sent after it.
+      arrivals.push(Math.max(arrivals.at(-1) ?? 0, index * 20 + downlink.delay(index * 20, random)));
+    }
+    let next = 0;
+    let previous = 0;
+    let worst = 0;
+    let worstAtMs = 0;
+    while (processor.renderClockSamples < (seconds + 2) * SAMPLE_RATE) {
+      while (next < arrivals.length && samplesFromMs(arrivals[next]) <= processor.renderClockSamples) {
+        const first = next * chunkSamples;
+        processor.push(Float32Array.from({ length: chunkSamples }, (_, k) => listenerProgram(first + k)));
+        next += 1;
+      }
+      const block = outputBlock();
+      processor.process([], block);
+      for (const sample of block[0][0]) {
+        const step = Math.abs(sample - previous);
+        if (step > worst) {
+          worst = step;
+          worstAtMs = Math.round(processor.renderClockSamples / 48);
+        }
+        previous = sample;
+      }
+    }
+    assert.ok(worst <= ownStep * 1.5,
+      `stepped by ${worst.toFixed(4)} near ${worstAtMs} ms; the programme never moves more than ${ownStep.toFixed(4)}`);
+    // The shape has to reach what it is there for.
+    assert.equal(processor.underruns > 1, downlink.underruns, `${processor.underruns} underruns`);
+  });
+}

@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -10,7 +12,9 @@ const STARTUP_TIMEOUT_MS = 20_000;
  * browser proof. Calibration and its validation stay off, and the ping sweep
  * is slow enough never to matter. The room key and any WebTransport
  * deployment settings in the caller's environment are dropped, so a proof
- * only gets the ones it passes in `env`.
+ * only gets the ones it passes in `env`. The same goes for the take directory:
+ * unless `env` names one, Takes go to a temporary directory that is removed
+ * when the server exits, never to the deployment's `takes` library.
  */
 export function startRelay(env = {}) {
   const childEnv = { ...process.env };
@@ -25,12 +29,20 @@ export function startRelay(env = {}) {
     RELAY_HEARTBEAT_MS: '60000',
     ...env,
   });
+  const ownTakeDirectory = env.RELAY_TAKE_DIR === undefined
+    ? mkdtempSync(path.join(os.tmpdir(), 'relay-test-takes-'))
+    : null;
+  if (ownTakeDirectory) childEnv.RELAY_TAKE_DIR = ownTakeDirectory;
 
   const child = spawn(
     process.execPath,
     ['--import', 'tsx', path.join(root, 'src', 'server-entry.ts')],
     { cwd: root, env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] },
   );
+
+  if (ownTakeDirectory) {
+    child.once('exit', () => rmSync(ownTakeDirectory, { recursive: true, force: true }));
+  }
 
   let stdout = '';
   let stderr = '';

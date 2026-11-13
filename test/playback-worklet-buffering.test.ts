@@ -793,3 +793,78 @@ test('worklet health echoes reset/configure epochs so pending old reports can be
   processor.report(0);
   assert.equal(processor.port.messages.at(-1).healthEpoch, 4);
 });
+
+/**
+ * The whole playout against the downlink, as a listener hears it: a voice
+ * over a song, sent as 20 ms chunks on one ordered connection whose delay
+ * varies, rendered in real 128-sample quanta. Whatever the buffer does about
+ * it (rebuffer, conceal, drop to catch up, trim), the output must never step
+ * further than the programme itself does.
+ */
+function listenerProgram(n: number) {
+  const t = n / SAMPLE_RATE;
+  const phase = 2 * Math.PI * 165 * (t - (0.02 / (2 * Math.PI * 5)) * Math.cos(2 * Math.PI * 5 * t));
+  let vowel = 0;
+  [1, 0.8, 0.6, 0.9, 0.5, 0.3, 0.25, 0.35, 0.2, 0.12].forEach((level, k) => { vowel += level * Math.sin((k + 1) * phase); });
+  return 0.06 * vowel
+    + 0.1 * (Math.sin(2 * Math.PI * 147 * t) + Math.sin(2 * Math.PI * 185 * t) + Math.sin(2 * Math.PI * 220 * t));
+}
+
+const stallAt = (atMs: number, forMs: number) => (sentMs: number) =>
+  (sentMs >= atMs && sentMs < atMs + forMs ? atMs + forMs - sentMs : 0);
+const downlinks: { name: string; delay: (sentMs: number, random: () => number) => number; underruns: boolean }[] = [
+  { name: 'steady', delay: () => 0, underruns: false },
+  { name: 'jitter averaging 60 ms', delay: (_t, random) => -60 * Math.log(1 - random()), underruns: true },
+  { name: 'jitter with 2% spikes of 300-900 ms',
+    delay: (_t, random) => -40 * Math.log(1 - random()) + (random() < 0.02 ? 300 + random() * 600 : 0), underruns: true },
+  { name: 'a 300 ms stall', delay: stallAt(4_000, 300), underruns: true },
+  { name: 'a 1.5 s stall that floods past the queue', delay: stallAt(4_000, 1_500), underruns: true },
+  { name: 'a 400 ms stall every 3 s', delay: (t) => (t > 2_000 && t % 3_000 < 400 ? 400 - (t % 3_000) : 0), underruns: true },
+  { name: 'a route 300 ms longer from 4 s on', delay: (t) => (t >= 4_000 ? 300 : 0), underruns: true },
+  { name: 'chunks arriving five at a time', delay: (t) => (100 - (t % 100)) % 100, underruns: false },
+];
+
+for (const downlink of downlinks) {
+  test(`a listener hears no step the programme did not make: ${downlink.name}`, async () => {
+    let ownStep = 0;
+    for (let n = 1; n < SAMPLE_RATE; n += 1) ownStep = Math.max(ownStep, Math.abs(listenerProgram(n) - listenerProgram(n - 1)));
+    let seed = 4099;
+    const random = () => {
+      seed = (Math.imul(seed, 1_664_525) + 1_013_904_223) >>> 0;
+      return seed / 0x1_0000_0000;
+    };
+    const processor = await makeProcessor();
+    const seconds = 10;
+    const chunkSamples = samplesFromMs(20);
+    const arrivals: number[] = [];
+    for (let index = 0; index * 20 < seconds * 1000; index += 1) {
+      // One ordered connection: a chunk held up holds up those sent after it.
+      arrivals.push(Math.max(arrivals.at(-1) ?? 0, index * 20 + downlink.delay(index * 20, random)));
+    }
+    let next = 0;
+    let previous = 0;
+    let worst = 0;
+    let worstAtMs = 0;
+    while (processor.renderClockSamples < (seconds + 2) * SAMPLE_RATE) {
+      while (next < arrivals.length && samplesFromMs(arrivals[next]) <= processor.renderClockSamples) {
+        const first = next * chunkSamples;
+        processor.push(Float32Array.from({ length: chunkSamples }, (_, k) => listenerProgram(first + k)));
+        next += 1;
+      }
+      const block = outputBlock();
+      processor.process([], block);
+      for (const sample of block[0][0]) {
+        const step = Math.abs(sample - previous);
+        if (step > worst) {
+          worst = step;
+          worstAtMs = Math.round(processor.renderClockSamples / 48);
+        }
+        previous = sample;
+      }
+    }
+    assert.ok(worst <= ownStep * 1.5,
+      `stepped by ${worst.toFixed(4)} near ${worstAtMs} ms; the programme never moves more than ${ownStep.toFixed(4)}`);
+    // The shape has to reach what it is there for.
+    assert.equal(processor.underruns > 1, downlink.underruns, `${processor.underruns} underruns`);
+  });
+}

@@ -28,6 +28,7 @@ test('relay config owns remaining server-local deployment inputs', () => {
   assert.equal(defaults.probeReplyTimeoutMs, 3_000);
   assert.equal(defaults.probeMaxAttempts, 3);
   assert.equal(defaults.robotOffsetWindowMs, 2_000);
+  assert.equal(defaults.robotOffsetSettleMs, 3_000);
   assert.equal(defaults.robotContentTransitionLifetimeMs, 15_000);
   assert.equal(defaults.robotContentTransitionMaxWindows, 12);
   assert.equal(defaults.robotContentTransitionMaxWorkerFailures, 3);

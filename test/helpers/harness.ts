@@ -70,6 +70,9 @@ export function startRelay(env: Record<string, string> = {}): Promise<RelayServe
         RELAY_INFRA_KEY: HARNESS_INFRA_KEY,
         // Test clients answer pings themselves; no test is about liveness.
         RELAY_HEARTBEAT_MS: '60000',
+        // Fake singer pages report a few times at most; a test that is about
+        // the page clock wait sets its own.
+        RELAY_CALIBRATION_PROBE_PAGE_CLOCK_WAIT_MS: '0',
         ...env,
       },
       stdio: ['ignore', 'pipe', 'pipe'],

@@ -1065,6 +1065,7 @@ const bootProbe = new BootProbeCoordinator({
   replyTimeoutMs: PROBE_REPLY_TIMEOUT_MS,
   analysisTimeoutMs: PROBE_ANALYSIS_TIMEOUT_MS,
   debug: PROBE_DEBUG,
+  pageClockWaitMs: relayConfig.probePageClockWaitMs,
 }, {
   audio: session,
   calibration,
@@ -1086,6 +1087,11 @@ const bootProbe = new BootProbeCoordinator({
   micPageClockOffsetMs: (nowMs) => {
     const clock = youtubeTimeline.leaderPageClock(nowMs);
     return clock && clock.participantId === participants.micOwnerId ? clock.offsetMs : null;
+  },
+  micPageClockExpected: () => {
+    const owner = participants.micOwnerId;
+    return owner !== null && (youtubeTimeline.leaderIdentity()?.participantId === owner
+      || youtubeTimeline.handoffTarget()?.participantId === owner);
   },
   send: (target, request) => {
     const socket = target === 'mic' ? micRuntime.publisher : sourceRuntime.socket;

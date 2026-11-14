@@ -70,6 +70,8 @@ export function startRelay(env: Record<string, string> = {}): Promise<RelayServe
         RELAY_INFRA_KEY: HARNESS_INFRA_KEY,
         // Test clients answer pings themselves; no test is about liveness.
         RELAY_HEARTBEAT_MS: '60000',
+        // A Robot that settles on its first report, as every test's fake does.
+        RELAY_ROBOT_OFFSET_SETTLE_MS: '0',
         ...env,
       },
       stdio: ['ignore', 'pipe', 'pipe'],

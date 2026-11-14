@@ -22,6 +22,11 @@ export type BootProbeCoordinatorConfig = {
   replyTimeoutMs: number;
   analysisTimeoutMs: number;
   debug: boolean;
+  /**
+   * How long a Mic probe waits for the singer's page clock when that page
+   * plays the song but has not reported enough yet. 0 never waits.
+   */
+  pageClockWaitMs?: number;
 };
 
 type ProbeTimingEvidence = {
@@ -67,6 +72,8 @@ export type BootProbeHost = {
   playbackRate: (nowMs: number) => number;
   /** The Mic page's clock against the server's, when the room clock knows it. */
   micPageClockOffsetMs?: (nowMs: number) => number | null;
+  /** Whether the Mic page plays the room's song, or is taking it over, so its clock is coming. */
+  micPageClockExpected?: (nowMs: number) => boolean;
   send: (target: ProbeTarget, request: { type: string; target: ProbeTarget; requestId: number; leadMs: number }) => void;
   changed: () => void;
   onBackingMeasured: (latencyMs: number) => void;
@@ -85,6 +92,7 @@ export class BootProbeCoordinator {
   private readonly timing: BootProbeHost['timing'];
   private readonly evidence: Partial<Record<ProbeTarget, ProbeTimingEvidence>> = {};
   private completedEvidence: Partial<Record<ProbeTarget, ProbeTimingEvidence>> | null = null;
+  private pageClockWait: { generation: number | null; sinceMs: number } | null = null;
 
   constructor(
     private readonly config: BootProbeCoordinatorConfig,
@@ -242,7 +250,28 @@ export class BootProbeCoordinator {
     if (target === null) return;
     if (!this.runtime.canStart(target, nowMs)) return;
     if (!this.pathReady(target, nowMs)) return;
+    if (target === 'mic' && this.awaitingMicPageClock(nowMs)) return;
     this.request(target, nowMs);
+  }
+
+  /**
+   * A singer who takes the Mic and the song together has a page clock a couple
+   * of seconds later: eight playback reports, 250 ms apart. On 2026-11-14 the
+   * probe went out about a second after the takeover, so only 5 of 45 Mic
+   * probes were timed on the page clock, all where the singer already led the
+   * song; the rest assumed an even round trip, which the page clock showed to
+   * be 40-80 ms wrong for a singer in Germany. The wait is bounded and starts
+   * once per capture generation, so a page whose clock never comes costs only
+   * that.
+   */
+  private awaitingMicPageClock(nowMs: number) {
+    const waitMs = this.config.pageClockWaitMs ?? 0;
+    if (waitMs <= 0 || !this.host.micPageClockExpected?.(nowMs)) return false;
+    if ((this.host.micPageClockOffsetMs?.(nowMs) ?? null) !== null) return false;
+    const generation = this.captureGeneration('mic');
+    let wait = this.pageClockWait;
+    if (wait?.generation !== generation) wait = this.pageClockWait = { generation, sinceMs: nowMs };
+    return nowMs - wait.sinceMs < waitMs;
   }
 
   private acceptClientResult(

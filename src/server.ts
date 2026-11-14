@@ -405,6 +405,7 @@ const robotPlayerOffset = new RobotPlayerOffsetTracker({
   freshForMs: ROBOT_OFFSET_FRESH_MS,
   windowMs: ROBOT_OFFSET_WINDOW_MS,
   maxAbsOffsetMs: 450,
+  settleMs: relayConfig.robotOffsetSettleMs,
 });
 const robotContentTimeline = new RobotContentTimelineMapper({
   sampleRate: MIX_SAMPLE_RATE,
@@ -762,6 +763,7 @@ function robotContentFallbackPrimingActive(nowMs = performance.now()) {
 
 function robotDeltaIsFresh(nowMs = performance.now()) {
   return sourceRuntime.connected()
+    && robotPlayerOffset.settled
     && robotPlayerOffset.offsetMs(nowMs) !== null
     && robotPlayerOffset.isFresh(nowMs);
 }
@@ -788,7 +790,8 @@ function currentPlaybackRate(nowMs = performance.now()) {
 }
 
 function robotDeltaEverEstablished() {
-  return Number.isFinite(robotPlayerOffset.lastReportedAtMs);
+  // A run that has not settled has granted nothing to hold on to.
+  return robotPlayerOffset.settled && Number.isFinite(robotPlayerOffset.lastReportedAtMs);
 }
 
 function robotContentMappingReady(nowMs = performance.now()) {

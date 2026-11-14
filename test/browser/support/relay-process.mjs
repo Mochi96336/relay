@@ -23,6 +23,7 @@ export function startRelay(env = {}) {
     RELAY_CALIBRATION_VALIDATION: '0',
     RELAY_CALIBRATION_PROBE: '0',
     RELAY_HEARTBEAT_MS: '60000',
+    RELAY_ROBOT_OFFSET_SETTLE_MS: '0',
     ...env,
   });
 

@@ -93,6 +93,7 @@ export function loadRelayConfig(env: Env = process.env) {
     probeReplyTimeoutMs: legacyPositiveNumber(env, 'RELAY_CALIBRATION_PROBE_REPLY_TIMEOUT_MS', 3_000),
     probeMaxAttempts: legacyPositiveInt(env, 'RELAY_CALIBRATION_PROBE_MAX_ATTEMPTS', 3),
     robotOffsetWindowMs: legacyPositiveNumber(env, 'RELAY_ROBOT_OFFSET_WINDOW_MS', 2_000),
+    robotOffsetSettleMs: envNumber(env, 'RELAY_ROBOT_OFFSET_SETTLE_MS', 3_000, { min: 0 }),
     robotContentTransitionLifetimeMs: legacyPositiveNumber(
       env,
       'RELAY_ROBOT_CONTENT_TRANSITION_LIFETIME_MS',

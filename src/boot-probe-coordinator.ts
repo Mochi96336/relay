@@ -9,6 +9,7 @@ import { bootProbeTopologyReady } from './boot-probe-topology-admission-policy.j
 import { MAX_CAPTURE_GAP_MS, type CalibrationSession } from './calibration-session.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
 import type { ProbeTarget } from './probe-lifecycle.js';
+import { implausibleProbeMatch } from './probe-match-plausibility.js';
 import { probeScheduleTime, sanitizeProbeTimingDiagnostics } from './probe-timing-diagnostics.js';
 import type { TimingRuntime } from './timing-runtime.js';
 
@@ -410,6 +411,13 @@ export class BootProbeCoordinator {
         `correlation ${correlation.toFixed(3)} was below ${this.config.minCorrelation.toFixed(3)}`,
         nowMs,
       );
+      return;
+    }
+    const implausible = implausibleProbeMatch(analysis.target, correlation, latencyMs);
+    if (implausible !== null) {
+      // A chance peak, not the chime: treated as not heard, like a weak correlation.
+      this.runtime.markAttemptUnheard(analysis.target);
+      this.failAttempt(analysis.target, implausible, nowMs);
       return;
     }
 

@@ -333,3 +333,38 @@ test('a new manual request cannot mutate the diagnostic snapshot of the complete
   assert.equal(f.coordinator.pathDifferenceMs, null);
   assert.equal(f.coordinator.completedContextMatches(f.context()), false);
 });
+
+test('a weak Mic match at a latency no probe can have is not a measurement', (t) => {
+  t.mock.method(console, 'log', () => {});
+  // The two matches applied on 2026-11-14: 0.584 at 40 ms and 0.518 at 1485 ms.
+  for (const latencyMs of [40, 1_485]) {
+    const f = fixture({ minCorrelation: 0.5 });
+    f.state.correlation.mic = 0.55;
+    f.state.latencyMs.mic = latencyMs;
+    f.measure('mic', 0);
+    f.measure('mic', 200);
+    assert.equal(f.coordinator.status(230).micProbeUnheard, true, `${latencyMs} ms`);
+    assert.equal(f.coordinator.status(230).phase, 'failed');
+    assert.equal(f.calibration.result, null);
+  }
+});
+
+test('a weak Mic match at a plausible latency and a strong one anywhere still measure', () => {
+  for (const [correlation, latencyMs] of [[0.55, 260], [0.75, 40], [0.9, 1_485]]) {
+    const f = fixture({ minCorrelation: 0.5 });
+    f.state.correlation.mic = correlation;
+    f.state.latencyMs.mic = latencyMs;
+    f.measure('mic', 0);
+    f.measure('backing', 100);
+    assert.ok(f.calibration.result !== null, `${correlation} at ${latencyMs} ms`);
+  }
+});
+
+test('the Robot leg is never held to the Mic latency range', () => {
+  const f = fixture({ minCorrelation: 0.5 });
+  f.state.correlation.backing = 0.6;
+  f.state.latencyMs.backing = 40;
+  f.measure('mic', 0);
+  f.measure('backing', 100);
+  assert.ok(f.calibration.result !== null);
+});

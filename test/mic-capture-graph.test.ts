@@ -21,6 +21,32 @@ test('graph installs silent output, timestamp protocol and worker configuration 
   assert.deepEqual(f.messages, ['current capture']);
 });
 
+test('the output is never all zeros, so the browser keeps the context on the output device', async () => {
+  const { CAPTURE_OUTPUT_KEEPALIVE_LEVEL } = await import('../public/mic-capture-graph.js');
+  const f = captureFixture();
+  const graph = f.install();
+  const keepalive = f.nodes.find(n => n.kind === 'constant')!;
+  assert.equal(graph.keepalive, keepalive);
+  assert.equal(keepalive.offset.value, CAPTURE_OUTPUT_KEEPALIVE_LEVEL);
+  assert.equal(keepalive.target, f.context.destination, 'the constant must reach the output, not the zero gain');
+  assert.equal(keepalive.starts, 1);
+  // Not zero, inaudible, and under the level a browser shows as a playing tab (about -72 dBFS).
+  const dbfs = 20 * Math.log10(CAPTURE_OUTPUT_KEEPALIVE_LEVEL);
+  assert.ok(CAPTURE_OUTPUT_KEEPALIVE_LEVEL > 0 && dbfs <= -100, `${dbfs} dBFS`);
+  f.dispose(graph);
+  assert.equal(keepalive.stops, 1);
+  assert.equal(keepalive.connected, false);
+});
+
+test('a browser without a constant source still installs the capture graph', () => {
+  const f = captureFixture();
+  f.context.createConstantSource = undefined;
+  const graph = f.install();
+  assert.equal(graph.keepalive, null);
+  assert.equal(f.nodes.find(n => n.kind === 'gain')!.connected, true);
+  f.dispose(graph);
+});
+
 test('dispose removes listeners, disconnects nodes and terminates only graph resources', () => {
   const f = captureFixture();
   const graph = f.install();

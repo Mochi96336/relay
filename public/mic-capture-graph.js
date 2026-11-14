@@ -25,6 +25,20 @@ function trackDeviceId(track) {
   } catch { return null; }
 }
 
+/**
+ * The capture graph ends in a zero gain, so its context's output is all zeros.
+ * Chrome stops driving such a context from the output device after 30 s and
+ * runs it from a timer instead. A timer in a page that is hidden runs late: on
+ * 2026-11-14 a singer who switched windows after taking the Mic delivered 68-72%
+ * of their samples for minutes, each time starting 31 s after the context was
+ * created and again 31 s after its replacement.
+ *
+ * A constant this small keeps the output from being all zeros. It is 120 dB
+ * below full scale: below a 16-bit device's smallest step, and far below the
+ * level at which a browser marks the tab as playing sound.
+ */
+export const CAPTURE_OUTPUT_KEEPALIVE_LEVEL = 1e-6;
+
 /** Graph-local resources only. Publisher owns tracks, context and recovery policy. */
 export function createMicCaptureGraph({
   epoch, sessionEpoch, stream, context, isCurrent, onCaptureMessage,
@@ -48,7 +62,7 @@ export function createMicCaptureGraph({
 
   const graph = {
     epoch, sessionEpoch, stream, context,
-    source: null, capture: null, silent: null,
+    source: null, capture: null, silent: null, keepalive: null,
     captureClockOriginContextTime: null,
     get premixed() { return premix !== null; },
     get visualAnalysis() { return visualAnalysis; },
@@ -80,7 +94,8 @@ export function createMicCaptureGraph({
     processorErrorListener = null;
     stopWorker();
     try { premix?.disconnect(); } catch {}
-    for (const node of [graph.source, graph.capture, graph.silent]) {
+    try { graph.keepalive?.stop(); } catch {}
+    for (const node of [graph.source, graph.capture, graph.silent, graph.keepalive]) {
       try { node?.disconnect(); } catch {}
     }
   }
@@ -185,6 +200,13 @@ export function createMicCaptureGraph({
     premix = connectInput?.({ context, stream, source: graph.source, capture: graph.capture }) ?? null;
     if (!premix) graph.source.connect(graph.capture);
     graph.capture.connect(graph.silent).connect(context.destination);
+    // A browser without the node keeps the all-zero output it had before.
+    if (typeof context.createConstantSource === 'function') {
+      graph.keepalive = context.createConstantSource();
+      graph.keepalive.offset.value = CAPTURE_OUTPUT_KEEPALIVE_LEVEL;
+      graph.keepalive.connect(context.destination);
+      graph.keepalive.start();
+    }
     return graph;
   } catch (error) {
     dispose();

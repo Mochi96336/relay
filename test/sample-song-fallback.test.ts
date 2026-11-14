@@ -98,8 +98,13 @@ test('the fallback target journal logs source changes at once and movement at mo
   const song = (targetMs: number) => ({ source: 'sample-song' as const, reason: null, targetMs });
   assert.equal(j.note(song(-600), 0), 'start');
   assert.equal(j.note(song(-610), 2000), null, 'noise below the move threshold');
-  assert.equal(j.note(song(-650), 500), null, 'a move within a second of the last line waits');
-  assert.equal(j.note(song(-650), 1000), 'move');
+  // A steady song alternating between two values 22 ms apart, as on 2026-11-14.
+  for (let atMs = 3_000; atMs < 20_000; atMs += 1_000) {
+    assert.equal(j.note(song(atMs % 2_000 === 0 ? -600 : -622), atMs), null, `alternation at ${atMs}`);
+  }
+  assert.equal(j.note(song(-650), 20_500), 'move', 'a real drift is still logged');
+  assert.equal(j.note(song(-690), 21_000), null, 'a move within a second of the last line waits');
+  assert.equal(j.note(song(-690), 21_500), 'move');
   assert.equal(j.note({ source: 'held', reason: 'mic-stale', targetMs: -650 }, 1001), 'source');
   assert.equal(j.note({ source: 'held', reason: 'mic-unsettled', targetMs: -650 }, 1002), 'source');
   assert.equal(j.note(song(-650), 1003), 'source');

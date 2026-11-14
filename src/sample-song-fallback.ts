@@ -99,10 +99,16 @@ export type FallbackTargetEntry = {
  * source or the reason for it changed, or it moved this far since the last line.
  * The target is refreshed on every backing packet, so lines for movement alone
  * are at most one per interval.
+ *
+ * Within a steady song the target alternates between two values 20-25 ms
+ * apart. At a 20 ms step that wrote a line every second or two for whole
+ * songs: 375 of the 553 lines on 2026-11-14. The applied compensation does
+ * not follow the alternation, and the drifts worth seeing that evening were
+ * 50-110 ms, so the step is 30 ms: 46 move lines, every drift still shown.
  */
 export class FallbackTargetJournal {
   private last: (FallbackTargetEntry & { atMs: number }) | null = null;
-  constructor(private readonly moveMs = 20, private readonly intervalMs = 1000) {}
+  constructor(private readonly moveMs = 30, private readonly intervalMs = 1000) {}
   note(entry: FallbackTargetEntry, nowMs: number): 'start' | 'source' | 'move' | null {
     const last = this.last;
     const change = !last ? 'start'

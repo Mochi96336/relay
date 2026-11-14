@@ -22,6 +22,7 @@ function fixture(overrides: Partial<BootProbeCoordinatorConfig> = {}) {
     backingIsRobot: true, robotSourceConnected: true, ready: true,
     calibrationStale: false, staleReads: 0, forbidGenerationRead: false,
     deltaMs: 40, playbackRate: 2,
+    pageClockExpected: false, pageClockOffsetMs: null as number | null,
     latencyMs: { mic: 120, backing: 60 }, correlation: { mic: 0.95, backing: 0.9 },
     pcmReads: 0, evidenceReads: 0, analyses: 0, measured: 0,
     pathReads: [] as ProbeTarget[], backingMeasurements: [] as number[],
@@ -85,6 +86,8 @@ function fixture(overrides: Partial<BootProbeCoordinatorConfig> = {}) {
     pathReady: (target) => { state.pathReads.push(target); return state.ready; },
     deltaMs: () => state.deltaMs,
     playbackRate: () => state.playbackRate,
+    micPageClockOffsetMs: () => state.pageClockOffsetMs,
+    micPageClockExpected: () => state.pageClockExpected,
     send: (target, request) => { sent.push({ ...request, target }); events.push(`sent:${target}`); },
     changed: () => events.push('changed'),
     onBackingMeasured: (latencyMs) => state.backingMeasurements.push(latencyMs),
@@ -332,4 +335,60 @@ test('a new manual request cannot mutate the diagnostic snapshot of the complete
   assert.equal(f.coordinator.completedTimingEvidence, null);
   assert.equal(f.coordinator.pathDifferenceMs, null);
   assert.equal(f.coordinator.completedContextMatches(f.context()), false);
+});
+
+test('a Mic probe waits, boundedly, for the clock of a page that plays the song', () => {
+  const f = fixture({ pageClockWaitMs: 4_000 });
+  f.state.pageClockExpected = true;
+  f.coordinator.startIfReady(0);
+  f.coordinator.startIfReady(2_000);
+  assert.deepEqual(f.sent, [], 'no probe while the clock is coming');
+  f.state.pageClockOffsetMs = 1_234;
+  f.coordinator.startIfReady(2_100);
+  assert.equal(f.sent.length, 1, 'sent as soon as the clock is known');
+});
+
+test('a page whose clock never comes delays the Mic probe once, by the wait', () => {
+  const f = fixture({ pageClockWaitMs: 4_000 });
+  f.state.pageClockExpected = true;
+  f.coordinator.startIfReady(0);
+  f.coordinator.startIfReady(3_999);
+  assert.deepEqual(f.sent, []);
+  f.coordinator.startIfReady(4_000);
+  assert.equal(f.sent.length, 1);
+});
+
+test('a new capture generation waits again; a page not playing the song never waits', () => {
+  const waiting = fixture({ pageClockWaitMs: 4_000 });
+  waiting.state.pageClockExpected = true;
+  waiting.coordinator.startIfReady(0);
+  waiting.state.micGeneration = 3;
+  waiting.coordinator.startIfReady(4_000);
+  assert.deepEqual(waiting.sent, [], 'the rebuilt capture starts its own wait');
+  waiting.coordinator.startIfReady(8_000);
+  assert.equal(waiting.sent.length, 1);
+
+  const other = fixture({ pageClockWaitMs: 4_000 });
+  other.coordinator.startIfReady(0);
+  assert.equal(other.sent.length, 1);
+
+  const disabled = fixture({ pageClockWaitMs: 0 });
+  disabled.state.pageClockExpected = true;
+  disabled.coordinator.startIfReady(0);
+  assert.equal(disabled.sent.length, 1);
+});
+
+test('the Robot leg never waits for a page clock', () => {
+  const f = fixture({ pageClockWaitMs: 4_000 });
+  f.measure('mic', 0);
+  f.state.pageClockExpected = true;
+  f.coordinator.startIfReady(100);
+  assert.equal(f.sent.at(-1)?.target, 'backing');
+});
+
+test('the server waits for the page clock of the singer who plays or is taking over the song', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const server = await readFile(new URL('../src/server.ts', import.meta.url), 'utf8');
+  assert.match(server, /pageClockWaitMs: relayConfig\.probePageClockWaitMs,/);
+  assert.match(server, /micPageClockExpected: \(\) => \{[\s\S]*?leaderIdentity\(\)\?\.participantId === owner[\s\S]*?handoffTarget\(\)\?\.participantId === owner/);
 });

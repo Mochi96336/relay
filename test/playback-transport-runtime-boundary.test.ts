@@ -33,7 +33,7 @@ test('PlaybackTransportRuntime owns socket identity and routing without absorbin
     /new SongSession|RoomSongCommandRuntime|ParticipantSession|AudioSession|TakeController|youtubeTimeline|roomSongCommands|participants|broadcastJson/,
   );
 
-  assert.match(server, /const youtubeTimeline = new SongSession\(\);/);
+  assert.match(server, /const youtubeTimeline = new SongSession\(\{ reportTravelTime: relayConfig\.songReportTravelTime \}\);/);
   assert.match(server, /const roomSongCommands = new RoomSongCommandRuntime\(\);/);
   assert.match(server, /participants\.micOwnerId/);
   assert.match(server, /playbackTransport\.send\(/);

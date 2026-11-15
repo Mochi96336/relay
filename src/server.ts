@@ -225,7 +225,7 @@ const playbackTransport = new PlaybackTransportRuntime<RelaySocket>({
   micIntentMs: PLAYBACK_MIC_INTENT_MS,
 });
 const participants = new ParticipantSession(PARTICIPANT_GRACE_MS);
-const youtubeTimeline = new SongSession();
+const youtubeTimeline = new SongSession({ reportTravelTime: relayConfig.songReportTravelTime });
 const roomSongCommands = new RoomSongCommandRuntime();
 
 type TimelineStatus = {

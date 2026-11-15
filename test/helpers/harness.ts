@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -25,6 +27,8 @@ export type RelayServer = {
   stdout: () => string;
   /** The infrastructure capability this server accepts (RELAY_INFRA_KEY). */
   infrastructureKey: string;
+  /** Where this server writes Takes (RELAY_TAKE_DIR). */
+  takeDirectory: string;
 };
 
 /**
@@ -58,6 +62,15 @@ export function participantIdFor(name: string) {
  * would otherwise dominate a test run are shortened through the RELAY_* knobs.
  */
 export function startRelay(env: Record<string, string> = {}): Promise<RelayServer> {
+  // The server's default take directory is `takes` under its working directory,
+  // which on the deployment is the room's real recording library. A server that
+  // is not given a directory gets a temporary one, removed when it exits, so no
+  // test or ad-hoc script can record into the library. The caller's process
+  // environment does not count: only `env` names a directory.
+  const ownTakeDirectory = env.RELAY_TAKE_DIR === undefined
+    ? mkdtempSync(path.join(os.tmpdir(), 'relay-test-takes-'))
+    : null;
+  const takeDirectory = ownTakeDirectory ?? env.RELAY_TAKE_DIR!;
   const child = spawn(
     process.execPath,
     ['--import', 'tsx', path.join(root, 'src', 'server-entry.ts')],
@@ -71,10 +84,14 @@ export function startRelay(env: Record<string, string> = {}): Promise<RelayServe
         // Test clients answer pings themselves; no test is about liveness.
         RELAY_HEARTBEAT_MS: '60000',
         ...env,
+        RELAY_TAKE_DIR: takeDirectory,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   );
+  if (ownTakeDirectory) {
+    child.once('exit', () => rmSync(ownTakeDirectory, { recursive: true, force: true }));
+  }
 
   let stderr = '';
   child.stderr.setEncoding('utf8');
@@ -127,6 +144,7 @@ export function startRelay(env: Record<string, string> = {}): Promise<RelayServe
         stderr: () => stderr,
         stdout: () => stdout,
         infrastructureKey: env.RELAY_INFRA_KEY ?? HARNESS_INFRA_KEY,
+        takeDirectory,
       });
     });
   });

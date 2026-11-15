@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
-import { readdir, readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+import { startRelay } from './helpers/harness.js';
 
 /**
  * `RELAY_TAKE_DIR` defaults to `takes`, relative to the server's working
@@ -12,6 +18,10 @@ import test from 'node:test';
  * They are easy to miss because `takes/` is gitignored: nothing in the working
  * tree ever looks dirty. Eighteen zero-length `server-shutdown` artifacts had
  * accumulated from one such test before this guard existed.
+ *
+ * The guard below only reads test files. On 2026-11-12 an ad-hoc script that
+ * drove the harness from the checkout left six more Takes in the library, so
+ * the harness itself now gives every server it starts a directory of its own.
  */
 
 /** The text of each `startRelay(...)` argument, parens balanced. */
@@ -68,4 +78,44 @@ test('every relay a recording test starts names its own take directory', async (
     'these start a relay and record without an isolated take directory, so they '
     + `write into the deployment's real library: ${offenders.join(', ')}`,
   );
+});
+
+test('a relay started without a take directory records into a temporary one', async () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const inherited = process.env.RELAY_TAKE_DIR;
+  // A directory in the caller's environment must not be used either.
+  process.env.RELAY_TAKE_DIR = path.join(root, 'takes');
+  let server;
+  try {
+    server = await startRelay();
+  } finally {
+    if (inherited === undefined) delete process.env.RELAY_TAKE_DIR;
+    else process.env.RELAY_TAKE_DIR = inherited;
+  }
+  const directory = server.takeDirectory;
+  try {
+    assert.ok(path.relative(root, directory).startsWith('..'), `${directory} is inside the checkout`);
+    assert.ok(existsSync(directory));
+  } finally {
+    await server.stop();
+  }
+  assert.equal(existsSync(directory), false, 'the temporary take directory outlived its server');
+});
+
+test('a relay keeps the take directory its test names', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-isolation-'));
+  try {
+    const server = await startRelay({ RELAY_TAKE_DIR: directory });
+    assert.equal(server.takeDirectory, directory);
+    await server.stop();
+    assert.ok(existsSync(directory), 'a directory the test owns was removed by the harness');
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('the browser proof launcher isolates its take directory the same way', async () => {
+  const source = await readFile(new URL('./browser/support/relay-process.mjs', import.meta.url), 'utf8');
+  assert.match(source, /env\.RELAY_TAKE_DIR === undefined\s*\? mkdtempSync\(/);
+  assert.match(source, /childEnv\.RELAY_TAKE_DIR = ownTakeDirectory/);
 });

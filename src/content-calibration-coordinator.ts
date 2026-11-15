@@ -45,7 +45,6 @@ export type ContentCalibrationHost = {
     timeline(nowMs?: number): { connected?: boolean; state?: number | null };
     noteMicMeasured(): void;
   };
-  takeBlocked(): boolean;
   timingChanged(): void;
   sourceChanged(): void;
 };
@@ -96,14 +95,6 @@ export class ContentCalibrationCoordinator {
     if (!this.validation.collecting && state !== 'suspect') return false;
     this.validation.cancel(nowMs);
     return true;
-  }
-
-  /** The recording command calls this only after the Take commits. */
-  standDownForTake(nowMs: number) {
-    // Both owners publish their own transition. Do not emit the same status
-    // again after their synchronous callbacks have already committed it.
-    this.cancelValidation(nowMs);
-    this.measurement.abandon();
   }
 
   startManual(nowMs: number) {
@@ -170,7 +161,7 @@ export class ContentCalibrationCoordinator {
 
   private maybeStartAutomatic(nowMs: number) {
     const { measurement, host } = this;
-    if (!this.config.automatic || host.takeBlocked()) return;
+    if (!this.config.automatic) return;
     const robotRoute = host.route.robotActive();
     if (!autoContentCalibrationPrerequisitesReady({
       bootProbeSettled: host.route.bootSettled(nowMs),
@@ -210,7 +201,6 @@ export class ContentCalibrationCoordinator {
     const robotRoute = host.route.robotActive();
     if (!contentValidationPathPrerequisitesReady({
       enabled: this.config.validation.enabled ?? true,
-      takeBlocked: host.takeBlocked(),
       bootProbeSettled: host.route.bootSettled(nowMs),
       robotRouteActive: robotRoute,
       robotEvidenceMappingReady: !robotRoute || host.route.evidenceMappingReady(nowMs),

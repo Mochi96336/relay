@@ -62,8 +62,7 @@ function fixture(options: {
     media: {
       active: () => true, backingConnected: () => state.backing, micControlConnected: () => true,
       streamsFlowing: () => true, timeline: () => ({ connected: true, state: 1 }), noteMicMeasured: () => {},
-    },
-    takeBlocked: () => false, timingChanged, sourceChanged,
+    }, timingChanged, sourceChanged,
   });
   const host: CalibrationCoordinatorHost = {
     content, timing,

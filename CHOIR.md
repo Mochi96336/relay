@@ -43,7 +43,7 @@ B's join socket (its ordinary page socket) carries the join, the claim and B's r
 3. **YouTube time**: B's page reports which capture sample was recorded at which point of its local YouTube (`choir-secondary-song-anchor`), the Robot reports the same for the backing, and the difference places B within seconds of the song playing.
 4. **No song**: B reads at A's advance, and B's own frontier correction holds it back as far as B's audio actually arrives.
 
-Each song is measured afresh; a pause or seek keeps the last Content measurement. While a song plays, a lapse in every source keeps B where it was last placed. A change in B's lag over 100 ms fades B out, jumps and fades B back in, instead of the 1% slew taking minutes over it. While a Take records, an audible B keeps its lag, as A's alignment does.
+Each song is measured afresh; a pause or seek keeps the last Content measurement. While a song plays, a lapse in every source keeps B where it was last placed. A change in B's lag over 100 ms fades B out, jumps and fades B back in, instead of the 1% slew taking minutes over it. While a Take records, both voices keep their normal live alignment corrections; the recording taps the same output as Listen. Audible test probes wait until recording ends.
 
 ## What Listen and Take hear
 

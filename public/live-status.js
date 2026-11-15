@@ -315,19 +315,16 @@ if (
               : t('system.idle');
     systemTiming.textContent = clockIssue
       ? t(productIssueTitleKey(clockIssue))
-      : takeFreezesEstimate(status) || probeUnheardEstimate(status)
+      : estimateAwaitingProbe(status) || probeUnheardEstimate(status)
       ? t('system.timing.estimated')
       : timingLabels[status.timing?.state]?.() ?? t('system.unknown');
     systemRecording.textContent = takeLabels[status.take?.lifecycle]?.() ?? t('system.unknown');
   }
 
-  /**
-   * A Take freezes timing until it ends: no Realign, no background measurement.
-   * An estimate it records with will not recover by itself meanwhile.
-   */
-  function takeFreezesEstimate(status) {
-    return ['recording', 'finalizing'].includes(status.take?.lifecycle)
-      && status.timing?.state === 'fallback';
+  /** The domain says the audible probe must wait until this Take ends. */
+  function estimateAwaitingProbe(status) {
+    return status.timing?.state === 'fallback' && Array.isArray(status.issues)
+      && status.issues.some(issue => issue?.scope === 'timing' && issue.recovery === 'recalibrate-after-take');
   }
 
   /** The Mic never heard the chime (headphones): an estimate, not a recovery in progress. */
@@ -346,9 +343,7 @@ if (
     const issue = Array.isArray(status.issues)
       ? status.issues.find(issue => issue?.code === attention.code && issue?.scope === attention.scope) ?? attention
       : attention;
-    attentionCopy.textContent = attention.code === 'timing-recovering' && takeFreezesEstimate(status)
-      ? t('system.attention.timing-estimated')
-      : t(productIssueTitleKey(issue));
+    attentionCopy.textContent = t(productIssueTitleKey(issue));
     attentionRegion.hidden = false;
     attentionRegion.dataset.scope = attention.scope || '';
     attentionRegion.dataset.severity = attention.severity || 'warning';

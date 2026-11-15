@@ -55,12 +55,6 @@ function fixture() {
       assert.equal(state.backgroundRunning, true, 'provenance must be captured before retiring its measurement');
       return TIMING;
     },
-    onStarted: (nowMs) => {
-      assert.equal(nowMs, state.nowMs);
-      assert.equal(state.committed, true, 'a rejected command cannot stand down calibration');
-      assert.deepEqual(state.timing, TIMING);
-      state.backgroundRunning = false;
-    },
     send: (target, message) => {
       assert.equal(target, socket);
       replies.push(message);
@@ -107,7 +101,7 @@ test('Start snapshots the song at the next complete frame and translates its del
     'listener', SONG, POSITION, f.state.wallTimeMs + (420 - 405.001),
   ]);
   assert.deepEqual(f.calls.find((call) => call.name === 'song')?.args, [420]);
-  assert.equal(f.state.backgroundRunning, false);
+  assert.equal(f.state.backgroundRunning, true);
   assert.deepEqual(f.state.timing, TIMING);
   assert.deepEqual(f.replies, [{ type: 'take-command-accepted', command: 'start', takeId: 'take-1' }]);
 });

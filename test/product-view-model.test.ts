@@ -534,12 +534,13 @@ describe('product lifecycle and health', () => {
     assert.equal(model.timing.syncHeld, false);
   });
 
-  test('timing advice during a Take waits for the recording instead of offering a refused Realign', () => {
+  test('audible probe advice during a Take waits instead of offering a refused Realign', () => {
     const model = buildProductViewModel(input({
       readiness: readiness({ calibrationValid: false, calibrationKind: 'none' }),
       take: { lifecycle: 'recording', takeId: 'take-1', qualityVerdict: null },
       timing: {
         timingMode: 'network-estimate',
+        robotProbeTimingActive: true,
         calibrationState: 'failed',
         calibrationStale: false,
         alignmentClamped: false,
@@ -556,6 +557,7 @@ describe('product lifecycle and health', () => {
       readiness: readiness({ calibrationValid: false, calibrationKind: 'none' }),
       timing: {
         timingMode: 'network-estimate',
+        robotProbeTimingActive: true,
         calibrationState: 'failed',
         calibrationStale: false,
         alignmentClamped: false,
@@ -577,6 +579,7 @@ describe('product lifecycle and health', () => {
         requiresRobotPlayerDelta: false,
         robotDeltaFresh: true,
         micProbeUnheard: true,
+        robotProbeTimingActive: true,
       },
     };
     const model = buildProductViewModel(input(base));

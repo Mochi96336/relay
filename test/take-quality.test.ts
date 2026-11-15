@@ -253,10 +253,10 @@ test('controlled server shutdown is explicit review evidence', () => {
   assert.equal(result.issues.some((issue) => issue.code === 'recording-interrupted'), true);
 });
 
-test('a Take that holds its alignment while the mapping moves under it is not clean', () => {
+test('a Take preserves timing error while the live read head waits for its correction', () => {
   const quality = tracker();
-  // The mixer alignment is deliberately frozen for the whole recording, so the
-  // mapping moving underneath leaves every other signal reading healthy.
+  // Waiting for a quiet jump can leave the audible alignment behind the target
+  // while the measurement and transport still read healthy.
   quality.observeFrame(960, frameState({ timingDivergenceMs: 450 }), mixedFrame());
 
   const result = quality.assessment();
@@ -327,8 +327,7 @@ test('the tolerance is the mixer own re-apply threshold, not a number of our own
   assert.equal(lenientResult.evidence.timingDivergedSamples, 0);
   assert.equal(lenientResult.verdict, 'clean');
 
-  // The same recording under a mixer that would have corrected at 40 ms is a
-  // correction the Take actually blocked.
+  // The same live error exceeds a stricter mixer's normal correction tolerance.
   const strict = new TakeQualityTracker({ sampleRate: RATE, timingDivergenceToleranceMs: 40 });
   strict.observeFrame(960, frameState({ timingDivergenceMs: 120 }), mixedFrame());
 

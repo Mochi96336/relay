@@ -78,6 +78,21 @@ async function waitReady(client: RelayClient, takeId: string) {
   ));
 }
 
+/** These lifecycle cases need admitted recording, not a race with the first PCM delivery. */
+async function waitForRecordableFlow(control: RelayClient, mic: RelayClient, backing: RelayClient) {
+  const deadline = Date.now() + 5_000;
+  let last: any;
+  while (Date.now() < deadline) {
+    feedMic(mic, 3); feedBacking(backing, 3);
+    const from = control.messages.length;
+    control.send({ type: 'product-status-request' });
+    last = await waitForNewMessage(control, from, message => message.type === 'product-status');
+    if (last.actions.canStartTake) return;
+    await sleep(20);
+  }
+  assert.fail(`recording admission never became ready: ${JSON.stringify(last)}`);
+}
+
 function assertWav(bytes: Buffer) {
   assert.ok(bytes.byteLength > 44, 'Take artifact must contain PCM after the WAV header');
   assert.equal(bytes.toString('ascii', 0, 4), 'RIFF');
@@ -458,6 +473,7 @@ test('a sustained backing outage is attached to the Take and degrades the final 
     feedBacking(backing, 10);
     await sleep(80);
 
+    await waitForRecordableFlow(control, control, backing);
     control.send({ type: 'start-take' });
     const start = await control.waitFor((message) => message.type === 'take-command-accepted' && message.command === 'start');
     const takeId = String(start.takeId);
@@ -550,6 +566,7 @@ test('a Mic or Desktop Source that restarts its capture during a Take is recorde
     feedBacking(backing, 60);
     await sleep(80);
 
+    await waitForRecordableFlow(control, control, backing);
     control.send({ type: 'start-take' });
     const start = await control.waitFor((message) => message.type === 'take-command-accepted' && message.command === 'start');
     const takeId = String(start.takeId);
@@ -588,6 +605,7 @@ test('a Desktop Source or Robot that is replaced during a Take is recorded on th
     feedBacking(backing, 60);
     await sleep(80);
 
+    await waitForRecordableFlow(control, control, backing);
     control.send({ type: 'start-take' });
     const start = await control.waitFor((message) => message.type === 'take-command-accepted' && message.command === 'start');
     const takeId = String(start.takeId);
@@ -792,15 +810,10 @@ test('Take commands require participant identity, recordable room audio, and the
       && message.take?.takeId === takeId
       && message.take?.lifecycle === 'recording'
     ));
-    assert.equal(recordingProduct.actions.canStartCalibration, false);
-    assert.equal(recordingProduct.actions.startCalibrationBlockedReason, 'take-active');
-
-    control.send({ type: 'start-timing-calibration' });
-    const calibrationRejected = await control.waitFor((message) => (
-      message.type === 'calibration-command-rejected'
-      && message.reason === 'take-active'
-    ));
-    assert.equal(calibrationRejected.reason, 'take-active');
+    // This fixture has burst PCM and a cued song, not a playing calibration
+    // path. Its ordinary readiness gates still apply; Take itself cannot veto
+    // passive Content work (covered with live streams in room-availability).
+    assert.notEqual(recordingProduct.actions.startCalibrationBlockedReason, 'take-active');
 
     control.send({ type: 'stop-take', takeId: 'older-take' });
     const stale = await control.waitFor((message) => message.type === 'take-command-rejected' && message.command === 'stop');

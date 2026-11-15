@@ -375,7 +375,7 @@ const choir = relayConfig.choir ? new ChoirRuntime({
     playing: roomSongPlaying,
     playbackRate: currentPlaybackRate,
   },
-  takeBlocksCalibration,
+  audibleProbeBlocked: takeIsActive,
   robot: {
     // Never across the boot probe's own Robot request: the Robot page answers
     // one request at a time.
@@ -750,7 +750,6 @@ function bootProbeSettled(nowMs = performance.now()) {
 function robotContentFallbackPrimingActive(nowMs = performance.now()) {
   if (
     !AUTO_CALIBRATE
-    || takeBlocksCalibration()
     || !robotProbeTimingActive()
     || bootProbeSettled(nowMs)
     || !robotContentEvidenceMappingReady(nowMs)
@@ -1047,7 +1046,6 @@ const contentCalibration = new ContentCalibrationCoordinator({
     timeline: currentTimelineStatus,
     noteMicMeasured: () => session.noteMicCalibrationMeasured(),
   },
-  takeBlocked: takeBlocksCalibration,
   timingChanged: () => broadcastJson(timingCalibrationStatusPayload()),
   sourceChanged: () => broadcastJson(sourceStatusPayload()),
 });
@@ -1071,7 +1069,7 @@ const bootProbe = new BootProbeCoordinator({
   context: bootProbeContext,
   sourceRate: (target) => target === 'mic' ? micRuntime.sampleRate : backingRuntime.sampleRate,
   enabled: robotProbeTimingActive,
-  takeBlocked: takeBlocksCalibration,
+  takeBlocked: takeIsActive,
   calibrationStale: calibrationIsStale,
   robotRouteActive,
   topology: () => ({ backingIsRobot: backingRuntime.isRobot, robotSourceConnected: sourceRuntime.connected() }),
@@ -1112,7 +1110,6 @@ const calibrationAlignment = new CalibrationAlignment(BOOT_DELTA_REAPPLY_MS, {
       referenceLagMs, calibrationContext(), nowMs,
     ),
   },
-  takeBlocked: takeBlocksCalibration,
   bootReapplied: (reason, previousMs, nextMs) => {
     if (!PROBE_DEBUG) return;
     const why = reason === 'reclaim' ? 'reclaimed by boot baseline' : 'delta moved';
@@ -1533,26 +1530,22 @@ function sourceStatusPayload() {
 }
 
 function takeQualityFrameState(nowMs = performance.now()) {
-  const alignment = session.alignment;
   const desiredMicLagMs = desiredCalibratedMicLagMs(nowMs);
   return {
-    timingMode: alignment.calibratedMicLagMs === null
+    timingMode: session.renderedCalibrationKind === 'none'
       ? 'network-estimate' as const
       : 'acoustic-calibration' as const,
     calibrationStale: calibrationIsStale(),
     alignmentClamped: Math.abs(session.requestedMicAdvanceMs - session.appliedMicAdvanceMs) >= 0.5,
     robotRoute: robotRouteActive(),
     robotDeltaFresh: robotDeltaIsFresh(nowMs),
-    // How far the frozen recording alignment has drifted from the mapping the
-    // room is actually on. Null while there is no applicable answer to compare
-    // against; the other timing signals own that case.
-    timingDivergenceMs: desiredMicLagMs === null || alignment.calibratedMicLagMs === null
-      ? null
-      : desiredMicLagMs - alignment.calibratedMicLagMs,
+    // Compare the target with actual emitted audio, including a quiet wait.
+    // No applicable target means no measured divergence.
+    timingDivergenceMs: session.timingDivergenceMs(desiredMicLagMs),
     // Provenance only matters to a recording; skip reading it on every idle frame.
-    ...(takeBlocksCalibration()
+    ...(takeIsActive()
       ? {
-          appliedCalibrationKind: alignment.calibratedMicLagMs === null ? 'none' as const : appliedCalibrationKind(),
+          appliedCalibrationKind: session.renderedCalibrationKind,
           ...(fallbackPlacement.placed ? { estimateSource: 'sample-song' as const } : {}),
         }
       : {}),
@@ -1677,7 +1670,7 @@ function timingCalibrationInProgress(nowMs = performance.now()) {
   return calibration.collecting || bootProbeInProgress(nowMs);
 }
 
-function takeBlocksCalibration() {
+function takeIsActive() {
   return takeController.lifecycle === 'recording' || takeController.lifecycle === 'finalizing';
 }
 
@@ -1694,7 +1687,7 @@ function timingCalibrationStatusPayload() {
     sessionGeneration: session.generation,
     ...status,
     activeMicLagMs: alignment.calibratedMicLagMs,
-    // Same live coordinates as the mixer, before jitter hold / Take freeze / slew.
+    // Same live coordinates as the mixer, before jitter hold / slew / quiet wait.
     desiredCalibratedMicLagMs: desiredCalibratedMicLagMs(nowMs),
     calibratedMicLagTargetMs: session.calibratedMicLagTarget,
     timingMode: alignment.calibratedMicLagMs === null ? 'network-estimate' : 'acoustic-calibration',
@@ -1715,6 +1708,7 @@ function timingCalibrationStatusPayload() {
     vocalFineTuneMs: alignment.fineTuneMs,
     appliedMicAdvanceMs: session.appliedMicAdvanceMs,
     micReadHeadJumpWaitMs: session.micReadHeadJumpWaitMs,
+    micReadHead: session.micReadHeadStatus,
     heardMicAdvanceMs: session.heardMicAdvanceMs,
     requestedMicAdvanceMs: session.requestedMicAdvanceMs,
     probeCorrelation: bootProbe.correlations,
@@ -1943,7 +1937,7 @@ function refreshLiveMicNetworkCompensation() {
     sampleSongMicOwner = participants.micOwnerId;
     fallbackPlacement.reset();
     // Another singer's placement says nothing about this one.
-    if (ownerChanged) session.setAlignment({ networkCompensationMs: 0 });
+    if (ownerChanged) session.resetFallbackForOwner();
   }
   const timeline = currentTimelineStatus();
   const videoId = String(timeline.videoId);
@@ -1951,11 +1945,6 @@ function refreshLiveMicNetworkCompensation() {
     ? sampleSongFallback.estimate(performance.now(), videoId,
       (side, a) => session.sampleSongPosition(side, a.generation, a.sampleIndex, a.sampleRate), session.sampleRate)
     : null;
-  if (takeBlocksCalibration()) {
-    // A Take freezes alignment, including a walk already under way.
-    session.slewNetworkCompensationTo(session.alignment.networkCompensationMs);
-    return;
-  }
   sampleSongSelected = sampleSongCandidateMs !== null;
   // The transport estimate (half the control socket's RTT) once stood in
   // for a missing candidate, but it measures neither the players' offset nor
@@ -1974,9 +1963,9 @@ function refreshLiveMicNetworkCompensation() {
     // pops heard from singers whose boot probe failed.
     session.slewNetworkCompensationTo(decision.ms);
   } else {
-    // Holding stops a walk where it is, rather than finishing it toward an
-    // estimate that has lapsed or not been confirmed.
-    session.slewNetworkCompensationTo(session.alignment.networkCompensationMs);
+    // Withdraw an unheard jump too: hold describes where the voice was heard,
+    // not an accepted target still waiting for a quiet moment.
+    session.freezeFallbackAtHeard();
   }
   noteFallbackTarget(timeline);
 }
@@ -2858,16 +2847,12 @@ const takeCommands = createTakeCommandHandlers<RelaySocket>({
   frameBoundary: takeFrameBoundary,
   songAt: takeSongSnapshot,
   timingAtStart: (nowMs) => ({
-    appliedCalibrationKind: session.alignment.calibratedMicLagMs === null ? 'none' : appliedCalibrationKind(),
+    appliedCalibrationKind: session.renderedCalibrationKind,
     estimateSource: session.alignment.calibratedMicLagMs === null && fallbackPlacement.placed
       ? 'sample-song'
       : null,
     calibrationError: calibration.status().error ?? probeStatus(nowMs).error ?? null,
   }),
-  onStarted: (nowMs) => {
-    contentCalibration.standDownForTake(nowMs);
-    session.settleMicReadHead();
-  },
   send: sendJson,
 });
 

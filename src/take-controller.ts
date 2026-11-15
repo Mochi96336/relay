@@ -137,8 +137,8 @@ export class TakeController {
     /**
      * The mixer's own alignment re-apply threshold.
      *
-     * A Take freezes the alignment, so this is the line between the mixer's
-     * deliberate hysteresis and a correction the recording actually blocked.
+     * Distinguishes ordinary live alignment hysteresis from timing error that
+     * listeners and the recording actually experienced.
      */
     timingDivergenceToleranceMs?: number;
     onChange?: (status: TakeControllerStatusPayload) => void;

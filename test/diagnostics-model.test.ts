@@ -427,7 +427,8 @@ it('Timing shows one compensation and one line that adds up to it', () => {
   }, zh));
   assert.equal(settling.offset.value, '-162 ms');
   assert.equal(settling.formula.value, '量測 -150 ms + 播放器偏移 -7 ms = -157 ms');
-  assert.match(settling.formula.note, /跟得慢/);
+  assert.match(settling.formula.note, /緩慢/);
+  assert.match(settling.formula.note, /聆聽與錄音使用同一份/);
 
   // The Robot went quiet: the mixer keeps the last converted value, and says so.
   const held = byKey(describeTiming({

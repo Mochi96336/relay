@@ -15,7 +15,6 @@ function prerequisites(
 ): ContentValidationPathPrerequisiteInput {
   return {
     enabled: true,
-    takeBlocked: false,
     bootProbeSettled: true,
     robotRouteActive: false,
     robotEvidenceMappingReady: false,
@@ -53,9 +52,8 @@ test('prerequisites admit an active settled non-Robot session', () => {
   assert.equal(contentValidationPathPrerequisitesReady(prerequisites()), true);
 });
 
-test('feature and Take gates reject before authority sampling', () => {
+test('disabled feature rejects before authority sampling', () => {
   assert.equal(contentValidationPathPrerequisitesReady(prerequisites({ enabled: false })), false);
-  assert.equal(contentValidationPathPrerequisitesReady(prerequisites({ takeBlocked: true })), false);
 });
 
 test('prerequisites wait for bounded Boot settlement', () => {

@@ -11,7 +11,8 @@ import { MicRawMeter } from './mic-raw-meter.js';
 import {
   readMicSlewedRange, crossfadeMicReadHeadJump, type MicSlewRead,
 } from './mic-frame-reader.js';
-import { classifyMicReadMotion } from './mic-read-plan.js';
+import { MicReadHead, type AlignmentState, type MicReadHeadFrame } from './mic-read-head.js';
+export type { AlignmentState, MicReadHeadEvent } from './mic-read-head.js';
 import {
   stretchPcmSpanByOne, compressPcmSpanByOne,
 } from './pcm-timeline.js';
@@ -29,48 +30,16 @@ import { SourceOutputEdge } from './source-output-edge.js';
 const MIC_CONCEALMENT_HISTORY_MS = 60;
 const MIC_CONCEALMENT_JOIN_GUARD_MS = 8;
 
-export type AlignmentState = {
-  /** The sample/song placement used until an acoustic calibration succeeds. */
-  networkCompensationMs: number;
-  calibratedMicLagMs: number | null;
-  fineTuneMs: number;
-};
-
-/**
- * Per-singer Mic state extracted without changing AudioSession's ingest, render,
- * clock, limiter, or evidence algorithms. The current single-Mic AudioSession
- * aliases these exact objects. Future Choir must give each singer a separate
- * instance while one room owns the backing and final MixBus.
- *
- * This is a STATE boundary, not yet an independent full Mic processor.
- * Track-local calibration/read-head history, capture flags and health counters
- * now live alongside these components. The actual ingest/read algorithms
- * still run in AudioSession; this does not yet create a reusable processor.
- */
-/**
- * A read head the journal should hear about: a jump (with how long it waited
- * for a quiet moment and what moved), or the start or end of a walk.
- */
-export type MicReadHeadEvent =
-  | {
-    kind: 'jump'; fromMs: number; toMs: number; waitedMs: number;
-    /** False when the wait ran out, or holding could not continue, and it jumped over a voice. */
-    quiet: boolean;
-    /** Which part of the alignment moved since the last emitted frame, in ms; null when it started or stopped applying. */
-    moved: Partial<Record<'calibratedMicLagMs' | 'networkCompensationMs' | 'fineTuneMs' | 'frontierCorrectionMs', number | null>>;
-  }
-  | { kind: 'walk-start' | 'walk-end'; what: 'calibration' | 'network'; fromMs: number; toMs: number };
-
 /**
  * A jump waits for both of its legs to be this quiet after gain: its
  * crossfade blends the voice with itself some milliseconds apart, which over a
  * held note is an audible dip, and over silence is nothing.
  */
 const MIC_JUMP_QUIET_PEAK = 32768 * 10 ** (-40 / 20);
-const MIC_READ_HEAD_EVENT_LIMIT = 64;
 
 /** Where one frame reads the Mic, and how the read head got there from the frame before. */
 export type MicReadPlan = {
+  readHeadFrame: MicReadHeadFrame;
   startSample: number;
   /** The advance the previous frame was actually heard at; null before any audible history. */
   previouslyEmittedAdvanceSamples: number | null;
@@ -106,31 +75,9 @@ export class MicTrack {
   private readonly frontierSlewFraction: number;
   private readonly frameSamples: number;
   private readonly readHeadCrossfadeMs: number;
-  private readonly jumpQuietWaitFrames: number;
-  /** Frames the pending read-head jump has waited for a quiet moment. */
-  private jumpWaitFrames = 0;
-  /** The alignment the last emitted frame was planned with, so a jump can name what moved. */
-  private emittedAlignment: {
-    calibratedMicLagMs: number | null; networkCompensationMs: number;
-    fineTuneMs: number; frontierCorrectionSamples: number;
-  } | null = null;
-  /** Jumps and walks for the journal, oldest first. */
-  private readonly readHeadEvents: MicReadHeadEvent[] = [];
-
-  /** Calibration is owned by each singer, not by the room output clock. */
-  alignmentState: AlignmentState = {
-    networkCompensationMs: 0,
-    calibratedMicLagMs: null,
-    fineTuneMs: 0,
-  };
-  calibratedMicLagTargetMs: number | null = null;
-  /** Where a live network-compensation slew is heading; null when none is pending. */
-  networkCompensationTargetMs: number | null = null;
+  readonly readHead: MicReadHead;
   /** Calibration offset accounted for by folded capture loss. */
   calibrationUnfoldedSamples = 0;
-  /** Previously emitted per-singer read-head trajectory. */
-  lastEmittedMicAdvanceSamples: number | null = null;
-  lastEmittedMicFrameComplete = false;
   lastEmittedMicSourceSample: number | null = null;
   /** Own source starvation and concealment evidence. */
   micStarvedFrames = 0;
@@ -154,6 +101,7 @@ export class MicTrack {
     readHeadCrossfadeMs: number;
     /** How long a read-head jump may wait for a quiet moment; 0 jumps at once. */
     jumpQuietWaitMs: number;
+    walkLimitMs?: number;
     /** The frontier gives back at least this much in one (quiet) jump rather than walking. */
     frontierPromptReleaseMs: number;
   }) {
@@ -168,7 +116,8 @@ export class MicTrack {
     this.frontierSlewFraction = options.frontierSlewFraction;
     this.frameSamples = frameSamples;
     this.readHeadCrossfadeMs = options.readHeadCrossfadeMs;
-    this.jumpQuietWaitFrames = Math.round(options.jumpQuietWaitMs / frameMs);
+    this.readHead = new MicReadHead({ sampleRate, frameMs, slewFraction,
+      walkLimitMs: options.walkLimitMs ?? Infinity, jumpQuietWaitMs: options.jumpQuietWaitMs });
     this.gain = new MicGainRamp(sampleRate);
     this.limiter = new MicLimiter(sampleRate);
     this.meter = new MicRawMeter(sampleRate);
@@ -423,7 +372,7 @@ export class MicTrack {
    * The Mic samples this frame mixes, with the limiter's look-ahead after
    * them, and the evidence for exactly the source samples that feed them.
    */
-  readMicFrame(plan: MicReadPlan) {
+  readMicFrame(plan: Omit<MicReadPlan, 'readHeadFrame'>) {
     const {
       startSample,
       previouslyEmittedAdvanceSamples,
@@ -510,48 +459,13 @@ export class MicTrack {
     return true;
   }
 
-  advanceCalibrationSlew() {
-    const target = this.calibratedMicLagTargetMs;
-    const current = this.alignmentState.calibratedMicLagMs;
-    if (target === null || current === null || current === target) return;
-
-    const maximumStepMs = this.frameMs * this.slewFraction;
-    const deltaMs = target - current;
-    this.alignmentState.calibratedMicLagMs = Math.abs(deltaMs) <= maximumStepMs
-      ? target
-      : current + Math.sign(deltaMs) * maximumStepMs;
-    if (this.alignmentState.calibratedMicLagMs === target) {
-      this.noteReadHeadEvent({ kind: 'walk-end', what: 'calibration', fromMs: current, toMs: target });
-    }
-  }
-
-  /**
-   * The same per-frame bound for the uncalibrated fallback. A larger step
-   * between two frames is classified as a read-head jump, and its crossfade
-   * blends the voice with itself a millisecond apart: an audible dip each time.
-   */
-  advanceNetworkCompensationSlew() {
-    const target = this.networkCompensationTargetMs;
-    if (target === null) return;
-    const current = this.alignmentState.networkCompensationMs;
-    const maximumStepMs = this.frameMs * this.slewFraction;
-    const deltaMs = target - current;
-    if (Math.abs(deltaMs) <= maximumStepMs) {
-      this.alignmentState.networkCompensationMs = target;
-      this.networkCompensationTargetMs = null;
-      this.noteReadHeadEvent({ kind: 'walk-end', what: 'network', fromMs: current, toMs: target });
-      return;
-    }
-    this.alignmentState.networkCompensationMs = current + Math.sign(deltaMs) * maximumStepMs;
-  }
-
   /** What the alignment asks for, before the buffer's limits are applied. */
   get requestedMicAdvanceMs() {
-    const calibrated = this.alignmentState.calibratedMicLagMs;
+    const calibrated = this.readHead.alignment.calibratedMicLagMs;
     const base = calibrated === null
-      ? this.alignmentState.networkCompensationMs
+      ? this.readHead.alignment.networkCompensationMs
       : calibrated - (this.calibrationUnfoldedSamples / this.sampleRate) * 1000;
-    return base - this.alignmentState.fineTuneMs;
+    return base - this.readHead.alignment.fineTuneMs;
   }
 
   /** What the configured buffers can afford, before the live frontier is known. */
@@ -625,12 +539,12 @@ export class MicTrack {
    * no moment worth waiting for.
    */
   planMicRead(startSample: number, expected: boolean, jumpMayWait = true): MicReadPlan {
-    const previouslyEmittedAdvanceSamples = this.lastEmittedMicAdvanceSamples;
-    const previousCalibratedMicLagMs = this.alignmentState.calibratedMicLagMs;
+    const previouslyEmittedAdvanceSamples = this.readHead.emittedAdvanceSamples;
+    const previousCalibratedMicLagMs = this.readHead.alignment.calibratedMicLagMs;
     const previousFrontierCorrectionSamples = this.frontier.correctionSamples;
     const previousRequestedMicAdvanceMs = previousCalibratedMicLagMs === null
-      ? this.alignmentState.networkCompensationMs - this.alignmentState.fineTuneMs
-      : previousCalibratedMicLagMs - this.alignmentState.fineTuneMs;
+      ? this.readHead.alignment.networkCompensationMs - this.readHead.alignment.fineTuneMs
+      : previousCalibratedMicLagMs - this.readHead.alignment.fineTuneMs;
     const modeledPreviousAdvanceSamplesExact = (
       this.appliedMicAdvanceForRequestedMs(
         previousRequestedMicAdvanceMs,
@@ -644,43 +558,31 @@ export class MicTrack {
     const previousAdvanceSamplesExact =
       previouslyEmittedAdvanceSamples ?? modeledPreviousAdvanceSamplesExact;
 
-    this.advanceCalibrationSlew();
-    this.advanceNetworkCompensationSlew();
+    this.readHead.advanceWalks();
     this.updateFrontierCorrection(startSample, expected);
 
     const motionInput = {
       frameSamples: this.frameSamples,
       sampleRate: this.sampleRate,
       startSample,
-      previouslyEmittedAdvanceSamples,
       previousAdvanceSamplesExact,
-      lastEmittedMicFrameComplete: this.lastEmittedMicFrameComplete,
       // The bound is twice this: an alignment walk and a frontier walk at once.
       runtimeCalibrationSlewFraction: (this.slewFraction + this.frontierSlewFraction) / 2,
       readHeadCrossfadeMs: this.readHeadCrossfadeMs,
     };
-    let motion = classifyMicReadMotion({ ...motionInput, appliedAdvanceMs: this.appliedMicAdvanceMs });
-    const holding = jumpMayWait && motion.readHeadJumped && previouslyEmittedAdvanceSamples !== null
-      && this.holdReadHeadForQuiet(
-        startSample, previouslyEmittedAdvanceSamples, motion.micReadStart, motion.crossfadeSamples,
-        previousFrontierCorrectionSamples,
-      );
-    if (holding) {
-      // The voice stays where it was heard until a quiet moment or the wait runs out.
-      motion = classifyMicReadMotion({
-        ...motionInput,
-        appliedAdvanceMs: (previouslyEmittedAdvanceSamples! / this.sampleRate) * 1000,
-      });
-    } else {
-      if (motion.readHeadJumped && previouslyEmittedAdvanceSamples !== null) {
-        this.noteJump(previouslyEmittedAdvanceSamples, motion.advanceSamples, startSample, motion.micReadStart,
-          motion.crossfadeSamples);
-      }
-      this.jumpWaitFrames = 0;
-      this.emittedAlignment = {
-        ...this.alignmentState, frontierCorrectionSamples: this.frontier.correctionSamples,
-      };
-    }
+    const readHeadFrame = this.readHead.plan(
+      { ...motionInput, appliedAdvanceMs: this.appliedMicAdvanceMs }, this.frontier.correctionSamples,
+      {
+        mayWait: jumpMayWait && this.frontier.correctionSamples <= previousFrontierCorrectionSamples,
+        canKeepReading: () => {
+          const heldStart = Math.floor(startSample + (previouslyEmittedAdvanceSamples ?? 0));
+          const earliest = this.timeline.chunks[0]?.start ?? Infinity;
+          return heldStart >= earliest
+            && heldStart + this.frameSamples + this.limiter.lookaheadSamples <= this.timeline.totalSamples;
+        },
+        quiet: (from, to, samples) => this.quietAt(from, samples) && this.quietAt(to, samples),
+      },
+    );
     const {
       advanceSamplesExact,
       advanceSamples,
@@ -690,7 +592,7 @@ export class MicTrack {
       crossfadeSamples,
       previousTransitionStart,
       readHeadJumped,
-    } = motion;
+    } = readHeadFrame;
     const previousTransitionEvidence = immediateReadHeadJump
       ? readPcmEvidence(this.timeline, previousTransitionStart, crossfadeSamples + 2)
       : null;
@@ -716,6 +618,7 @@ export class MicTrack {
     }
 
     return {
+      readHeadFrame,
       startSample,
       previouslyEmittedAdvanceSamples,
       previousAdvanceSamplesExact,
@@ -728,91 +631,11 @@ export class MicTrack {
     };
   }
 
-  /**
-   * Whether a jump this frame should wait instead. It waits while the voice is
-   * not quiet on both legs, holding is still playable, and the wait has time
-   * left. A frontier that pulls the read head back never waits: what it reads
-   * has not arrived. One that gives a correction back can, since holding only
-   * keeps the voice where it already was.
-   */
-  private holdReadHeadForQuiet(
-    startSample: number,
-    emittedAdvanceSamples: number,
-    nextReadStart: number,
-    windowSamples: number,
-    previousFrontierCorrectionSamples: number,
-  ) {
-    if (this.jumpWaitFrames >= this.jumpQuietWaitFrames) return false;
-    if (this.frontier.correctionSamples > previousFrontierCorrectionSamples) return false;
-    const heldStart = Math.floor(startSample + emittedAdvanceSamples);
-    const earliest = this.timeline.chunks[0]?.start ?? Number.POSITIVE_INFINITY;
-    const heldEnd = heldStart + this.frameSamples + this.limiter.lookaheadSamples;
-    if (heldStart < earliest || heldEnd > this.timeline.totalSamples) return false;
-    if (this.quietAt(heldStart, windowSamples) && this.quietAt(nextReadStart, windowSamples)) return false;
-    this.jumpWaitFrames += 1;
-    return true;
-  }
-
   private quietAt(start: number, samples: number) {
     const pcm = readPcmRange(this.timeline, start, samples);
     let peak = 0;
     for (const sample of pcm) peak = Math.max(peak, Math.abs(sample));
     return peak * 10 ** (this.gain.projectDb(0) / 20) < MIC_JUMP_QUIET_PEAK;
-  }
-
-  private noteJump(
-    fromSamples: number, toSamples: number, startSample: number, nextReadStart: number, windowSamples: number,
-  ) {
-    const ms = (samples: number) => (samples / this.sampleRate) * 1000;
-    const before = this.emittedAlignment;
-    const moved: Extract<MicReadHeadEvent, { kind: 'jump' }>['moved'] = {};
-    if (before) {
-      const delta = (key: 'networkCompensationMs' | 'fineTuneMs', value: number) => {
-        if (value !== before[key]) moved[key] = value - before[key];
-      };
-      const calibrated = this.alignmentState.calibratedMicLagMs;
-      if (calibrated !== before.calibratedMicLagMs) {
-        moved.calibratedMicLagMs = calibrated === null || before.calibratedMicLagMs === null
-          ? null : calibrated - before.calibratedMicLagMs;
-      }
-      delta('networkCompensationMs', this.alignmentState.networkCompensationMs);
-      delta('fineTuneMs', this.alignmentState.fineTuneMs);
-      if (this.frontier.correctionSamples !== before.frontierCorrectionSamples) {
-        moved.frontierCorrectionMs = ms(this.frontier.correctionSamples - before.frontierCorrectionSamples);
-      }
-    }
-    this.noteReadHeadEvent({
-      kind: 'jump', fromMs: ms(fromSamples), toMs: ms(toSamples), waitedMs: this.jumpWaitFrames * this.frameMs,
-      quiet: this.quietAt(Math.floor(startSample + fromSamples), windowSamples)
-        && this.quietAt(nextReadStart, windowSamples),
-      moved,
-    });
-  }
-
-  noteReadHeadEvent(event: MicReadHeadEvent) {
-    if (this.readHeadEvents.length >= MIC_READ_HEAD_EVENT_LIMIT) this.readHeadEvents.shift();
-    this.readHeadEvents.push(event);
-  }
-
-  /** Jumps and walks since the last call, oldest first. */
-  drainReadHeadEvents() {
-    return this.readHeadEvents.splice(0);
-  }
-
-  /** How long the pending jump has waited for a quiet moment; 0 when none waits. */
-  get readHeadJumpWaitMs() {
-    return this.jumpWaitFrames * this.frameMs;
-  }
-
-  /** A jump waiting for a quiet moment goes on the next frame instead. */
-  flushPendingJump() {
-    if (this.jumpWaitFrames > 0) this.jumpWaitFrames = this.jumpQuietWaitFrames;
-  }
-
-  /** Where the last frame was actually heard, which a waiting jump has not moved yet; null before any. */
-  get heardMicAdvanceMs() {
-    return this.lastEmittedMicAdvanceSamples === null
-      ? null : (this.lastEmittedMicAdvanceSamples / this.sampleRate) * 1000;
   }
 
   /** How much arrived audio is left past this frame's reads; none left is starvation. */
@@ -1077,7 +900,7 @@ export class MicTrack {
     if (this.lastEmittedMicSourceSample !== null) this.lastEmittedMicSourceSample += shift;
     // The read position is the frame start plus the advance, so the advance
     // moves with the audio it was reading.
-    if (this.lastEmittedMicAdvanceSamples !== null) this.lastEmittedMicAdvanceSamples += shift;
+    this.readHead.rebase(shift);
     this.frontier.rebase(shift);
   }
 

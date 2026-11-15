@@ -38,6 +38,9 @@ test('semantic recovery oneshot respects operator stop intent and owns no schedu
   // The single-instance wrapper, the same one `npm run robot:recovery-live` uses.
   assert.match(service, /^ExecStart=\/usr\/bin\/bash %h\/relay\/scripts\/robot-semantic-recovery-live\.sh$/m);
   assert.match(service, /TimeoutStartSec=5min/);
+  // Healthy runs every ~12 s must not fill the journal with the manager's own lines.
+  assert.match(service, /^SyslogLevel=notice$/m);
+  assert.match(service, /^LogLevelMax=notice$/m);
 
   assert.doesNotMatch(service, /^(?:Requires|Wants)=/m,
     'recovery must not start an operator-stopped runtime unit');

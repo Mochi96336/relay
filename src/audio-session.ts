@@ -580,6 +580,9 @@ export class AudioSession {
       lagMs: secondary.track.readHead.alignment.calibratedMicLagMs,
       targetLagMs: secondary.pendingLagMs ?? secondary.track.readHead.calibratedMicLagTargetMs,
       heardAdvanceMs: secondary.track.readHead.heardMicAdvanceMs,
+      /** What the mixer reads: the lag clamped to the read-ahead it can absorb. */
+      appliedLagMs: secondary.track.readHead.alignment.calibratedMicLagMs === null
+        ? null : secondary.track.appliedMicAdvanceMs,
       gainDb: secondary.track.gain.targetDb,
       gapSamples: secondary.gapSamples,
       starvedSamples: secondary.starvedSamples,

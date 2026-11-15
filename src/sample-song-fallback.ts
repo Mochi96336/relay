@@ -5,7 +5,13 @@ export type SongSampleAnchor = {
 type Observation = SongSampleAnchor & { receivedAt: number; agreements: number };
 
 export type FallbackRejection = 'no-mic-anchor' | 'no-backing-anchor' | 'mic-unsettled' | 'backing-unsettled'
-  | 'other-song' | 'rate-mismatch' | 'mic-stale' | 'backing-stale' | 'unmapped' | 'out-of-range';
+  | 'other-song' | 'rate-mismatch' | 'mic-stale' | 'backing-stale' | 'awaiting-audio' | 'unmapped' | 'out-of-range';
+
+/**
+ * Session position of an anchor's capture sample; `'ahead'` while its PCM has
+ * not arrived, null when it cannot be placed at all.
+ */
+export type SongSampleMap = (side: 'mic' | 'backing', anchor: SongSampleAnchor) => number | 'ahead' | null;
 
 /** Approximate player-to-capture evidence, never acoustic calibration authority. */
 export class SampleSongFallback {
@@ -39,9 +45,14 @@ export class SampleSongFallback {
     this[side] = { ...value, receivedAt: now, agreements: consistent ? previous.agreements + 1 : 1 };
     return true;
   }
-  /** Why the last estimate gave no candidate; null when it gave one. */
+  /**
+   * Why the last estimate gave no candidate; null when it gave one.
+   * `awaiting-audio` is not a lapse: an anchor is fresh but its audio has not
+   * landed. The caller keeps what it had, and the anchor still goes stale.
+   */
   rejection: FallbackRejection | null = null;
-  estimate(now: number, videoId: string, map: (side: 'mic' | 'backing', a: SongSampleAnchor) => number | null, rate: number) {
+  estimate(now: number, videoId: string, map: SongSampleMap, rate: number) {
+    const previousCalculation = this.calculation;
     this.calculation = null;
     const mic = this.mic, backing = this.backing;
     this.rejection = !mic ? 'no-mic-anchor' : !backing ? 'no-backing-anchor'
@@ -52,6 +63,11 @@ export class SampleSongFallback {
     if (this.rejection || !mic || !backing) return null;
     const m = map('mic', mic), b = map('backing', backing);
     if (m === null || b === null) { this.rejection = 'unmapped'; return null; }
+    if (m === 'ahead' || b === 'ahead') {
+      this.rejection = 'awaiting-audio';
+      this.calculation = previousCalculation;
+      return null;
+    }
     const advanceMs = (m - b) * 1000 / rate
       + (backing.mediaSeconds - mic.mediaSeconds) * 1000 / mic.playbackRate;
     this.calculation = { observedAtMs: now, mic: { ...mic }, backing: { ...backing },

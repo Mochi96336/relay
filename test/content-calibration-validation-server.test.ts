@@ -367,9 +367,19 @@ describe('continuous content calibration validation server policy', () => {
       }
       assert.ok(landed, 'the heard read head should land on the validated lag');
       assert.ok(Math.abs(Number(landed.activeCalibratedMicLagMs) - promotedLag) < 1);
-      const receiptFrom = monitor.messages.length;
-      monitor.send({ type: 'timing-calibration-status-request' });
-      const receipt = await waitForNewMessage(monitor, receiptFrom, m => m.type === 'timing-calibration-status');
+      // The rendered and settled authority are what the mixer has emitted, so
+      // they move on the next mixed frame, not when the lag is accepted. A
+      // status read between the two (a slow CI mix timer) still names the old
+      // revision; wait, boundedly, for a frame instead of racing it.
+      let receipt: any = null;
+      for (let attempt = 0; attempt < 15; attempt += 1) {
+        const receiptFrom = monitor.messages.length;
+        monitor.send({ type: 'timing-calibration-status-request' });
+        receipt = await waitForNewMessage(monitor, receiptFrom, m => m.type === 'timing-calibration-status');
+        if (receipt.micReadHead.renderedCalibration?.revision === receipt.confirmedCalibrationRevision
+          && receipt.micReadHead.settled?.authority?.revision === receipt.confirmedCalibrationRevision) break;
+        await sleep(200);
+      }
       assert.equal(receipt.micReadHead.renderedCalibration.kind, 'content');
       assert.equal(receipt.micReadHead.renderedCalibration.revision, receipt.confirmedCalibrationRevision);
       assert.equal(receipt.micReadHead.settled.authority.revision, receipt.confirmedCalibrationRevision);

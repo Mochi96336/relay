@@ -3,8 +3,8 @@ import test from 'node:test';
 import { RelayClient, sleep, startRelay, waitForNewMessage } from './helpers/harness.js';
 import { registerPlayback } from './support/client-commands.js';
 const videoId = 'dQw4w9WgXcQ';
-test('real protocol selects sample/song fallback and withdraws it when both reporters stop', async () => {
-  const server = await startRelay({ RELAY_SAMPLE_SONG_FALLBACK: 'sample-song',
+test('real protocol places the voice by sample/song at once and holds it when both reporters stop', async () => {
+  const server = await startRelay({
     RELAY_AUTO_CALIBRATE: '0', RELAY_CALIBRATION_PROBE: '0', RELAY_CALIBRATION_VALIDATION: '0' });
   const clients: RelayClient[] = [];
   try {
@@ -51,18 +51,25 @@ test('real protocol selects sample/song fallback and withdraws it when both repo
     assert.equal(live.sampleSongFallback.active, true, JSON.stringify(live.sampleSongFallback));
     assert.ok(Math.abs(live.sampleSongFallback.candidateMs - 200) < 75, String(live.sampleSongFallback.candidateMs));
     assert.equal(live.activeMicLagMs, null);
+    // Taken at once rather than walked to; the phone's RTT/2 (20 ms) plays no part.
+    assert.ok(Math.abs(live.fallbackNetworkMs - live.sampleSongFallback.candidateMs) < 10, JSON.stringify(live));
     await sleep(1600);
     const stale = await status();
     assert.equal(stale.sampleSongFallback.candidateMs, null);
     assert.equal(stale.sampleSongFallback.selected, false);
+    assert.equal(stale.sampleSongFallback.held, true);
+    assert.equal(stale.sampleSongFallback.active, true);
+    assert.ok(Math.abs(stale.fallbackNetworkMs - live.fallbackNetworkMs) < 10, JSON.stringify(stale));
     const journal = server.stderr().split('\n').filter(line => line.startsWith('[mic-fallback-target] '))
       .map(line => JSON.parse(line.slice('[mic-fallback-target] '.length)));
     const selected = journal.findIndex(line => line.source === 'sample-song');
     assert.ok(selected >= 0, JSON.stringify(journal));
     assert.ok(Math.abs(journal[selected].candidateMs - 200) < 75, JSON.stringify(journal[selected]));
-    const withdrawn = journal.slice(selected).find(line => line.source === 'transport');
-    assert.equal(withdrawn?.change, 'source', JSON.stringify(journal));
-    assert.match(String(withdrawn?.reason), /-stale$/);
+    assert.equal(journal.slice(0, selected).every(line => line.source === 'unplaced'), true, JSON.stringify(journal));
+    const lapsed = journal.slice(selected).find(line => line.source === 'held');
+    assert.equal(lapsed?.change, 'source', JSON.stringify(journal));
+    assert.match(String(lapsed?.reason), /-stale$/);
+    assert.ok(Math.abs(lapsed!.targetMs - live.fallbackNetworkMs) < 10, JSON.stringify(lapsed));
   } finally {
     for (const c of clients) c.close();
     await server.stop();

@@ -244,8 +244,8 @@ function addDurationIssue(
 function estimateBreakdown(evidence: TakeQualityEvidence) {
   if (evidence.sampleSongEstimateMs === undefined) return '';
   const sampleSongMs = Math.round(evidence.sampleSongEstimateMs);
-  const transportMs = Math.round(Math.max(0, evidence.networkEstimateMs - evidence.sampleSongEstimateMs));
-  return ` (${sampleSongMs} ms sample/song estimate, ${transportMs} ms transport estimate)`;
+  const otherMs = Math.round(Math.max(0, evidence.networkEstimateMs - evidence.sampleSongEstimateMs));
+  return ` (${sampleSongMs} ms sample/song estimate, ${otherMs} ms without one)`;
 }
 
 export function assessTakeQuality(evidence: TakeQualityEvidence): TakeQualityAssessment {

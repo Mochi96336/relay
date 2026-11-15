@@ -392,7 +392,7 @@ test('a Take records which timing placed each part of it and how hard the voice 
   });
   assert.match(
     issues.find((issue) => issue.code === 'timing-fallback')?.message ?? '',
-    /\(10 ms sample\/song estimate, 10 ms transport estimate\)/,
+    /\(10 ms sample\/song estimate, 10 ms without one\)/,
   );
 });
 

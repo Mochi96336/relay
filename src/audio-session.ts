@@ -633,6 +633,11 @@ export class AudioSession {
       targetMs === this.micTrack.alignmentState.networkCompensationMs ? null : targetMs;
   }
 
+  /** Where a live network-compensation walk is heading; null when none is pending. */
+  get networkCompensationTargetMs() {
+    return this.micTrack.networkCompensationTargetMs;
+  }
+
   /**
    * Changes only the target. `mixFrame` advances the applied read head gradually
    * so live validation cannot skip/repeat the full correction in one frame.

@@ -71,8 +71,9 @@ export class SampleSongFallback {
 }
 
 export type FallbackTargetEntry = {
-  source: 'sample-song' | 'transport';
-  /** Why sample/song gave no candidate while the transport estimate drives the target. */
+  /** `held` keeps the last sample/song placement; `unplaced` has had none for this song yet. */
+  source: 'sample-song' | 'held' | 'unplaced';
+  /** Why sample/song gave no candidate. */
   reason: string | null;
   targetMs: number;
 };

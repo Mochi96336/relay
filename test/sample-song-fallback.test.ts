@@ -81,8 +81,8 @@ test('the fallback target journal logs source changes at once and movement at mo
   assert.equal(j.note(song(-610), 2000), null, 'noise below the move threshold');
   assert.equal(j.note(song(-650), 500), null, 'a move within a second of the last line waits');
   assert.equal(j.note(song(-650), 1000), 'move');
-  assert.equal(j.note({ source: 'transport', reason: 'mic-stale', targetMs: 150 }, 1001), 'source');
-  assert.equal(j.note({ source: 'transport', reason: 'mic-unsettled', targetMs: 150 }, 1002), 'source');
+  assert.equal(j.note({ source: 'held', reason: 'mic-stale', targetMs: -650 }, 1001), 'source');
+  assert.equal(j.note({ source: 'held', reason: 'mic-unsettled', targetMs: -650 }, 1002), 'source');
   assert.equal(j.note(song(-650), 1003), 'source');
   j.reset();
   assert.equal(j.note(song(-650), 1004), 'start');
@@ -99,10 +99,10 @@ test('invalid uncertainty and nonfinite input fail closed', () => {
   assert.equal(f.observe('mic', { ...base, uncertaintyMs: 1000 }, 1000), false);
   assert.equal(f.observe('mic', { ...base, sampleIndex: NaN }, 1000), false);
 });
-test('deployment mode defaults to original fallback and rejects misspellings', () => {
-  assert.equal(loadRelayConfig({}).sampleSongFallback, 'rtt');
-  assert.equal(loadRelayConfig({ RELAY_SAMPLE_SONG_FALLBACK: 'sample-song' }).sampleSongFallback, 'sample-song');
-  assert.throws(() => loadRelayConfig({ RELAY_SAMPLE_SONG_FALLBACK: 'typo' }), /RELAY_SAMPLE_SONG_FALLBACK/);
+test('the retired fallback mode setting is ignored, whatever a host still sets', () => {
+  for (const mode of ['rtt', 'shadow', 'sample-song', 'typo']) {
+    assert.equal('sampleSongFallback' in loadRelayConfig({ RELAY_SAMPLE_SONG_FALLBACK: mode }), false);
+  }
 });
 
 test('sample coordinates follow capture placement, resampling and generation fences', async () => {

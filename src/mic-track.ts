@@ -7,6 +7,7 @@ import { MicFrontierCorrection } from './mic-frontier-correction.js';
 import { MicGainRamp } from './mic-gain-ramp.js';
 import { MicInputClipping } from './mic-input-clipping.js';
 import { MicLimiter } from './mic-limiter.js';
+import { MicLowCut } from './mic-low-cut.js';
 import { MicRawMeter } from './mic-raw-meter.js';
 import {
   readMicSlewedRange, crossfadeMicReadHeadJump, type MicSlewRead,
@@ -57,6 +58,8 @@ export type MicReadPlan = {
 export class MicTrack {
   readonly timeline = emptyPcmTimeline();
   readonly gain: MicGainRamp;
+  /** Null when the room places Mic PCM exactly as it arrived. */
+  readonly lowCut: MicLowCut | null;
   readonly limiter: MicLimiter;
   readonly meter: MicRawMeter;
   readonly captureRestarts = new CaptureRestartBoundaries();
@@ -104,6 +107,8 @@ export class MicTrack {
     walkLimitMs?: number;
     /** The frontier gives back at least this much in one (quiet) jump rather than walking. */
     frontierPromptReleaseMs: number;
+    /** High-pass corner for this singer's PCM; omitted, null or 0 keeps it raw. */
+    lowCutHz?: number | null;
   }) {
     const { sampleRate, frameMs, frameSamples, sourceEdgeFadeSamples, safetyMs, slewFraction } = options;
     this.prebufferMs = options.prebufferMs;
@@ -119,6 +124,7 @@ export class MicTrack {
     this.readHead = new MicReadHead({ sampleRate, frameMs, slewFraction,
       walkLimitMs: options.walkLimitMs ?? Infinity, jumpQuietWaitMs: options.jumpQuietWaitMs });
     this.gain = new MicGainRamp(sampleRate);
+    this.lowCut = options.lowCutHz ? new MicLowCut(sampleRate, options.lowCutHz) : null;
     this.limiter = new MicLimiter(sampleRate);
     this.meter = new MicRawMeter(sampleRate);
     this.edge = new SourceOutputEdge(sourceEdgeFadeSamples);
@@ -204,6 +210,18 @@ export class MicTrack {
       onCaptureClockChanged: () => this.onCaptureClockReplaced(),
       trimSourcePacket: (args) => this.trimSourcePacket(args),
     });
+    // Low cut before anything reads the placed PCM: the meter, concealment,
+    // the limiter detector and calibration all see the voice the room hears.
+    const placedChunk = this.timeline.chunks.at(-1) ?? null;
+    if (this.lowCut && placedChunk && placedChunk !== previousChunk) {
+      this.lowCut.process(placedChunk.samples, Boolean(
+        previousChunk
+        && !result.captureRestarted
+        && previousGeneration === this.timeline.generation
+        && previousSourceRate === this.timeline.sourceRate
+        && placedChunk.start === previousTotalSamples
+      ));
+    }
     // Source-local capture metadata now belongs to the reusable MicTrack.
     // Only the room supplies its authoritative output clock.
     this.observeIngest({

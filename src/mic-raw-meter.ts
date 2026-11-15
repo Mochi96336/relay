@@ -1,6 +1,8 @@
 /**
- * Raw Mic evidence from accepted input PCM, before gain or limiting. Capture
- * replacement resets this history immediately, even while old output is queued.
+ * Raw Mic evidence from accepted input PCM, before gain or limiting (after the
+ * room's low cut, when it has one: the level a singer can be heard at, not the
+ * breath under it). Capture replacement resets this history immediately, even
+ * while old output is queued.
  */
 const MIC_METER_HALF_LIFE_MS = 2_000;
 

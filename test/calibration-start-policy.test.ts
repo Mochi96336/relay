@@ -31,7 +31,7 @@ test('calibration start policy preserves runtime rejection precedence and mode',
       bootProbeCalibrationActive: true,
       sessionActive: false,
     }),
-    { ok: false, mode: 'content', reason: 'take-active' },
+    { ok: false, mode: 'content', reason: 'calibration-active' },
   );
   assert.deepEqual(
     decideCalibrationStart({ ...READY, bootProbeCalibrationActive: true, sessionActive: false }),
@@ -200,3 +200,11 @@ test('a missing Robot leg is not the user failing to connect a device', () => {
     { ok: false, mode: 'boot-probe', reason: 'sources-not-connected' },
   );
 });
+
+for (const takeLifecycle of ['recording', 'finalizing'] as const) {
+  test(`passive Content remains available during ${takeLifecycle}, audible probes wait`, () => {
+    assert.deepEqual(decideCalibrationStart({ ...READY, takeLifecycle }), { ok: true, mode: 'content' });
+    assert.deepEqual(decideCalibrationStart({ ...READY, takeLifecycle, robotProbeTimingActive: true }),
+      { ok: false, mode: 'boot-probe', reason: 'take-active' });
+  });
+}

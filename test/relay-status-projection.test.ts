@@ -404,7 +404,6 @@ test('active handoff clock loss reaches server Take admission as a refusal', () 
     frameBoundary: forbidden,
     songAt: forbidden,
     timingAtStart: forbidden,
-    onStarted: forbidden,
     send: (_socket, message) => { replies.push(message); },
     clock: { wallTime: () => 0, monotonicTime: () => 0 },
   });

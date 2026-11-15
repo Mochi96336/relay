@@ -51,6 +51,12 @@ export function decideCalibrationMixerApplication(
   }
 
   if (input.activeMicLagMs === input.nextMicLagMs) {
+    // A new confirmation cannot acknowledge this cursor while an older target
+    // can still move it. Ordinary same-revision Robot jitter retains its hold
+    // above; admitted authority must settle both the value and its target.
+    if (input.calibratedMicLagTarget !== null && input.calibratedMicLagTarget !== input.nextMicLagMs) {
+      return { kind: 'set', micLagMs: input.nextMicLagMs, clearContentValidationSlew: true };
+    }
     return {
       kind: 'none',
       clearContentValidationSlew: input.contentValidationSlewMatchesRevision,

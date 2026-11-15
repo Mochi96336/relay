@@ -18,8 +18,6 @@ type TakeCommandOptions<TSocket extends ParticipantSocket> = {
   frameBoundary: (nowMs: number) => TakeFrameBoundary;
   songAt: (nowMs: number) => TakeSongSnapshot;
   timingAtStart: (nowMs: number) => TakeTimingAtStart;
-  /** Only an admitted recording may stand down background calibration. */
-  onStarted: (nowMs: number) => void;
   send: (socket: TSocket, message: Record<string, unknown>) => void;
   clock?: { wallTime: () => number; monotonicTime: () => number };
 };
@@ -28,7 +26,7 @@ const TAKE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
 /**
  * Recording commands form one synchronous transaction: admit, choose the next
- * complete mix frame, commit the recording, then stand down background timing.
+ * complete mix frame, and commit a tap on the same frames sent to listeners.
  * Wall time is shifted by the same frame-quantization delta as the sample clock.
  * The controller owns recording/storage; this boundary owns command ordering.
  */
@@ -67,7 +65,6 @@ export function createTakeCommandHandlers<TSocket extends ParticipantSocket>(opt
       }
 
       options.controller.noteTimingAtStart(options.timingAtStart(nowMs));
-      options.onStarted(nowMs);
       options.send(socket, { type: 'take-command-accepted', command: 'start', takeId: result.takeId });
     },
 

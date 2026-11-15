@@ -167,16 +167,29 @@ pipeline evidence available. Physical adapters advance Source/capture identity
 and reset mapper coordinates before invoking these transactions; they retain
 transport, recording-quality and audio-session lifecycle authority.
 
-`CalibrationAlignment` owns the last revision applied to the mixer, validity
-sampling, application/hold/revocation and boot-baseline reapplication. Its
-desired-lag query observes mapping drift without moving a Take's frozen read
-head. A new revision held by Take or mapping readiness remains pending; it
-must still reach the mixer when the hold ends. TimingRuntime retains confirmed
-provenance and slew metadata, and AudioSession retains the actual read head
-and slew target. Diagnostic authority snapshots cannot mutate the owner.
-An unchanged boot target acknowledges its confirmed revision only when the
-current lag and pending slew target both match it. A real hold leaves that
-revision pending; a different old slew target must be replaced first.
+`CalibrationAlignment` owns the last revision accepted by the mixer, validity
+sampling, application/hold/revocation and boot-baseline reapplication. A revision
+held by mapping readiness remains pending until that mapping becomes applicable.
+The desired-lag query is read-only. An unchanged target acknowledges a new
+revision only when both the current lag and pending slew target match it;
+otherwise the old target must be retired. Ordinary same-revision Robot mapping
+noise retains its jitter hold.
+
+`MicReadHead` owns each singer's alignment requests, walk targets, quiet waits,
+withdrawal, epoch retirement and emitted settlement receipts. `MicTrack` supplies
+PCM/quiet evidence and frontier safety; it does not maintain a second correction
+lifecycle. A fallback withdrawal freezes its last emitted component and cannot
+withdraw acoustic authority. A new Mic owner resets that fallback baseline.
+Queries return snapshots and cannot acknowledge output. A calibration receipt
+names the accepted revision and the first complete emitted frame that settled
+its effective target; accepting or planning a target alone cannot produce it.
+Background fallback work cannot restart a foreground calibration's quiet wait.
+
+A Take is a passive tap on the same room PCM sent to listeners. Starting or
+stopping recording cannot force a read-head jump, stop a walk, or stand down
+passive measurement. Main and secondary voices keep their normal live correction
+policies during recording. Gaps, frontier safety and normal quiet-wait transitions
+are recorded exactly as listeners receive them within the addressed sample range.
 
 ### A measurement is a stage only if it occupies the room
 
@@ -198,14 +211,11 @@ room's timing state is that applied authority; `calibrating` is the honest
 answer only while nothing trustworthy is applied, where it also outranks
 `stale`/`fallback`, whose recovery is the recalibration already running.
 
-Not being a stage is not permission to run through a Take. A Take that starts
-while a content run is collecting stands that run down, because confirming it
-would move the mixer's alignment into the middle of the recording. Standing
-down is not a failure and must not be reported as one. This is the same policy
-as refusing to *begin* content work during a Take, applied from the other side.
-A Take command that is rejected before recording admission must not stand down
-content calibration or content validation; rejected commands do not own those
-background timing transactions.
+Content collection and validation continue through a Take. Their confirmed
+corrections reach the shared Listen/Take mix through the normal read-head policy.
+Audible boot probes are different: they must not inject test sounds into an
+active recording. Their start gate remains Take-aware, while reapplication of
+already-measured pipeline evidence is passive and may follow live player drift.
 
 ### Strategy preference is bounded and terminates both ways
 

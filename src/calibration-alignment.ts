@@ -5,7 +5,7 @@ import type { BootProbeCoordinator } from './boot-probe-coordinator.js';
 import type { BootProbeContext } from './boot-probe-runtime.js';
 import { decideBootProbeMixerApplication } from './boot-probe-mixer-application.js';
 import { decideBootProbeReapplication, type BootProbeReapplicationReason } from './boot-probe-reapplication.js';
-import { decideCalibrationApplicability } from './calibration-applicability.js';
+import { decideCalibrationApplicability, type CalibrationApplicabilityInput } from './calibration-applicability.js';
 import { decideCalibrationMixerApplication } from './calibration-mixer-application.js';
 import type { CalibrationContext, CalibrationSession } from './calibration-session.js';
 import { mediaToWallMs } from './boot-calibration.js';
@@ -79,10 +79,20 @@ export class CalibrationAlignment {
 
   /** A quiet live coordinate may hold valid evidence; a changed path revokes it. */
   applicability(kind = this.kind) {
+    return decideCalibrationApplicability(this.applicabilityEvidence(kind));
+  }
+
+  /** The decision together with what it was made from, for the journal. */
+  applicabilityDecision(kind = this.kind) {
+    const evidence = this.applicabilityEvidence(kind);
+    return { applicability: decideCalibrationApplicability(evidence), evidence };
+  }
+
+  private applicabilityEvidence(kind: CalibrationApplicabilityInput['kind']): CalibrationApplicabilityInput {
     const { measurement, route, mapping } = this.host;
     const nowMs = this.now();
     const result = measurement.result;
-    return decideCalibrationApplicability({
+    return {
       kind,
       hasResult: result !== null,
       stale: result !== null && this.stale,
@@ -97,7 +107,7 @@ export class CalibrationAlignment {
       robotDeltaFresh: mapping.deltaFresh(nowMs),
       robotDeltaEverEstablished: mapping.deltaEverEstablished(),
       robotContentMappingReady: mapping.contentReady(nowMs),
-    });
+    };
   }
 
   /** Pipeline latency is wall time; only the player's media delta follows rate. */

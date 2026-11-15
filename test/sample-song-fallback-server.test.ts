@@ -74,6 +74,13 @@ test('real protocol places the voice by sample/song at once and holds it when bo
     assert.equal(lapsed?.change, 'source', JSON.stringify(journal));
     assert.match(String(lapsed?.reason), /-stale$/);
     assert.ok(Math.abs(lapsed!.targetMs - live.fallbackNetworkMs) < 10, JSON.stringify(lapsed));
+    // No calibration ran: the authority journal says so once, with the decision's inputs.
+    const authority = server.stderr().split('\n').filter(line => line.startsWith('[mic-calibration] '))
+      .map(line => JSON.parse(line.slice('[mic-calibration] '.length)));
+    assert.equal(authority[0]?.change, 'start', JSON.stringify(authority));
+    assert.equal(authority.every(line => line.kind === 'none' && line.applicability === 'revoke' && line.appliedMs === null),
+      true, JSON.stringify(authority));
+    assert.equal(authority[0].hasResult, false);
     // The placement was one jump, made over the silent fixture Mic, and journaled.
     const jumps = server.stderr().split('\n').filter(line => line.startsWith('[mic-read-head] '))
       .map(line => JSON.parse(line.slice('[mic-read-head] '.length))).filter(line => line.kind === 'jump');

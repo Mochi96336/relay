@@ -1,5 +1,6 @@
 import { FallbackPlacement, FallbackTargetJournal, SampleSongFallback } from './sample-song-fallback.js';
 import { CalibrationAuthorityJournal } from './calibration-authority-journal.js';
+import { RobotOffsetDelay } from './robot-offset-delay.js';
 import { ChoirRuntime, refuseChoirMessage } from './choir-runtime.js';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -1684,6 +1685,7 @@ function takeIsActive() {
 }
 
 let robotOffsetTimingEvidence: Record<string, number | null> | null = null;
+const robotOffsetDelay = new RobotOffsetDelay();
 
 function timingCalibrationStatusPayload() {
   const alignment = session.alignment;
@@ -3359,6 +3361,13 @@ const infrastructureEventProtocol = createRelayInfrastructureEventProtocol<Relay
       robotOffsetTimingEvidence[key] = typeof value === 'number' && Number.isFinite(value)
         && Math.abs(value) <= 1e12 ? value : null;
     }
+    const timelineNow = currentTimelineStatus(nowMs);
+    const delaySummary = timelineNow.state === 1 ? robotOffsetDelay.note(
+      Number(diagnostic?.targetSeconds), Number(timelineNow.youtubeTime ?? timelineNow.serverTime),
+      currentPlaybackRate(nowMs), nowMs,
+    ) : null;
+    robotOffsetTimingEvidence.targetDelayMs = timelineNow.state === 1 ? robotOffsetDelay.lastMs : null;
+    if (delaySummary) console.warn('[robot-offset-delay]', JSON.stringify(delaySummary));
     // The source must report once after seek to permit its next correction.
     // Accept that control progress without granting alignment authority to a
     // still-converging player. Diagnostics above remain available either way.

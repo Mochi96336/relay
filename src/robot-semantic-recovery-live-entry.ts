@@ -8,6 +8,12 @@ import {
   runRobotSemanticRecoveryLiveOnce,
 } from './robot-semantic-recovery-live.js';
 import type { RobotSemanticRecoveryConfig } from './robot-semantic-recovery-policy.js';
+import {
+  readRecoveryJournalMark,
+  recoveryJournalMarkPath,
+  recoveryJournalVerdict,
+  writeRecoveryJournalMark,
+} from './robot-semantic-recovery-journal.js';
 
 const LIVE_CONFIG: RobotSemanticRecoveryConfig = {
   faultGraceMs: 30_000,
@@ -56,12 +62,26 @@ async function main() {
     config: LIVE_CONFIG,
   });
 
-  // A healthy pass repeats every ~12 s, so it gets one line in the journal;
-  // anything that needs reading later keeps the indented form.
+  // A healthy pass repeats every ~12 s: it is journaled only when it differs
+  // from the last line, and hourly; anything that needs reading later keeps
+  // the indented form.
   const routine = result.decision?.cause === 'healthy'
     && !result.restartAttempted
     && !result.error;
-  process.stdout.write(`${JSON.stringify({
+  const markFile = recoveryJournalMarkPath(stateFile);
+  const journal = recoveryJournalVerdict(await readRecoveryJournalMark(markFile), {
+    key: JSON.stringify([
+      result.evidenceAvailable,
+      result.evidence?.routeServiceActive ?? null,
+      result.decision?.action ?? null,
+      result.decision?.cause ?? null,
+      result.decision?.faults ?? [],
+    ]),
+    routine,
+    nowMs,
+  });
+  await writeRecoveryJournalMark(markFile, journal.next);
+  if (journal.write) process.stdout.write(`${JSON.stringify({
     mode: 'live',
     stateFile,
     nowMs,
@@ -76,6 +96,7 @@ async function main() {
     verification: result.verification,
     error: result.error?.message ?? null,
     state: result.state,
+    quietRuns: journal.quietRuns,
   }, null, routine ? undefined : 2)}\n`);
 
   if (!result.evidenceAvailable) {

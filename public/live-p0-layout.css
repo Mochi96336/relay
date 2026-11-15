@@ -283,33 +283,49 @@ html body .performance-stage > .take-strip > .recent-take #last-take-toggle {
 }
 
 /* Mic gain becomes the first of the two bottom rails. Keep the existing input
-   and authority model; only flatten the closed <details> shell into a 44px
-   rail. Level problems surface as product issues, not permanent Live height. */
+   and authority model; only flatten the open <details> shell into a 44px
+   rail. Level problems surface as product issues, not permanent Live height.
+
+   The <details> itself stays display: block. iOS 16 WebKit and Chromium before
+   131 ignore display: grid on <details>, so a grid here stacked "Mic" and its
+   value above a full-width slider that spilled out of the 44px row onto the
+   attention link below. The label and value columns are absolutely placed
+   instead, and the slider's own box is inset between them. */
 html body[data-self-mic="live"] .performance-stage > .mic-live-control,
 html body[data-choir-guest="joined"] .performance-stage > .mic-live-control {
+  position: relative;
   width: 100%;
   height: 44px;
   min-height: 44px;
   margin: 0 !important;
-  display: grid !important;
-  grid-template-columns: 44px minmax(0, 1fr) auto;
-  align-items: center;
-  column-gap: 8px;
+  display: block !important;
   border-top: 0;
   border-bottom: 1px solid #202227;
 }
 
 html body[data-self-mic="live"] .performance-stage > .mic-live-control > summary,
 html body[data-choir-guest="joined"] .performance-stage > .mic-live-control > summary {
-  display: contents !important;
+  display: block !important;
+  height: 0;
+  min-height: 0;
   pointer-events: none;
 }
 
 html body[data-self-mic="live"] .performance-stage > .mic-live-control > summary > span,
+html body[data-choir-guest="joined"] .performance-stage > .mic-live-control > summary > span,
+html body[data-self-mic="live"] .performance-stage > .mic-live-control > summary > output,
+html body[data-choir-guest="joined"] .performance-stage > .mic-live-control > summary > output {
+  position: absolute;
+  top: 0;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+}
+
+html body[data-self-mic="live"] .performance-stage > .mic-live-control > summary > span,
 html body[data-choir-guest="joined"] .performance-stage > .mic-live-control > summary > span {
-  grid-column: 1;
-  grid-row: 1;
-  align-self: center;
+  left: 0;
   color: #cfd0d3;
   font-size: 13px;
   font-weight: 620;
@@ -317,25 +333,27 @@ html body[data-choir-guest="joined"] .performance-stage > .mic-live-control > su
 
 html body[data-self-mic="live"] .performance-stage > .mic-live-control > summary > output,
 html body[data-choir-guest="joined"] .performance-stage > .mic-live-control > summary > output {
-  grid-column: 3;
-  grid-row: 1;
-  align-self: center;
+  right: 0;
+  justify-content: flex-end;
   color: #b6b8bd;
   font-size: 11px;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
 html body[data-self-mic="live"] .performance-stage > .mic-live-control > .mic-live-control-body,
-html body[data-choir-guest="joined"] .performance-stage > .mic-live-control > .mic-live-control-body,
+html body[data-choir-guest="joined"] .performance-stage > .mic-live-control > .mic-live-control-body {
+  display: block !important;
+  padding: 0 52px;
+}
+
 html body[data-self-mic="live"] .performance-stage > .mic-live-control .gain-control,
 html body[data-choir-guest="joined"] .performance-stage > .mic-live-control .gain-control {
-  display: contents !important;
+  display: block !important;
 }
 
 html body[data-self-mic="live"] .performance-stage > .mic-live-control .gain-rail,
 html body[data-choir-guest="joined"] .performance-stage > .mic-live-control .gain-rail {
-  grid-column: 2;
-  grid-row: 1;
   width: 100%;
   min-width: 0;
   height: 44px;

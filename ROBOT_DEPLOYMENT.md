@@ -340,13 +340,15 @@ systemctl --user status relay-robot-semantic-recovery.timer
 journalctl --user -u relay-robot-semantic-recovery.service --since -10min --no-pager
 ```
 
-## Experimental sample/song fallback
+## Uncalibrated voice placement
 
-`RELAY_SAMPLE_SONG_FALLBACK=rtt` preserves the default. `shadow` collects and
-reports the new estimate without applying it. `sample-song` uses valid matching
-phone/Robot sample-to-YouTube observations when no acoustic calibration is
-applied; missing evidence falls back to RTT/2. Boot/content authority retains
-priority. Existing YouTube room-clock RTT estimation is unchanged.
+When no acoustic calibration is applied, the voice is placed by valid matching
+phone/Robot sample-to-YouTube observations. The first estimate for a song is
+taken at once; later ones are walked to at the slew rate. Missing evidence holds
+the last placement. RTT/2 no longer places the voice: it measures neither the
+players' offset nor the phone's own delay. `RELAY_SAMPLE_SONG_FALLBACK` is
+retired and ignored. Boot/content authority retains priority. Existing YouTube
+room-clock RTT estimation is unchanged.
 
 The phone pairs Worklet capture timestamps with the local player observation.
 The Robot pairs Chromium and stdin observations using their shared host wall

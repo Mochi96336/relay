@@ -62,6 +62,23 @@ test('stale, unavailable capture coordinates and different songs cannot drive fa
   assert.notEqual(f.estimate(1500, base.videoId, map, 48000), null);
   assert.equal(f.rejection, null);
 });
+test('an anchor whose audio has not landed is awaited, not counted as a lapse', () => {
+  const f = new SampleSongFallback(); feed(f, 'mic', .1); feed(f, 'backing', .5);
+  const candidate = f.estimate(1500, base.videoId, map, 48000);
+  const calculation = f.diagnostics(1500).calculation;
+  assert.notEqual(candidate, null);
+  // The Robot bridge sent each song clock just before the PCM it timestamps.
+  const backingAhead = (side: string, a: SongSampleAnchor) => side === 'backing' ? 'ahead' as const : a.sampleIndex;
+  assert.equal(f.estimate(1501, base.videoId, backingAhead, 48000), null);
+  assert.equal(f.rejection, 'awaiting-audio');
+  assert.equal(f.diagnostics(1501).calculation, calculation, 'the last calculation still describes the voice');
+  // A side that cannot be placed at all outranks one that is merely early.
+  assert.equal(f.estimate(1502, base.videoId, (side, a) => side === 'mic' ? null : backingAhead(side, a), 48000), null);
+  assert.equal(f.rejection, 'unmapped');
+  // Waiting is bounded by staleness: audio that never comes is a lapse.
+  assert.equal(f.estimate(2501, base.videoId, backingAhead, 48000), null);
+  assert.equal(f.rejection, 'mic-stale');
+});
 test('a missing or unsettled side names itself as the reason', () => {
   const f = new SampleSongFallback();
   f.estimate(1000, base.videoId, map, 48000);
@@ -115,11 +132,17 @@ test('sample coordinates follow capture placement, resampling and generation fen
   const result = s.ingestMic({ generation: 1, firstSampleIndex: 0, pcm: Buffer.alloc(960 * 2) }, 48000, 1000);
   assert.equal(s.sampleSongPosition('mic', 1, 0, 48000), result.start);
   assert.equal(s.sampleSongPosition('mic', 2, 0, 48000), null);
-  assert.equal(s.sampleSongPosition('mic', 1, 961, 48000), null);
+  // Up to a second past the frontier is this capture's audio still on its way.
+  assert.equal(s.sampleSongPosition('mic', 1, 961, 48000), 'ahead');
+  assert.equal(s.sampleSongPosition('mic', 1, 960 + 48000, 48000), 'ahead');
+  assert.equal(s.sampleSongPosition('mic', 1, 960 + 48001, 48000), null);
+  assert.equal(s.sampleSongPosition('mic', 2, 961, 48000), null);
   assert.equal(s.sampleSongPosition('mic', 1, 0, 44100), null);
+  s.ingestMic({ generation: 1, firstSampleIndex: 960, pcm: Buffer.alloc(960 * 2) }, 48000, 1020);
+  assert.equal(typeof s.sampleSongPosition('mic', 1, 961, 48000), 'number', 'it maps once its PCM lands');
   s.ingestMic({ generation: 2, firstSampleIndex: 0, pcm: Buffer.alloc(320 * 2) }, 16000, 2000);
-  const end = s.sampleSongPosition('mic', 2, 320, 16000)!;
-  assert.equal(end - s.sampleSongPosition('mic', 2, 160, 16000)!, 480);
+  const end = s.sampleSongPosition('mic', 2, 320, 16000) as number;
+  assert.equal(end - (s.sampleSongPosition('mic', 2, 160, 16000) as number), 480);
   assert.equal(s.sampleSongPosition('mic', 1, 0, 48000), null);
   s.resetEpoch(3000);
   assert.equal(s.sampleSongPosition('mic', 2, 160, 16000), null);

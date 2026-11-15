@@ -391,6 +391,7 @@ test('without Content, B is placed by its YouTube time against the Robot', async
     let audio: any = null;
     let i = 0;
     let bAnchors = true;
+    let bBehindSeconds = .15;
     // One 20 ms frame of every source, paced on the wall clock so the frames
     // keep up with real time; every 240 ms, A's and the Robot's song
     // positions, and B's while bAnchors is on.
@@ -416,7 +417,7 @@ test('without Content, B is placed by its YouTube time against the Robot', async
       robotBacking.send({ type: 'backing-song-clock', generation: 9, sampleRate: 48_000,
         sampleIndex: cursor, observedAtUnixMs: at });
       if (bAnchors) b.send({ type: 'choir-secondary-song-anchor', videoId: VIDEO_ID, state: 1, playbackRate: 1,
-        currentTime: robotSeconds - .15, captureAnchor: anchor(7) });
+        currentTime: robotSeconds - bBehindSeconds, captureAnchor: anchor(7) });
     };
     for (; Date.now() - startedAt < 8_000; i++) {
       await step();
@@ -453,6 +454,16 @@ test('without Content, B is placed by its YouTube time against the Robot', async
     const settled = (await duet.statusAudio())?.duetSecondary;
     assert.equal(settled?.audible, true);
     assert.equal(settled.targetLagMs, heldLag);
+    assert.match(relay.stdout(), /"event":"b-lag-held"/, duet.choirLog(8));
+
+    // B's song resumes 400 ms behind, as after its local player stalled:
+    // the journal shows where B's lag went, not only which source placed it.
+    bBehindSeconds = .4;
+    bAnchors = true;
+    const moved = () => [...relay.stdout().matchAll(/"event":"b-lag","source":"youtube-time","lagMs":(-?\d+)/g)]
+      .map(match => Number(match[1])).some(lag => Math.abs(lag - (aLagMs + 400)) < 40);
+    for (const until = Date.now() + 4_000; Date.now() < until && !moved(); i++) await step();
+    assert.ok(moved(), `no b-lag line near ${aLagMs + 400} ms\n${duet.choirLog(12)}`);
   } finally {
     await duet.close();
   }

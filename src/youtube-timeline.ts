@@ -369,6 +369,23 @@ export class YouTubeTimelineTracker {
   }
 
   /**
+   * The server's clock minus the reporting page's, and whose page it is; null
+   * until two seconds of its reports have been measured, or once they stop.
+   */
+  pageClock(nowMs = performance.now()) {
+    const newest = this.clockOffsets.at(-1);
+    if (!this.reportTravelTime || this.clockKey === null || !newest
+      || this.clockOffsets.length < REFINE_REPORTS || nowMs - newest.atMs > STALE_AFTER_MS) return null;
+    let bestOffsetMs = Infinity;
+    let bestHalfRttMs = Infinity;
+    for (const sample of this.clockOffsets) {
+      bestOffsetMs = Math.min(bestOffsetMs, sample.offsetMs);
+      bestHalfRttMs = Math.min(bestHalfRttMs, sample.halfRttMs);
+    }
+    return { key: this.clockKey, offsetMs: bestOffsetMs - bestHalfRttMs };
+  }
+
+  /**
    * Moves the anchor to where the least delayed recent reports put the
    * player. Not a correction: the song did not jump, the room's estimate of
    * it improved, so the room song revision stays.

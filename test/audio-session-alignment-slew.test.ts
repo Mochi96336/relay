@@ -3,6 +3,7 @@ import { describe, test } from 'node:test';
 
 import { AudioSession } from '../src/audio-session.js';
 import type { PcmFrame } from '../src/pcm-frame.js';
+import { READ_HEAD_MECHANISM } from './support/read-head-mechanism.js';
 
 const RATE = 48_000;
 
@@ -21,7 +22,7 @@ function tone(seconds: number, hz: number, amplitude: number) {
 }
 
 function makeSession() {
-  return new AudioSession({
+  return new AudioSession({ ...READ_HEAD_MECHANISM,
     sampleRate: RATE,
     frameMs: 20,
     prebufferMs: 0,
@@ -53,7 +54,7 @@ describe('AudioSession runtime calibration slew', () => {
   });
 
   test('validated drift changes Mic read rate instead of splicing every 20 ms frame', () => {
-    const session = new AudioSession({
+    const session = new AudioSession({ ...READ_HEAD_MECHANISM,
       sampleRate: RATE,
       frameMs: 20,
       prebufferMs: 600,
@@ -93,7 +94,7 @@ describe('AudioSession runtime calibration slew', () => {
   });
 
   test('bounded slew carries Mic input clipping along the exact interpolated source trajectory', () => {
-    const session = new AudioSession({
+    const session = new AudioSession({ ...READ_HEAD_MECHANISM,
       sampleRate: RATE,
       frameMs: 20,
       prebufferMs: 600,
@@ -127,7 +128,7 @@ describe('AudioSession runtime calibration slew', () => {
   });
 
   test('immediate read-head crossfade attributes Mic input clipping from the audible old leg', () => {
-    const session = new AudioSession({
+    const session = new AudioSession({ ...READ_HEAD_MECHANISM,
       sampleRate: RATE,
       frameMs: 20,
       prebufferMs: 600,
@@ -165,7 +166,7 @@ describe('AudioSession runtime calibration slew', () => {
   });
 
   test('bounded slew carries gap evidence along the exact interpolated source trajectory', () => {
-    const session = new AudioSession({
+    const session = new AudioSession({ ...READ_HEAD_MECHANISM,
       sampleRate: RATE,
       frameMs: 20,
       prebufferMs: 600,
@@ -215,7 +216,7 @@ describe('AudioSession runtime calibration slew', () => {
   });
 
   test('bounded slew does not interpolate across a Mic capture-restart boundary', () => {
-    const session = new AudioSession({
+    const session = new AudioSession({ ...READ_HEAD_MECHANISM,
       sampleRate: RATE,
       frameMs: 20,
       prebufferMs: 600,
@@ -287,7 +288,7 @@ describe('AudioSession runtime calibration slew', () => {
   });
 
   test('immediate live alignment jump crossfades instead of splicing the Mic', () => {
-    const session = new AudioSession({
+    const session = new AudioSession({ ...READ_HEAD_MECHANISM,
       sampleRate: RATE,
       frameMs: 20,
       prebufferMs: 600,
@@ -332,7 +333,7 @@ describe('AudioSession runtime calibration slew', () => {
   });
 
   test('immediate read-head crossfade never counts more unheadered samples than it emits', () => {
-    const session = new AudioSession({
+    const session = new AudioSession({ ...READ_HEAD_MECHANISM,
       sampleRate: RATE,
       frameMs: 20,
       prebufferMs: 600,
@@ -376,7 +377,7 @@ describe('AudioSession runtime calibration slew', () => {
       return pcm;
     };
     const run = (oldLegUnheadered: boolean) => {
-      const session = new AudioSession({
+      const session = new AudioSession({ ...READ_HEAD_MECHANISM,
         sampleRate: RATE,
         frameMs: 20,
         prebufferMs: 600,
@@ -435,7 +436,7 @@ describe('AudioSession runtime calibration slew', () => {
   });
 
   test('immediate read-head crossfade does not leak across a retained Mic capture restart', () => {
-    const session = new AudioSession({
+    const session = new AudioSession({ ...READ_HEAD_MECHANISM,
       sampleRate: RATE,
       frameMs: 20,
       prebufferMs: 600,
@@ -519,7 +520,7 @@ describe('AudioSession runtime calibration slew', () => {
   });
 
   test('fine-tune authority during a runtime slew crossfades from the actually emitted read head', () => {
-    const session = new AudioSession({
+    const session = new AudioSession({ ...READ_HEAD_MECHANISM,
       sampleRate: RATE,
       frameMs: 20,
       prebufferMs: 600,

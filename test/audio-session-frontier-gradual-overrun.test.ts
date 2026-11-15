@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { AudioSession } from '../src/audio-session.js';
+import { READ_HEAD_MECHANISM } from './support/read-head-mechanism.js';
 
 const RATE = 48_000;
 const CHUNK = 960;
@@ -22,7 +23,7 @@ function toneChunk(firstSampleIndex: number) {
  * Mic advance and whether the frame starved.
  */
 function runSlowCapture(ppm: number, seconds: number) {
-  const session = new AudioSession({
+  const session = new AudioSession({ ...READ_HEAD_MECHANISM,
     sampleRate: RATE,
     frameMs: 20,
     prebufferMs: 400,
@@ -76,7 +77,7 @@ test('a frontier drained by a slow capture clock is not answered with a 200 ms r
 });
 
 test('a late stream that appears at once is still corrected in one step', () => {
-  const session = new AudioSession({
+  const session = new AudioSession({ ...READ_HEAD_MECHANISM,
     sampleRate: RATE,
     frameMs: 20,
     prebufferMs: 400,
@@ -130,7 +131,7 @@ function maxAdjacentStep(frames: Buffer[]) {
 const TONE_SLOPE_LIMIT = 1_000;
 
 function steadyToneSession() {
-  const session = new AudioSession({
+  const session = new AudioSession({ ...READ_HEAD_MECHANISM,
     sampleRate: RATE,
     frameMs: 20,
     prebufferMs: 400,

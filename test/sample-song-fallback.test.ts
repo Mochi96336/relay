@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { FallbackTargetJournal, SampleSongFallback, type SongSampleAnchor } from '../src/sample-song-fallback.js';
+import {
+  FallbackPlacement, FallbackTargetJournal, SampleSongFallback, type SongSampleAnchor,
+} from '../src/sample-song-fallback.js';
 import { loadRelayConfig } from '../src/config.js';
 const base: SongSampleAnchor = { videoId: 'abcdefghijk', generation: 1, sampleRate: 48000,
   sampleIndex: 0, mediaSeconds: 10, playbackRate: 1, state: 1, uncertaintyMs: 40 };
@@ -121,4 +123,37 @@ test('sample coordinates follow capture placement, resampling and generation fen
   assert.equal(s.sampleSongPosition('mic', 1, 0, 48000), null);
   s.resetEpoch(3000);
   assert.equal(s.sampleSongPosition('mic', 2, 160, 16000), null);
+});
+
+test('the first candidate for a song is placed at once, and later near ones are walked to', () => {
+  const p = new FallbackPlacement(20);
+  assert.deepEqual(p.decide(-1200, 0, base.videoId, 0), { kind: 'place', ms: -1200 });
+  assert.equal(p.placed, true);
+  assert.deepEqual(p.decide(-1190, -1200, base.videoId, 100), { kind: 'walk', ms: -1190 });
+  assert.deepEqual(p.decide(-300, -1190, '01234567890', 200), { kind: 'place', ms: -300 }, 'a new song places again');
+});
+test('a lapse holds the voice where it is, never toward the last estimate', () => {
+  const p = new FallbackPlacement(20);
+  p.decide(-600, 0, base.videoId, 0);
+  assert.deepEqual(p.decide(-620, -604, base.videoId, 100), { kind: 'walk', ms: -620 });
+  assert.deepEqual(p.decide(null, -604, base.videoId, 200), { kind: 'hold' });
+});
+test('a far candidate is placed only after a second of candidates agreeing with it', () => {
+  const p = new FallbackPlacement(20);
+  p.decide(0, 0, base.videoId, 0);
+  // Far all along, but never the same far: each one restarts the count.
+  for (const [at, ms] of [[100, 200], [600, -300], [1200, 500], [1700, 200]] as const) {
+    assert.deepEqual(p.decide(ms, 0, base.videoId, at), { kind: 'hold' }, `${ms} at ${at}`);
+  }
+  // The same far, within the walk limit, for a second: placed at the latest.
+  assert.deepEqual(p.decide(210, 0, base.videoId, 2200), { kind: 'hold' });
+  assert.deepEqual(p.decide(195, 0, base.videoId, 2700), { kind: 'place', ms: 195 });
+});
+test('a lapse restarts the confirmation of a far candidate', () => {
+  const p = new FallbackPlacement(20);
+  p.decide(0, 0, base.videoId, 0);
+  assert.deepEqual(p.decide(300, 0, base.videoId, 100), { kind: 'hold' });
+  assert.deepEqual(p.decide(null, 0, base.videoId, 600), { kind: 'hold' });
+  assert.deepEqual(p.decide(300, 0, base.videoId, 1200), { kind: 'hold' }, 'counted from 1200, not 100');
+  assert.deepEqual(p.decide(300, 0, base.videoId, 2200), { kind: 'place', ms: 300 });
 });

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SampleSongFallback, type SongSampleAnchor } from '../src/sample-song-fallback.js';
+import { FallbackTargetJournal, SampleSongFallback, type SongSampleAnchor } from '../src/sample-song-fallback.js';
 import { loadRelayConfig } from '../src/config.js';
 const base: SongSampleAnchor = { videoId: 'abcdefghijk', generation: 1, sampleRate: 48000,
   sampleIndex: 0, mediaSeconds: 10, playbackRate: 1, state: 1, uncertaintyMs: 40 };
@@ -52,8 +52,40 @@ test('sample/song anchors cannot observe speaker-to-microphone latency', () => {
 test('stale, unavailable capture coordinates and different songs cannot drive fallback', () => {
   const f = new SampleSongFallback(); feed(f, 'mic', .1); feed(f, 'backing', .5);
   assert.equal(f.estimate(2501, base.videoId, map, 48000), null);
+  assert.equal(f.rejection, 'mic-stale');
   assert.equal(f.estimate(1500, '01234567890', map, 48000), null);
+  assert.equal(f.rejection, 'other-song');
   assert.equal(f.estimate(1500, base.videoId, () => null, 48000), null);
+  assert.equal(f.rejection, 'unmapped');
+  assert.notEqual(f.estimate(1500, base.videoId, map, 48000), null);
+  assert.equal(f.rejection, null);
+});
+test('a missing or unsettled side names itself as the reason', () => {
+  const f = new SampleSongFallback();
+  f.estimate(1000, base.videoId, map, 48000);
+  assert.equal(f.rejection, 'no-mic-anchor');
+  f.observe('mic', base, 1000);
+  f.estimate(1000, base.videoId, map, 48000);
+  assert.equal(f.rejection, 'no-backing-anchor');
+  feed(f, 'backing', .5);
+  f.estimate(1500, base.videoId, map, 48000);
+  assert.equal(f.rejection, 'mic-unsettled');
+  feed(f, 'mic', .1, 0, 2);
+  f.estimate(1500, base.videoId, map, 48000);
+  assert.equal(f.rejection, 'rate-mismatch');
+});
+test('the fallback target journal logs source changes at once and movement at most once a second', () => {
+  const j = new FallbackTargetJournal();
+  const song = (targetMs: number) => ({ source: 'sample-song' as const, reason: null, targetMs });
+  assert.equal(j.note(song(-600), 0), 'start');
+  assert.equal(j.note(song(-610), 2000), null, 'noise below the move threshold');
+  assert.equal(j.note(song(-650), 500), null, 'a move within a second of the last line waits');
+  assert.equal(j.note(song(-650), 1000), 'move');
+  assert.equal(j.note({ source: 'transport', reason: 'mic-stale', targetMs: 150 }, 1001), 'source');
+  assert.equal(j.note({ source: 'transport', reason: 'mic-unsettled', targetMs: 150 }, 1002), 'source');
+  assert.equal(j.note(song(-650), 1003), 'source');
+  j.reset();
+  assert.equal(j.note(song(-650), 1004), 'start');
 });
 test('seek, capture restart, stopped clock and pause require fresh agreement', () => {
   for (const patch of [{ mediaSeconds: 100 }, { generation: 2 }, { mediaSeconds: 10.5, sampleIndex: 48000 }, { state: 2 }]) {

@@ -4,6 +4,9 @@ export type SongSampleAnchor = {
 };
 type Observation = SongSampleAnchor & { receivedAt: number; agreements: number };
 
+export type FallbackRejection = 'no-mic-anchor' | 'no-backing-anchor' | 'mic-unsettled' | 'backing-unsettled'
+  | 'other-song' | 'rate-mismatch' | 'mic-stale' | 'backing-stale' | 'unmapped' | 'out-of-range';
+
 /** Approximate player-to-capture evidence, never acoustic calibration authority. */
 export class SampleSongFallback {
   private mic: Observation | null = null;
@@ -36,15 +39,19 @@ export class SampleSongFallback {
     this[side] = { ...value, receivedAt: now, agreements: consistent ? previous.agreements + 1 : 1 };
     return true;
   }
+  /** Why the last estimate gave no candidate; null when it gave one. */
+  rejection: FallbackRejection | null = null;
   estimate(now: number, videoId: string, map: (side: 'mic' | 'backing', a: SongSampleAnchor) => number | null, rate: number) {
     this.calculation = null;
     const mic = this.mic, backing = this.backing;
-    if (!mic || !backing || mic.agreements < 3 || backing.agreements < 3
-      || mic.videoId !== videoId || backing.videoId !== videoId
-      || mic.playbackRate !== backing.playbackRate
-      || now - mic.receivedAt > 1000 || now - backing.receivedAt > 1000) return null;
+    this.rejection = !mic ? 'no-mic-anchor' : !backing ? 'no-backing-anchor'
+      : mic.agreements < 3 ? 'mic-unsettled' : backing.agreements < 3 ? 'backing-unsettled'
+      : mic.videoId !== videoId || backing.videoId !== videoId ? 'other-song'
+      : mic.playbackRate !== backing.playbackRate ? 'rate-mismatch'
+      : now - mic.receivedAt > 1000 ? 'mic-stale' : now - backing.receivedAt > 1000 ? 'backing-stale' : null;
+    if (this.rejection || !mic || !backing) return null;
     const m = map('mic', mic), b = map('backing', backing);
-    if (m === null || b === null) return null;
+    if (m === null || b === null) { this.rejection = 'unmapped'; return null; }
     const advanceMs = (m - b) * 1000 / rate
       + (backing.mediaSeconds - mic.mediaSeconds) * 1000 / mic.playbackRate;
     this.calculation = { observedAtMs: now, mic: { ...mic }, backing: { ...backing },
@@ -52,11 +59,41 @@ export class SampleSongFallback {
       sampleDifferenceMs: (m - b) * 1000 / rate,
       songDifferenceMs: (backing.mediaSeconds - mic.mediaSeconds) * 1000 / mic.playbackRate,
       advanceMs, accepted: Number.isFinite(advanceMs) && Math.abs(advanceMs) <= 2000 };
-    return Number.isFinite(advanceMs) && Math.abs(advanceMs) <= 2000 ? advanceMs : null;
+    if (Number.isFinite(advanceMs) && Math.abs(advanceMs) <= 2000) return advanceMs;
+    this.rejection = 'out-of-range'; return null;
   }
   clear(side?: 'mic' | 'backing') {
     this.calculation = null;
+    this.rejection = null;
     if (side) this[side] = null;
     else { this.mic = null; this.backing = null; }
   }
+}
+
+export type FallbackTargetEntry = {
+  source: 'sample-song' | 'transport';
+  /** Why sample/song gave no candidate while the transport estimate drives the target. */
+  reason: string | null;
+  targetMs: number;
+};
+
+/**
+ * When an uncalibrated singer's fallback target is worth a journal line: its
+ * source or the reason for it changed, or it moved this far since the last line.
+ * The target is refreshed on every backing packet, so lines for movement alone
+ * are at most one per interval.
+ */
+export class FallbackTargetJournal {
+  private last: (FallbackTargetEntry & { atMs: number }) | null = null;
+  constructor(private readonly moveMs = 20, private readonly intervalMs = 1000) {}
+  note(entry: FallbackTargetEntry, nowMs: number): 'start' | 'source' | 'move' | null {
+    const last = this.last;
+    const change = !last ? 'start'
+      : last.source !== entry.source || last.reason !== entry.reason ? 'source'
+      : Math.abs(entry.targetMs - last.targetMs) >= this.moveMs && nowMs - last.atMs >= this.intervalMs ? 'move'
+      : null;
+    if (change) this.last = { ...entry, atMs: nowMs };
+    return change;
+  }
+  reset() { this.last = null; }
 }

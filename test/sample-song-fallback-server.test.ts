@@ -55,6 +55,14 @@ test('real protocol selects sample/song fallback and withdraws it when both repo
     const stale = await status();
     assert.equal(stale.sampleSongFallback.candidateMs, null);
     assert.equal(stale.sampleSongFallback.selected, false);
+    const journal = server.stderr().split('\n').filter(line => line.startsWith('[mic-fallback-target] '))
+      .map(line => JSON.parse(line.slice('[mic-fallback-target] '.length)));
+    const selected = journal.findIndex(line => line.source === 'sample-song');
+    assert.ok(selected >= 0, JSON.stringify(journal));
+    assert.ok(Math.abs(journal[selected].candidateMs - 200) < 75, JSON.stringify(journal[selected]));
+    const withdrawn = journal.slice(selected).find(line => line.source === 'transport');
+    assert.equal(withdrawn?.change, 'source', JSON.stringify(journal));
+    assert.match(String(withdrawn?.reason), /-stale$/);
   } finally {
     for (const c of clients) c.close();
     await server.stop();

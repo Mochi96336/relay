@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { AudioSession } from '../src/audio-session.js';
 import type { PcmFrame } from '../src/pcm-frame.js';
+import { READ_HEAD_MECHANISM } from './support/read-head-mechanism.js';
 
 const RATE = 48_000;
 const CHUNK = Math.round(RATE * 0.02);
@@ -24,7 +25,7 @@ function frame(firstSampleIndex: number, samples = CHUNK, value = AMPLITUDE): Pc
 }
 
 function makeSession() {
-  const session = new AudioSession({
+  const session = new AudioSession({ ...READ_HEAD_MECHANISM,
     sampleRate: RATE,
     frameMs: 20,
     prebufferMs: 0,
@@ -83,7 +84,7 @@ test('Mic frontier exhaustion inside a frame tapers at the emitted boundary with
 });
 
 test('Mic frontier hold de-clicks structural pre-roll when the read head crosses session zero', () => {
-  const session = new AudioSession({
+  const session = new AudioSession({ ...READ_HEAD_MECHANISM,
     sampleRate: RATE,
     frameMs: 20,
     prebufferMs: 40,
@@ -204,7 +205,7 @@ test('Mic late contiguous recovery fades in even when the raw timeline later has
 });
 
 test('Mic entering real audio during a read-rate slew fades in from silence', () => {
-  const session = new AudioSession({
+  const session = new AudioSession({ ...READ_HEAD_MECHANISM,
     sampleRate: RATE,
     frameMs: 20,
     prebufferMs: 400,
@@ -249,7 +250,7 @@ test('Mic entering real audio during a read-rate slew fades in from silence', ()
 });
 
 test('hot Mic recovery after sustained starvation stays inside the limiter without clipping', () => {
-  const session = new AudioSession({
+  const session = new AudioSession({ ...READ_HEAD_MECHANISM,
     sampleRate: RATE,
     frameMs: 20,
     prebufferMs: 0,

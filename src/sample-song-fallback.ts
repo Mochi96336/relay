@@ -98,3 +98,55 @@ export class FallbackTargetJournal {
   }
   reset() { this.last = null; }
 }
+
+/** What one sample/song refresh does to an uncalibrated singer's voice. */
+export type FallbackPlacementDecision =
+  | { kind: 'place'; ms: number }
+  | { kind: 'walk'; ms: number }
+  | { kind: 'hold' };
+
+/**
+ * Turns sample/song candidates into placements. The first candidate for a
+ * song is placed at once (the mixer jumps at a quiet moment). Later ones within
+ * the walk limit are walked to. One further away is placed only once every
+ * candidate for `confirmMs`, without a lapse, has agreed with it to within the
+ * walk limit; until then the voice holds. No candidate holds where it is.
+ */
+export class FallbackPlacement {
+  private placedVideoId: string | null = null;
+  private far: { ms: number; sinceMs: number } | null = null;
+  constructor(private readonly walkLimitMs: number, private readonly confirmMs = 1000) {}
+
+  /** Whether sample/song has placed this singer's voice since the last reset. */
+  get placed() {
+    return this.placedVideoId !== null;
+  }
+
+  decide(candidateMs: number | null, currentMs: number, videoId: string, nowMs: number): FallbackPlacementDecision {
+    if (candidateMs === null) {
+      this.far = null;
+      return { kind: 'hold' };
+    }
+    if (this.placedVideoId !== videoId) {
+      this.placedVideoId = videoId;
+      this.far = null;
+      return { kind: 'place', ms: candidateMs };
+    }
+    if (Math.abs(candidateMs - currentMs) <= this.walkLimitMs) {
+      this.far = null;
+      return { kind: 'walk', ms: candidateMs };
+    }
+    if (!this.far || Math.abs(candidateMs - this.far.ms) > this.walkLimitMs) {
+      this.far = { ms: candidateMs, sinceMs: nowMs };
+      return { kind: 'hold' };
+    }
+    if (nowMs - this.far.sinceMs < this.confirmMs) return { kind: 'hold' };
+    this.far = null;
+    return { kind: 'place', ms: candidateMs };
+  }
+
+  reset() {
+    this.placedVideoId = null;
+    this.far = null;
+  }
+}

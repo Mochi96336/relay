@@ -6,6 +6,7 @@ import { CalibrationAlignment, type CalibrationAlignmentHost } from '../src/cali
 import { CalibrationSession } from '../src/calibration-session.js';
 import { TimingRuntime } from '../src/timing-runtime.js';
 import type { BootCalibrationResult } from '../src/boot-calibration.js';
+import { READ_HEAD_MECHANISM } from './support/read-head-mechanism.js';
 
 function fixture() {
   const state = {
@@ -21,7 +22,10 @@ function fixture() {
     sampleRate: 48_000, durationMs: 1_000, timeoutMs: 2_000, context: () => context,
     onSettled: () => timing.syncConfirmedAuthority({ confirmedRevision: measurement.confirmedRevision, hasConfirmedResult: measurement.confirmedResult !== null }),
   });
-  const audio = new AudioSession({ sampleRate: 48_000, frameMs: 20, prebufferMs: 400, backingGain: 0.65, retentionMs: 3_000 });
+  // These pin which target the alignment hands the mixer and when; the 200 ms
+  // moves below would be jumps under the live walk limit, which
+  // audio-session-read-head-policy pins.
+  const audio = new AudioSession({ ...READ_HEAD_MECHANISM, sampleRate: 48_000, frameMs: 20, prebufferMs: 400, backingGain: 0.65, retentionMs: 3_000 });
   audio.start(0);
   const reapplied: { lag: number; delta: number }[] = [];
   const diagnostics: { reason: string; previous: number | null; next: number }[] = [];

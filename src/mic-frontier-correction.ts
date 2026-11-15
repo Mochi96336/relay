@@ -18,9 +18,10 @@ const MIC_FRONTIER_GRADUAL_SLACK_MS = 60;
  * this much is given back in one step rather than at the slew rate: delayed
  * audio has caught up, and holding the read head back keeps the voice that far
  * behind the song. Less than this is given back at the slew rate as before.
- * The step is a read-head jump, which the mixer crossfades.
+ * The step is a read-head jump, which the mixer crossfades. The mixer may set
+ * a smaller one (its walk limit).
  */
-const MIC_FRONTIER_PROMPT_RELEASE_MS = 100;
+export const MIC_FRONTIER_PROMPT_RELEASE_MS = 100;
 
 /**
  * Confirmed Mic capture loss is folded into the timeline only once the frontier
@@ -59,6 +60,8 @@ export type MicFrontierCorrectionOptions = {
   safetyMs: number;
   /** Largest change of the read rate a runtime correction may make, as a fraction. */
   slewFraction: number;
+  /** Give back at least this much in one step; MIC_FRONTIER_PROMPT_RELEASE_MS when unset. */
+  promptReleaseMs?: number;
 };
 
 /** The Mic as one frame sees it, sampled by the mixer just before it reads. */
@@ -168,7 +171,9 @@ export class MicFrontierCorrection {
     );
     this.foldRoomSamples = Math.round((MIC_TIMELINE_FOLD_ROOM_MS * sampleRate) / 1000);
     this.foldMinSamples = Math.round((MIC_TIMELINE_FOLD_MIN_MS * sampleRate) / 1000);
-    this.promptReleaseSamples = Math.round((MIC_FRONTIER_PROMPT_RELEASE_MS * sampleRate) / 1000);
+    this.promptReleaseSamples = Math.round(
+      ((options.promptReleaseMs ?? MIC_FRONTIER_PROMPT_RELEASE_MS) * sampleRate) / 1000,
+    );
   }
 
   get correctionSamples() {

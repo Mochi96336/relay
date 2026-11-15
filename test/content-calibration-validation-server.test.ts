@@ -266,7 +266,7 @@ describe('continuous content calibration validation server policy', () => {
     }
   });
 
-  test('single drift evidence cannot move alignment; a second agreeing window slews toward it', async () => {
+  test('single drift evidence cannot move alignment; a second agreeing window moves it there', async () => {
     const server = await startRelay(FAST);
     let stopStreaming = () => {};
     try {
@@ -345,30 +345,25 @@ describe('continuous content calibration validation server policy', () => {
           && Math.abs(Number(m.calibratedMicLagMs) - promotedLag) < 1,
         4_000,
       );
-      const activeAtPromotion = Number(promotionSource.activeCalibratedMicLagMs);
+      // A validated drift is far beyond the walk limit, so the mixer takes it
+      // at once and the read head jumps at the first quiet moment; the path
+      // is kept fresh with silence, so that moment comes on the next frames.
       assert.ok(
-        Math.abs(activeAtPromotion - baselineLag) < Math.abs(promotedLag - baselineLag),
-        'validated drift must target the new lag without jumping the applied read head there',
-      );
-      assert.ok(
-        Math.abs(activeAtPromotion - promotedLag) > 5,
-        'promotion source status should expose target and still-applied lag separately',
+        Math.abs(Number(promotionSource.activeCalibratedMicLagMs) - promotedLag) < 1,
+        'validated drift is applied at once rather than walked',
       );
 
-      await sleep(300);
-      const progressFrom = monitor.messages.length;
-      monitor.send({ type: 'source-status-request' });
-      const progress = await waitForNewMessage(
-        monitor,
-        progressFrom,
-        (m) => m.type === 'source-status',
-        2_000,
-      );
-      const activeAfter = Number(progress.activeCalibratedMicLagMs);
-      assert.ok(
-        Math.abs(promotedLag - activeAfter) < Math.abs(promotedLag - activeAtPromotion),
-        'live read head should move toward the validated target over subsequent mix frames',
-      );
+      // Waits are bounded at 3 s, so the jump has landed by then either way.
+      let landed: any = null;
+      for (let attempt = 0; attempt < 20 && !landed; attempt += 1) {
+        const from = monitor.messages.length;
+        monitor.send({ type: 'source-status-request' });
+        const status = await waitForNewMessage(monitor, from, (m) => m.type === 'source-status', 2_000);
+        if (Math.abs(Number(status.heardMicAdvanceMs) - Number(status.appliedMicAdvanceMs)) < 1) landed = status;
+        else await sleep(200);
+      }
+      assert.ok(landed, 'the heard read head should land on the validated lag');
+      assert.ok(Math.abs(Number(landed.activeCalibratedMicLagMs) - promotedLag) < 1);
 
       backing.close();
       publisher.close();

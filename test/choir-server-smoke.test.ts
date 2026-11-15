@@ -392,6 +392,9 @@ test('without Content, B is placed by its YouTube time against the Robot', async
     let i = 0;
     let bAnchors = true;
     let bBehindSeconds = .15;
+    // Off until the last step: B's page then plays the lead the server asks for.
+    let bFollowsLead = false;
+    let bLeadMs = 0;
     // One 20 ms frame of every source, paced on the wall clock so the frames
     // keep up with real time; every 240 ms, A's and the Robot's song
     // positions, and B's while bAnchors is on.
@@ -416,8 +419,13 @@ test('without Content, B is placed by its YouTube time against the Robot', async
         videoId: VIDEO_ID, state: 1, mediaSeconds: robotSeconds, playbackRate: 1, observedAtUnixMs: at } });
       robotBacking.send({ type: 'backing-song-clock', generation: 9, sampleRate: 48_000,
         sampleIndex: cursor, observedAtUnixMs: at });
+      if (bFollowsLead) {
+        const asked = b.messages.filter((m: any) => m.type === 'choir-secondary-lead').at(-1);
+        if (asked) bLeadMs = asked.leadMs;
+      }
       if (bAnchors) b.send({ type: 'choir-secondary-song-anchor', videoId: VIDEO_ID, state: 1, playbackRate: 1,
-        currentTime: robotSeconds - bBehindSeconds, captureAnchor: anchor(7) });
+        currentTime: robotSeconds - bBehindSeconds + bLeadMs / 1_000, captureAnchor: anchor(7),
+        ...(bFollowsLead ? { leadMs: bLeadMs } : {}) });
     };
     for (; Date.now() - startedAt < 8_000; i++) {
       await step();
@@ -464,6 +472,22 @@ test('without Content, B is placed by its YouTube time against the Robot', async
       .map(match => Number(match[1])).some(lag => Math.abs(lag - (aLagMs + 400)) < 40);
     for (const until = Date.now() + 4_000; Date.now() < until && !moved(); i++) await step();
     assert.ok(moved(), `no b-lag line near ${aLagMs + 400} ms\n${duet.choirLog(12)}`);
+
+    // 2026-10-31: B 1.5 s behind is heard late by all the mixer cannot absorb
+    // (200 ms live). The server moves B's song ahead instead, until B's lag
+    // sits just under zero and the mixer reads all of it.
+    bBehindSeconds = 1.5;
+    bFollowsLead = true;
+    const lines = () => relay.stdout().split('\n').filter(line => line.startsWith('[choir] {'))
+      .map(line => JSON.parse(line.slice('[choir] '.length)))
+      .filter(line => line.event === 'b-lag' || line.event === 'b-lag-source');
+    const settledLine = () => lines().find(line => line.lagMs !== undefined && Math.abs(line.lagMs + 100) < 40
+      && Math.abs(line.appliedMs - line.lagMs) < 5 && bLeadMs > 1_000);
+    for (const until = Date.now() + 12_000; Date.now() < until && !settledLine(); i++) await step();
+    assert.ok(lines().some(line => line.lagMs > 1_000 && line.appliedMs < line.lagMs),
+      `B far behind is clamped, and the journal says so\n${duet.choirLog(20)}`);
+    assert.match(relay.stdout(), /"event":"b-lead"/);
+    assert.ok(settledLine(), `B's lag settles at the target, unclamped (lead ${bLeadMs} ms)\n${duet.choirLog(20)}`);
   } finally {
     await duet.close();
   }

@@ -1081,6 +1081,12 @@ const bootProbe = new BootProbeCoordinator({
     : backingRuntime.connected() && backingPlayable(nowMs) && sourceRuntime.connected(),
   deltaMs: currentDeltaMs,
   playbackRate: currentPlaybackRate,
+  // The singer's page plays both the song and the probe: its playback reports
+  // already tell the room clock how its clock sits against the server's.
+  micPageClockOffsetMs: (nowMs) => {
+    const clock = youtubeTimeline.leaderPageClock(nowMs);
+    return clock && clock.participantId === participants.micOwnerId ? clock.offsetMs : null;
+  },
   send: (target, request) => {
     const socket = target === 'mic' ? micRuntime.publisher : sourceRuntime.socket;
     if (socket) sendJson(socket, request);

@@ -197,3 +197,65 @@ test('stale or wrong-generation acknowledgements cannot cancel the newer Mic pro
     await rm(takeDirectory, { recursive: true, force: true });
   }
 });
+
+test('a singer who also plays the song has the Mic probe timed on their page clock', async () => {
+  const { registerPlayback } = await import('./support/client-commands.js');
+  const takeDirectory = await mkdtemp(path.join(os.tmpdir(), 'relay-probe-lifecycle-'));
+  const server = await startRelay({ ...PROBE_FAST, RELAY_TAKE_DIR: takeDirectory,
+    RELAY_CALIBRATION_PROBE_REPLY_TIMEOUT_MS: '6000' });
+  const clients = await robotSession(server);
+  const singer = clients.publisher;
+  const videoId = 'dQw4w9WgXcQ';
+  // The page's clock, an arbitrary distance from the server's.
+  const startedAt = performance.now();
+  const pageNow = () => performance.now() - startedAt + 4_321_000;
+  let reports: NodeJS.Timeout | null = null;
+  try {
+    const probe = (await waitForProbeCount(singer, 'mic', 1))[0];
+    const pageReceivedAtMs = pageNow();
+    await registerPlayback(singer, 'probe-clock-player');
+    const report = (state: number, currentTime: number) => singer.send({
+      type: 'youtube-telemetry', videoId, state, currentTime, duration: 200, playbackRate: 1,
+      playbackTransportId: 'probe-clock-player', playbackGeneration: 1, networkRttMs: 2,
+      sampledAtPerformanceMs: pageNow(),
+    });
+    singer.send({ type: 'room-song-command', commandId: 'probe-clock-load', expectedRevision: 0, action: 'load', videoId, positionSeconds: 0 });
+    await singer.waitFor(m => m.type === 'room-song-command-apply' && m.commandId === 'probe-clock-load');
+    report(5, 0);
+    await singer.waitFor(m => m.type === 'room-song-command-complete' && m.commandId === 'probe-clock-load');
+    singer.send({ type: 'room-song-command', commandId: 'probe-clock-play', expectedRevision: 1, action: 'play' });
+    await singer.waitFor(m => m.type === 'room-song-command-apply' && m.commandId === 'probe-clock-play');
+    const playStartedAt = performance.now();
+    report(1, 0);
+    await singer.waitFor(m => m.type === 'room-song-command-complete' && m.commandId === 'probe-clock-play');
+    reports = setInterval(() => report(1, (performance.now() - playStartedAt) / 1000), 250);
+    // Two seconds of reports tell the room clock how this page's clock sits against its own.
+    await sleep(2_600);
+    // The page prepared for most of that time, scheduled the probe 4 ms before
+    // acknowledging, and the reply then waits 300 ms on the way: an uneven
+    // exchange, which the old estimate would have split down the middle.
+    const acknowledgedAtMs = pageNow();
+    const processingMs = acknowledgedAtMs - pageReceivedAtMs;
+    await sleep(300);
+    const repliedAt = performance.now();
+    singer.send({ type: 'calibration-probe-played', target: 'mic',
+      requestId: probe.requestId, generation: singer.generationId,
+      timingDiagnostics: { processingMs, schedulingDelayMs: processingMs - 4, acknowledgedAtMs } });
+    const status = await clients.monitor.waitFor(m => m.type === 'timing-calibration-status'
+      && m.bootProbeTimingEvidence?.mic?.requestId === probe.requestId, 3000);
+    const evidence = status.bootProbeTimingEvidence.mic;
+    assert.equal(evidence.schedule.method, 'page-clock', JSON.stringify(evidence.schedule));
+    // Scheduled 4 ms before the acknowledgement, which was 300 ms before the reply arrived.
+    const scheduledAtServerMs = evidence.serverReceivedAtMs - (performance.now() - repliedAt) - 300 - 4;
+    const placedLateMs = evidence.schedule.targetAtMs - probe.leadMs - scheduledAtServerMs;
+    assert.ok(Math.abs(placedLateMs) < 40, `placed ${placedLateMs.toFixed(0)} ms from where the page scheduled it`);
+    // Half the round trip would have put it about 150 ms late.
+    const assumed = evidence.serverReceivedAtMs - (evidence.roundTripMs - processingMs) / 2 - 4;
+    assert.ok(assumed - scheduledAtServerMs > 100, `the old estimate: ${(assumed - scheduledAtServerMs).toFixed(0)} ms late`);
+  } finally {
+    if (reports) clearInterval(reports);
+    clients.close();
+    await server.stop();
+    await rm(takeDirectory, { recursive: true, force: true });
+  }
+});

@@ -65,6 +65,8 @@ export type BootProbeHost = {
   pathReady: (target: ProbeTarget, nowMs: number) => boolean;
   deltaMs: (nowMs: number) => number;
   playbackRate: (nowMs: number) => number;
+  /** The Mic page's clock against the server's, when the room clock knows it. */
+  micPageClockOffsetMs?: (nowMs: number) => number | null;
   send: (target: ProbeTarget, request: { type: string; target: ProbeTarget; requestId: number; leadMs: number }) => void;
   changed: () => void;
   onBackingMeasured: (latencyMs: number) => void;
@@ -281,7 +283,8 @@ export class BootProbeCoordinator {
     if (!pending) return;
 
     const client = sanitizeProbeTimingDiagnostics(reply.timingDiagnostics);
-    const schedule = probeScheduleTime(pending.serverSentAtMs, nowMs, this.config.leadMs, client);
+    const schedule = probeScheduleTime(pending.serverSentAtMs, nowMs, this.config.leadMs, client,
+      pending.target === 'mic' ? this.host.micPageClockOffsetMs?.(nowMs) ?? null : null);
     this.evidence[pending.target] = {
       requestId: pending.requestId, sessionGeneration: pending.sessionGeneration,
       captureGeneration: pending.generation, serverReceivedAtMs: nowMs,
@@ -393,11 +396,15 @@ export class BootProbeCoordinator {
 
     if (this.config.debug) {
       const controlSeconds = 20;
+      const timing = this.evidence[analysis.target];
       const recent = timeline.read(reached - this.config.sampleRate * controlSeconds, this.config.sampleRate * controlSeconds);
       console.log(
         `[probe] ${analysis.target} correlation=${correlation.toFixed(3)} latencyMs=${latencyMs.toFixed(0)}`
         + ` windowPeak=${this.peakMagnitude(window)} recent${controlSeconds}sPeak=${this.peakMagnitude(recent)}`
-        + ` windowStart=${analysis.windowStart} needed=${needed} reached=${reached}`,
+        + ` windowStart=${analysis.windowStart} needed=${needed} reached=${reached}`
+        // How the probe was located, and the exchange it was located from.
+        + ` timed=${timing?.schedule.method ?? 'unknown'} roundTripMs=${timing ? Math.round(timing.roundTripMs) : 'unknown'}`
+        + ` oneWayMs=${timing ? Math.round(timing.schedule.transportOneWayMs) : 'unknown'}`,
       );
     }
 

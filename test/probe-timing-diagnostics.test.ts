@@ -51,3 +51,66 @@ test('missing or impossible local durations retain the compatible RTT/2 target',
   }
   assert.equal(probeScheduleTime(100, 150, 200, { processingMs: 0, schedulingDelayMs: 0 }).targetAtMs, 325);
 });
+
+/**
+ * One probe exchange: the request takes `down` ms, the page spends 204 ms
+ * (200 before the nodes are scheduled) and the reply takes `up` ms. The
+ * page's clock reads `PAGE_BEHIND` less than the server's.
+ */
+const PAGE_BEHIND = 5_000_000;
+function exchange(down: number, up: number) {
+  const sentAtMs = 1_000;
+  const pageReceivedAtMs = sentAtMs + down;
+  return {
+    sentAtMs,
+    receivedAtMs: pageReceivedAtMs + 204 + up,
+    client: { processingMs: 204, schedulingDelayMs: 200, acknowledgedAtMs: pageReceivedAtMs + 204 - PAGE_BEHIND },
+    scheduledAtMs: pageReceivedAtMs + 200,
+  };
+}
+
+test('a known page clock times the probe whatever each leg of the exchange took', () => {
+  for (const [down, up] of [[150, 150], [150, 310], [310, 150], [20, 700], [700, 20]]) {
+    const { sentAtMs, receivedAtMs, client, scheduledAtMs } = exchange(down, up);
+    const schedule = probeScheduleTime(sentAtMs, receivedAtMs, 200, client, PAGE_BEHIND);
+    assert.equal(schedule.method, 'page-clock');
+    assert.equal(schedule.targetAtMs, scheduledAtMs + 200, `${down}/${up}`);
+    assert.equal(schedule.transportOneWayMs, down);
+    // Without it the same exchange is off by half the difference of the legs:
+    // the 2026-10-31 pair, 140 and 60 ms from one capture, is a reply 160 ms late.
+    const assumed = probeScheduleTime(sentAtMs, receivedAtMs, 200, client);
+    assert.equal(assumed.method, 'processing-separated');
+    assert.equal(assumed.targetAtMs - (scheduledAtMs + 200), (up - down) / 2, `${down}/${up}`);
+  }
+});
+
+test('a page clock that could not be true of this exchange is not used', () => {
+  const { sentAtMs, receivedAtMs, client } = exchange(150, 150);
+  const assumed = probeScheduleTime(sentAtMs, receivedAtMs, 200, client).targetAtMs;
+  // Received before it was sent, or acknowledged after the reply arrived: another tab's clock, or a stale one.
+  for (const offset of [PAGE_BEHIND - 156, PAGE_BEHIND + 156, PAGE_BEHIND + 60_000, 0, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const schedule = probeScheduleTime(sentAtMs, receivedAtMs, 200, client, offset);
+    assert.equal(schedule.method, 'processing-separated', String(offset));
+    assert.equal(schedule.targetAtMs, assumed);
+  }
+  // Within the exchange, off by what the room clock's own estimate can be off by: used as given.
+  for (const offset of [PAGE_BEHIND - 150, PAGE_BEHIND + 150, PAGE_BEHIND + 40]) {
+    assert.equal(probeScheduleTime(sentAtMs, receivedAtMs, 200, client, offset).method, 'page-clock', String(offset));
+  }
+  // No acknowledgement time, or durations that cannot be: as before.
+  assert.equal(probeScheduleTime(sentAtMs, receivedAtMs, 200,
+    { processingMs: 204, schedulingDelayMs: 200, acknowledgedAtMs: null }, PAGE_BEHIND).method, 'processing-separated');
+  assert.equal(probeScheduleTime(sentAtMs, receivedAtMs, 200, null, PAGE_BEHIND).method, 'legacy-rtt-half');
+});
+
+test('only the Mic leg is timed on the page clock, and only on the singer\'s own page', async () => {
+  const { readFileSync } = await import('node:fs');
+  const coordinator = readFileSync(new URL('../src/boot-probe-coordinator.ts', import.meta.url), 'utf8');
+  assert.match(coordinator.replace(/\s+/g, ' '),
+    /probeScheduleTime\(pending\.serverSentAtMs, nowMs, this\.config\.leadMs, client, pending\.target === 'mic' \? this\.host\.micPageClockOffsetMs\?\.\(nowMs\) \?\? null : null\)/);
+  const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8').replace(/\s+/g, ' ');
+  assert.match(server, /micPageClockOffsetMs: \(nowMs\) => \{ const clock = youtubeTimeline\.leaderPageClock\(nowMs\); return clock && clock\.participantId === participants\.micOwnerId \? clock\.offsetMs : null; \}/);
+  // Choir B's probe is timed as before: its page is not the room clock's.
+  const choir = readFileSync(new URL('../src/choir-probe.ts', import.meta.url), 'utf8');
+  assert.match(choir, /probeScheduleTime\(this\.sentAtMs, nowMs, this\.config\.leadMs, client\);/);
+});

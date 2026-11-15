@@ -182,6 +182,12 @@ export type AudioSessionOptions = {
   micJumpQuietWaitMs?: number;
   /** The furthest a live correction walks rather than jumps (MIC_WALK_LIMIT_MS). */
   micWalkLimitMs?: number;
+  /**
+   * High-pass corner applied to every Mic as its PCM is placed (see
+   * `mic-low-cut.ts`). The live room passes `RELAY_MIC_LOW_CUT_HZ`, by default
+   * `MIC_LOW_CUT_HZ`; omitted or 0, Mic PCM is placed exactly as it arrived.
+   */
+  micLowCutHz?: number | null;
 };
 
 export class AudioSession {
@@ -277,6 +283,7 @@ export class AudioSession {
       jumpQuietWaitMs: options.micJumpQuietWaitMs ?? MIC_JUMP_QUIET_WAIT_MS,
       walkLimitMs: this.micWalkLimitMs,
       frontierPromptReleaseMs: Math.min(MIC_FRONTIER_PROMPT_RELEASE_MS, this.micWalkLimitMs),
+      lowCutHz: options.micLowCutHz ?? null,
     };
     this.micTrack = new MicTrack(this.micTrackOptions);
     // Keep the existing single-Mic methods literally unchanged: their fields
@@ -477,10 +484,12 @@ export class AudioSession {
    * A premixed capture already carries the singer's gain and the song: the
    * phone mixed them before sending. Raising it by the room's voice gain would
    * clip it, so it is mixed at unity while the room setting is kept for the
-   * next ordinary capture.
+   * next ordinary capture. The low cut is for breath on a capsule; the song's
+   * bass in a premixed capture is music, so that capture skips it.
    */
   setMicPremixed(premixed: boolean) {
     this.micPremixedValue = premixed;
+    this.micTrack.lowCut?.setEnabled(!premixed);
     this.applyMicGain();
   }
 

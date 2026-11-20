@@ -70,6 +70,11 @@ const REPORT_MESSAGES = new Set([
   'choir-probe-played', 'choir-probe-failed', 'choir-probe-request',
 ]);
 
+function seatCommandId(payload: Record<string, unknown>): { commandId?: number } {
+  const { commandId } = payload;
+  return typeof commandId === 'number' && Number.isSafeInteger(commandId) ? { commandId } : {};
+}
+
 /**
  * With Choir off: whether this is a second Mic message. It is then refused
  * (a join or media request is told so) rather than left to the ordinary
@@ -78,7 +83,7 @@ const REPORT_MESSAGES = new Set([
 export function refuseChoirMessage(payload: Record<string, unknown>,
   reply: (refusal: Record<string, unknown>) => void): boolean {
   const type = String(payload.type);
-  if (JOIN_MESSAGES.has(type)) reply({ type: 'choir-consent-rejected', reason: 'unavailable' });
+  if (JOIN_MESSAGES.has(type)) reply({ type: 'choir-consent-rejected', reason: 'unavailable', ...seatCommandId(payload) });
   else if (type === 'choir-probe-request') reply(probeReply(payload, 'unavailable'));
   else if (MEDIA_MESSAGES.has(type)) reply({ type: 'choir-media-rejected', reason: 'disabled-or-unverified' });
   else return REPORT_MESSAGES.has(type);
@@ -433,7 +438,7 @@ export class ChoirRuntime {
   private handleJoin(socket: RelaySocket, payload: Record<string, unknown>) {
     const { deps } = this;
     if (!socket.participantId || socket.role !== 'unknown' || !deps.participantConnected(socket.participantId)) {
-      deps.send(socket, { type: 'choir-consent-rejected', reason: 'unavailable' });
+      deps.send(socket, { type: 'choir-consent-rejected', reason: 'unavailable', ...seatCommandId(payload) });
       return;
     }
     const nowMs = performance.now();
@@ -450,7 +455,7 @@ export class ChoirRuntime {
         && !deps.session.micPremixed
         && deps.mic.mediaOwnerId() === ownerId
         && (payload.resume !== true || payload.expectedPrimaryId === ownerId)
-        && this.seat.join(socket, ownerId, { resume: payload.resume === true });
+        && this.seat.join(socket, ownerId, { resume: payload.resume === true, ...seatCommandId(payload) });
       if (accepted) {
         // Ask for B's media now rather than on the next mix frame.
         this.lastMediaReadySentMs = Number.NEGATIVE_INFINITY;
@@ -465,9 +470,9 @@ export class ChoirRuntime {
       }),
       ...(accepted ? {} : { mediaOwnerMatches: deps.mic.mediaOwnerId() === ownerId }),
     });
-    if (!accepted) deps.send(socket, { type: 'choir-consent-rejected', reason: 'invalid-or-stale' });
+    if (!accepted) deps.send(socket, { type: 'choir-consent-rejected', reason: 'invalid-or-stale', ...seatCommandId(payload) });
     else if (!joining) deps.send(socket, {
-      type: 'choir-secondary-consent-status', status: 'withdrawn', secondaryId: socket.participantId,
+      type: 'choir-secondary-consent-status', status: 'withdrawn', secondaryId: socket.participantId, ...seatCommandId(payload),
     });
   }
 

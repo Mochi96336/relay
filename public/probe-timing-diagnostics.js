@@ -2,7 +2,8 @@
 export function probeTimingDiagnostics(context, receivedAtMs, scheduledContextSeconds, scheduledAtMs) {
   try {
     const acknowledgedAtMs = performance.now();
-    const stamp = context.getOutputTimestamp?.();
+    let stamp;
+    try { stamp = context.getOutputTimestamp?.(); } catch { /* optional hardware clock */ }
     return {
       processingMs: acknowledgedAtMs - receivedAtMs,
       schedulingDelayMs: Number.isFinite(scheduledAtMs) ? scheduledAtMs - receivedAtMs : undefined,

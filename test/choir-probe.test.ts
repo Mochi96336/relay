@@ -164,3 +164,17 @@ test('a Take defers a new capture probe without lending it the old capture’s l
   assert.equal(f.probe.begin('b:8', 420, true), false);
   assert.equal(f.sentB.length, 2);
 });
+
+test('a control reconnect keeps a measured capture but an explicit handoff remeasures it', () => {
+  const f = fixture({ bChimesAtMs: [470] });
+  f.probe.begin('b:7', 0);
+  f.probe.played({ requestId: f.sentB[0], generation: 7 }, 100);
+  f.probe.tick(200);
+  f.probe.endCapture(true);
+  assert.equal(f.probe.state, 'measured');
+  assert.equal(f.probe.begin('b:7', 300), false);
+  f.probe.endCapture(false);
+  assert.equal(f.probe.advanceMs(0, 1), null);
+  assert.equal(f.probe.begin('b:7', 400, false), false, 'a Take defers the new measurement');
+  assert.equal(f.probe.begin('b:7', 500), true);
+});

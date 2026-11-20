@@ -138,7 +138,6 @@ export class ChoirRuntime {
   /** How far ahead of the room B's local song plays, so B's lag fits the mixer. */
   private readonly lead = new ChoirLead();
   private lastLeadSentMs = Number.NEGATIVE_INFINITY;
-  private sampleSongOwner: string | null = null;
   /** B's own remembered Mic gain, from its media registration; null keeps the default. */
   private secondaryGainDb: number | null = null;
   /** The song epoch Content is measuring; null while there is nothing to measure. */
@@ -164,6 +163,14 @@ export class ChoirRuntime {
       holdsMic: id => deps.mic.ownerId() === id,
       participantConnected: deps.participantConnected,
       socketOpen: open,
+      ended: (join, reason) => {
+        this.claims.disconnected(join.socket as RelaySocket);
+        this.ingress.endSeat();
+        session.detachSecondaryMic();
+        this.sampleSong.clear('mic');
+        this.probe.endCapture(reason === 'connection-closed');
+        this.lastProbeState = this.probe.state;
+      },
       notifySocket: (raw, payload) => {
         const socket = raw as RelaySocket;
         if (payload.status === 'revoked') logChoir('b-revoked', { reason: payload.reason,
@@ -540,10 +547,6 @@ export class ChoirRuntime {
       default: {
         const a = payload.captureAnchor as Record<string, unknown> | null;
         if (!a || typeof a !== 'object') return;
-        if (this.sampleSongOwner !== joined.secondaryId) {
-          this.sampleSong.clear('mic');
-          this.sampleSongOwner = joined.secondaryId;
-        }
         this.sampleSong.observe('mic', {
           videoId: String(payload.videoId), state: Number(payload.state),
           playbackRate: Number(payload.playbackRate),

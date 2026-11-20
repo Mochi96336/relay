@@ -141,14 +141,14 @@ async function startDuet() {
      * Once the server asks, B's page socket claims media and B's media socket
      * redeems the claim; `register` adds fields to the registration.
      */
-    const claimMedia = async (register: Record<string, unknown> = {}) => {
-      await b.waitForType('choir-media-ready', 5_000);
-      b.send({ type: 'choir-secondary-media-claim-request' });
-      const claim = await b.waitForType('choir-secondary-media-claim');
-      const from = bMedia.messages.length;
-      bMedia.send({ type: 'choir-secondary-media-register',
+    const claimMedia = async (register: Record<string, unknown> = {}, page = b, media = bMedia) => {
+      await page.waitForType('choir-media-ready', 5_000);
+      page.send({ type: 'choir-secondary-media-claim-request' });
+      const claim = await page.waitForType('choir-secondary-media-claim');
+      const from = media.messages.length;
+      media.send({ type: 'choir-secondary-media-register',
         claimToken: claim.claimToken, sampleRate: 48_000, packetVersion: 2, ...register });
-      const registration = await waitForNewMessage(bMedia, from, (m) =>
+      const registration = await waitForNewMessage(media, from, (m) =>
         m.type === 'choir-secondary-media-registered' || m.type === 'choir-media-rejected');
       assert.equal(registration.type, 'choir-secondary-media-registered', JSON.stringify(registration));
       return { claim, registration };
@@ -520,6 +520,30 @@ test('rapid second Mic rejoin ignores replies for earlier presses', async () => 
     const revoke = await b.waitFor(m => m.status === 'revoked');
     assert.equal(revoke.commandId, 5);
     assert.equal(commands.accepts(revoke), true);
+  } finally {
+    await duet.close();
+  }
+});
+
+test('moving the second Mic to another tab of the same singer requests fresh audio immediately', async () => {
+  const duet = await startDuet();
+  try {
+    await duet.join();
+    await duet.claimMedia();
+    const tab = await duet.connect();
+    const media = await duet.connect();
+    await duet.authenticate(tab, CAPABILITY_B, 'B');
+    await duet.authenticate(media, CAPABILITY_B, 'B');
+    await duet.join(tab);
+    await tab.waitForType('choir-media-ready', 1_000);
+    assert.equal((await duet.b.waitFor(m => m.status === 'revoked')).reason, 'replaced');
+    await duet.claimMedia({}, tab, media);
+    media.sendBinary(encodeAudioPacket({
+      source: 'mic', generation: 7, firstSampleIndex: 0, sequence: 0,
+      pcm: Buffer.from(new Int16Array(960).fill(900).buffer),
+    }));
+    const track = await duet.waitForSecondary(d => d?.bufferedSamples > 0);
+    assert.ok(track?.bufferedSamples > 0, 'audio from the new tab reaches the room');
   } finally {
     await duet.close();
   }

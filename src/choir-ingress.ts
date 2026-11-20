@@ -208,7 +208,8 @@ export class ChoirIngress {
           return rejected('sample-overlap');
       }
     }
-    if (!this.liveVoiceAllowed(bound.participantId, nowMs)) {
+    if (!this.liveVoiceAllowed(bound.participantId, nowMs)
+      || this.transportBindings.get(bound.transportId) !== socket) {
       this.releaseTransportBinding(socket, bound.transportId);
       return rejected('stale-authority');
     }
@@ -240,6 +241,12 @@ export class ChoirIngress {
   private releaseTransportBinding(socket: ChoirSecondarySocket, transportId: string) {
     if (this.transportBindings.get(transportId) === socket)
       this.transportBindings.delete(transportId);
+  }
+
+  /** A new seat always starts with its own media, even for the same singer.
+   * Keep the socket records to consume late frames until their sockets close. */
+  endSeat() {
+    this.transportBindings.clear();
   }
 
   /** Lets go of sockets whose join ended while B was silent. */

@@ -433,6 +433,11 @@ test('capture input-gap hysteresis stays time-equivalent across sample rates', a
     assert.equal(gap.samples, reportQuanta * renderQuantum);
     assert.equal(gap.recovered, false);
 
+    processor.process([[new Float32Array(renderQuantum).fill(0.25)]]);
+    const recovery = inputGapMessages(processor)[1];
+    assert.equal(recovery?.recovered, true, 'a gap ending exactly on its report still recovers');
+    assert.equal(recovery.samples, 0, 'every missing sample was already counted');
+
     const elapsedMs = (reportQuanta * renderQuantum * 1000) / workletSampleRate;
     const oneQuantumMs = (renderQuantum * 1000) / workletSampleRate;
     assert.ok(

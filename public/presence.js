@@ -1,5 +1,5 @@
 import { authorityState } from './authority-freshness.js';
-import { choirCommandMessage } from './choir-commands.js';
+import { choirCommandMessage, ChoirSeatCommands } from './choir-commands.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 import { wsUrl } from './ws-url.js';
 window.relayIdentityReady = (async () => {
@@ -87,6 +87,7 @@ window.relayIdentityReady = (async () => {
   }
 
   let socket = null;
+  let seatCommands = new ChoirSeatCommands();
   let reconnectTimer = null;
   let latestSession = null;
   let sessionAuthorityFresh = false;
@@ -230,7 +231,7 @@ window.relayIdentityReady = (async () => {
   window.addEventListener('relay-choir-command', (event) => {
     const message = choirCommandMessage(event.detail);
     if (!message) return;
-    if (choirAvailable && sessionAuthorityFresh && send(message)) return;
+    if (choirAvailable && sessionAuthorityFresh && send(seatCommands.outgoing(message))) return;
     if (message.type === 'choir-probe-request') window.dispatchEvent(new CustomEvent('relay-choir-probe-response', {
       detail: { commandId: message.commandId, reason: 'reconnecting' },
     }));
@@ -297,7 +298,7 @@ window.relayIdentityReady = (async () => {
       return;
     }
     if (['choir-secondary-consent-status', 'choir-consent-rejected'].includes(message.type)) {
-      if (choirAvailable) window.dispatchEvent(
+      if (choirAvailable && seatCommands.accepts(message)) window.dispatchEvent(
         new CustomEvent('relay-choir-message', { detail: message }),
       );
       return;
@@ -354,6 +355,7 @@ window.relayIdentityReady = (async () => {
 
     const next = new WebSocket(wsUrl());
     socket = next;
+    seatCommands = new ChoirSeatCommands();
     await new Promise((resolve, reject) => {
       next.addEventListener('open', resolve, { once: true });
       next.addEventListener('error', reject, { once: true });

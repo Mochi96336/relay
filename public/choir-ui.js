@@ -14,6 +14,8 @@ const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
 const joinButton = document.querySelector('#choir-invite-open');
 const leaveButton = document.querySelector('#choir-withdraw');
 
+const captureNotice = document.querySelector('#choir-capture-notice');
+let captureErrorKey = null;
 let available = false;
 let session = null;
 let authorityFresh = false;
@@ -48,6 +50,11 @@ function publishCommand(type, fields = {}) {
 }
 function render() {
   if (!joinButton || !leaveButton) return;
+  if (captureNotice) {
+    const notice = captureErrorKey && canJoin() ? t(captureErrorKey) : '';
+    captureNotice.hidden = !notice;
+    if (captureNotice.textContent !== notice) captureNotice.textContent = notice;
+  }
   const takeOver = typeof duetSecondaryId === 'string' && duetSecondaryId !== myId();
   joinButton.hidden = !canJoin();
   joinButton.disabled = pending;
@@ -159,6 +166,7 @@ window.addEventListener('relay-choir-media-connection', (event) => {
   // Media reconnects on its own for each room; only a microphone that will
   // not open needs the singer. Leave rather than sit joined but silent.
   if (event.detail?.state !== 'capture-failed') return;
+  captureErrorKey = event.detail.reason === 'permission-denied' ? 'voice.permissionRequired' : 'choir.captureFailed';
   publishCommand('choir-secondary-withdraw', { reason: `capture-failed:${event.detail?.reason ?? 'unknown'}` });
   resetJoin();
 });
@@ -178,6 +186,7 @@ window.addEventListener('relay-request-choir-guest-state', render);
 
 joinButton?.addEventListener('click', () => {
   if (!canJoin() || pending) return;
+  captureErrorKey = null;
   // Inside the click: iOS and other browsers require a user gesture for the
   // microphone. Capture starts now and connects once the server has a room.
   joinScope = { primaryId: session.micOwnerId, serverIncarnation: session.serverIncarnation };

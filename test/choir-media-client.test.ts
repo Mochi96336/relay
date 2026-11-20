@@ -152,6 +152,36 @@ test('permission refusal is reported to the second singer and opens no media soc
   assert.equal(f.sockets.length, 0);
 });
 
+test('an unopened tunnel does not keep a second Mic claim stuck during reconnect', async () => {
+  const f = await fixture();
+  await f.join();
+  const stalled = f.sockets[0];
+  f.advance(15_000);
+  assert.equal(stalled.readyState, 3);
+  assert.equal(f.connection().at(-1)?.reason, 'open-timeout');
+  f.emit('relay-choir-media-message', { type: 'choir-media-ready' });
+  assert.equal(f.claims(), 2);
+  f.emit('relay-choir-media-message', { type: 'choir-secondary-media-claim', claimToken: 'e'.repeat(64) });
+  const next = f.sockets.at(-1)!;
+  next.open();
+  next.reply({ type: 'participant-authenticated', participantId: 'participant-b' });
+  next.reply({ type: 'choir-secondary-media-registered', sampleRate: 48_000 });
+  f.advance(20_000);
+  assert.equal(next.readyState, 1);
+});
+
+test('a direct open timeout hands the unspent claim to exactly one tunnel attempt', async () => {
+  const f = await fixture({ direct: true });
+  await f.join();
+  f.advance(2_500);
+  assert.deepEqual(f.sockets.map(s => s.url), ['wss://pi.test/ws', 'wss://relay.test/ws']);
+  assert.equal(f.claims(), 1);
+  f.advance(15_000);
+  assert.equal(f.sockets[1].readyState, 3);
+  f.emit('relay-choir-media-message', { type: 'choir-media-ready' });
+  assert.equal(f.claims(), 2);
+});
+
 test('media-ready connects B at once, and a repeat never replaces that socket', async () => {
   const f = await fixture();
   f.emit('relay-choir-availability', { available: true });

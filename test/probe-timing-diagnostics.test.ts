@@ -114,3 +114,17 @@ test('only the Mic leg is timed on the page clock, and only on the singer\'s own
   const choir = readFileSync(new URL('../src/choir-probe.ts', import.meta.url), 'utf8');
   assert.match(choir, /probeScheduleTime\(this\.sentAtMs, nowMs, this\.config\.leadMs, client\);/);
 });
+
+test('optional hardware clock failure retains the measured probe scheduling delay', async () => {
+  // Browser module, loaded as at runtime.
+  const moduleUrl = new URL('../public/probe-timing-diagnostics.js', import.meta.url);
+  const { probeTimingDiagnostics } = await import(moduleUrl.href);
+  const clock = performance.now();
+  const result = probeTimingDiagnostics({
+    currentTime: 2, getOutputTimestamp() { throw new Error('clock unavailable'); },
+  }, clock - 200, 3, clock);
+  assert.equal(result.schedulingDelayMs, 200);
+  assert.equal(result.scheduledContextSeconds, 3);
+  assert.equal(result.outputContextSeconds, undefined);
+  assert.ok(result.processingMs >= 200);
+});

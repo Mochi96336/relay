@@ -61,11 +61,10 @@ export function classifyListenerEvidence(snapshot = {}, { staleAfterMs = DEFAULT
   if (workletAgeMs === null) return 'render-unproven';
   if (workletAgeMs >= staleThresholdMs) return 'render-stale';
 
-  if (
-    snapshot.workletHealth?.playing === false
-    && (finiteOrNull(snapshot.workletHealth?.starvedMs) ?? 0) > 0
-  ) {
-    return 'playback-starved';
+  const health = snapshot.workletHealth;
+  if (health?.playing === false) {
+    if (health.rebuffering === false) return 'playback-prebuffering';
+    if (health.rebuffering === true || (finiteOrNull(health.starvedMs) ?? 0) > 0) return 'playback-starved';
   }
 
   return 'internally-healthy';

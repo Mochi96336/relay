@@ -186,7 +186,7 @@ export class ChoirRuntime {
       },
       backing: {
         totalSamples: () => session.backingTotalSamples,
-        generation: () => null,
+        generation: () => session.backingGeneration,
         read: (start, count) => session.readBacking(start, count),
         evidence: (start, count) => session.readBackingEvidence(start, count),
       },

@@ -115,6 +115,41 @@ test('notes B never heard (headphones) fail once and release B', () => {
   assert.equal(f.probe.advanceMs(0, 1), null);
 });
 
+test('a Robot capture replaced during the probe cannot seed the shared backing path', () => {
+  const robot = timeline([410], 12);
+  const b = timeline([], 7);
+  const kept: number[] = [];
+  const probe = new ChoirProbe({
+    secondary: b.view, backing: robot.view, backingLatencyMs: () => null,
+    onBackingMeasured: ms => kept.push(ms), robotAvailable: () => true,
+    sendRobot: () => true, sendSecondary: () => true,
+    sampleRate: RATE, leadMs: LEAD_MS, searchMarginMs: 1200, minCorrelation: 0.5,
+    replyTimeoutMs: 4000, analysisTimeoutMs: 6000, sessionSampleAt: ms => ms * 48,
+  });
+  probe.begin('b:7', 0);
+  probe.robotPlayed({ requestId: 1000000000 }, 100);
+  robot.state.generation = 13;
+  probe.tick(200);
+  assert.deepEqual(kept, []);
+  assert.equal(probe.failureReason, 'Robot: capture changed');
+});
+
+test('a partial chime 40 ms after its target is rejected on the second Mic', () => {
+  const f = fixture();
+  const truncated = generateProbeReference(RATE).slice(0, 48 * 130);
+  f.b.view.read = (start, count) => {
+    const window = new Int16Array(count);
+    window.set(truncated, 390 * 48 - start);
+    return window;
+  };
+  f.probe.begin('b:7', 0);
+  f.probe.played({ requestId: f.sentB[0], generation: 7 }, 100);
+  f.probe.tick(200);
+  assert.equal(f.probe.state, 'failed');
+  assert.match(f.probe.failureReason!, /weak match.*40 ms/);
+  assert.equal(f.probe.advanceMs(0, 1), null);
+});
+
 test('a stale reply, a silent page and a changed capture all end the probe', () => {
   const stale = fixture({ bChimesAtMs: [470] });
   stale.probe.begin('b:7', 0);

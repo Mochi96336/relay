@@ -30,6 +30,7 @@ function initialize() {
   let commandError = null;
   // B pressed Realign and the room has not yet said the test tone started.
   let secondMicRequestPending = null;
+  let joinedSecondMic = document.body?.dataset.choirGuest === 'joined';
   let nextSecondMicCommandId = 1;
   let secondMicTimer = null;
   let secondMicError = null;
@@ -66,7 +67,7 @@ function initialize() {
   /** This page is the joined second Mic: Realign is B's own test tone. */
   function selfIsSecondMic(status = latestProductStatus) {
     const duet = status?.room?.duet;
-    return Boolean(duet?.secondaryId && duet.secondaryId === window.relayParticipantId
+    return Boolean(joinedSecondMic && duet?.secondaryId && duet.secondaryId === window.relayParticipantId
       && !selfOwnsServerMic(status));
   }
 
@@ -242,6 +243,14 @@ function initialize() {
   window.addEventListener('relay-calibration-command-rejected', () => {
     commandError = true;
     preflightCommandPending = false;
+    render();
+  });
+
+  window.addEventListener('relay-choir-guest-state', ({ detail }) => {
+    const enabled = detail?.enabled === true;
+    if (joinedSecondMic === enabled) return;
+    joinedSecondMic = enabled;
+    if (!enabled) settleSecondMic();
     render();
   });
 

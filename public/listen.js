@@ -86,6 +86,8 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   let micMuteEpoch = 0;
   let roomMicForcedMuted = false;
   let secondaryMicForcedMuted = false;
+  let localSecondaryCapture = false;
+  let roomSecondaryOwnerId = null;
   let playbackForcedMuted = false;
   // A local B follower is also an audible song source. Do not double-play
   // Robot Monitor underneath B's own YouTube; preserve user mute preference.
@@ -913,12 +915,24 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     });
     setPlaybackForcedMute(roomPlaybackRoleForcedMute);
   });
-  window.addEventListener('relay-choir-guest-state', ({ detail }) => {
-    const forced = detail?.captureRequested === true || detail?.enabled === true;
+  function reconcileSecondaryMicMute() {
+    // Tabs of this browser share an identity and can use the same speaker.
+    const forced = localSecondaryCapture
+      || (roomSecondaryOwnerId !== null && roomSecondaryOwnerId === window.relayParticipantId);
     if (forced === secondaryMicForcedMuted) return;
     secondaryMicForcedMuted = forced;
     reconcile(forced ? 'mic-active' : 'resumed');
+  }
+  function acceptRoomDuet(status) {
+    roomSecondaryOwnerId = status?.room?.duet?.secondaryId ?? null;
+    reconcileSecondaryMicMute();
+  }
+  window.addEventListener('relay-choir-guest-state', ({ detail }) => {
+    localSecondaryCapture = detail?.captureRequested === true || detail?.enabled === true;
+    reconcileSecondaryMicMute();
   });
+  window.addEventListener('relay-product-status', ({ detail }) => acceptRoomDuet(detail));
+  acceptRoomDuet(window.relayProductAuthority?.lastKnownSnapshot);
   window.dispatchEvent(new Event('relay-request-choir-guest-state'));
   window.addEventListener('relay-choir-local-playback', (event) => {
     choirLocalPlaybackActive = event.detail?.active === true;

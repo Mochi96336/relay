@@ -854,6 +854,29 @@ test('production DOM: rapid Record taps emit exactly one Start command', async (
   expect(startCommands).toBe(1);
 });
 
+test('Listen observes second Mic ownership across tabs and restores only after both mute reasons clear', async ({ page }) => {
+  await installProductionDomHarness(page);
+  await page.route('https://www.youtube.com/**', route => route.abort());
+  await page.goto(LIVE_URL, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => window.relayListenState && window.relayParticipantId);
+  const reasons = await page.evaluate(() => {
+    const reasons = [];
+    const room = secondaryId => window.dispatchEvent(new CustomEvent('relay-product-status', {
+      detail: { type: 'product-status', room: { duet: secondaryId ? { secondaryId } : null } },
+    }));
+    const capture = captureRequested => window.dispatchEvent(new CustomEvent('relay-choir-guest-state', {
+      detail: { enabled: false, captureRequested },
+    }));
+    for (const update of [() => room('another-singer'), () => room(window.relayParticipantId),
+      () => capture(true), () => capture(false), () => room(null), () => capture(true), () => capture(false)]) {
+      update();
+      reasons.push(window.relayListenState.forcedReason);
+    }
+    return reasons;
+  });
+  expect(reasons).toEqual([null, 'mic', 'mic', 'mic', null, 'mic', null]);
+});
+
 test('production DOM: People and More close with Escape without regressing System', async ({ page }) => {
   await installProductionDomHarness(page);
   await page.route('https://www.youtube.com/**', (route) => route.abort());

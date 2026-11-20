@@ -96,6 +96,10 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+.more-action[hidden] {
+  display: none;
+}
+
 .more-action:hover {
   color: #fff;
 }

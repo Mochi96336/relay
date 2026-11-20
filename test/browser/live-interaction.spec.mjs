@@ -870,6 +870,7 @@ test('production DOM: People and More close with Escape without regressing Syste
 
   await page.locator('#room-more > summary').click();
   expect(await more.evaluate((node) => node.open)).toBe(true);
+  await expect(page.locator('#calibrate-timing')).toBeHidden();
   await page.keyboard.press('Escape');
   expect(await more.evaluate((node) => node.open)).toBe(false);
 

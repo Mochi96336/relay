@@ -76,4 +76,4 @@ Each song is measured afresh; a pause or seek keeps the last Content measurement
 ## Not done yet
 
 - B has no capture clock trim.
-- The two singers do not hear each other live: A's Listen is muted while A sings, and B's while its local YouTube plays. Only listeners and Takes get both voices.
+- The two singers do not hear each other live: A's and B's capture pages mute Listen while their microphone is active, including when no song is playing. B's page also mutes Listen while its local YouTube plays. Only listeners and Takes get both voices.

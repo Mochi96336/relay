@@ -66,7 +66,7 @@ function render() {
   if (joined) document.body.dataset.choirGuest = 'joined';
   else delete document.body.dataset.choirGuest;
   window.dispatchEvent(new CustomEvent('relay-choir-guest-state', {
-    detail: { enabled: available && joined },
+    detail: { enabled: available && joined, captureRequested: joinScope !== null },
   }));
 }
 function resetJoin() {
@@ -234,8 +234,9 @@ joinButton?.addEventListener('click', () => {
   };
   clearTimeout(pendingTimer);
   pendingTimer = setTimeout(expireJoin, 20_000);
-  window.dispatchEvent(new Event('relay-choir-start-secondary-capture'));
+  // Silence this page's copy of the room mix before opening the input.
   render();
+  window.dispatchEvent(new Event('relay-choir-start-secondary-capture'));
 });
 leaveButton?.addEventListener('click', () => {
   if (!joined) return;

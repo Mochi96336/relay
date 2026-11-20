@@ -138,6 +138,7 @@ test('two production Opus singers survive B media replacement and remain in the 
       const s = await status();
       return [s.audio.duetIngress.codec, s.audio.duetSecondary?.recentlyHeard];
     }, { timeout: 15_000 }).toEqual(['opus', true]);
+    expect(await b.evaluate(() => window.relayListenState.forcedReason)).toBe('mic');
     await a.locator('#start-recording').click();
     await a.waitForFunction(() => window.relayRecordingState?.lifecycle === 'recording');
     await a.waitForTimeout(1_200);
@@ -186,6 +187,8 @@ test('two production Opus singers survive B media replacement and remain in the 
     expect(take.quality.evidence.secondaryAudibleSamples).toBeGreaterThan(48_000);
     expect(take.quality.evidence.secondaryGapSamples + take.quality.evidence.secondaryStarvedSamples).toBeGreaterThan(0);
     expect((await status()).audio.duetIngress.rejected['codec-error'] ?? 0).toBe(0);
+    await b.locator('#choir-withdraw').click();
+    await expect.poll(() => b.evaluate(() => window.relayListenState.muted)).toBe(false);
     console.log('[duet-opus-proof]', JSON.stringify({ scores,
       secondaryAudibleMs: take.quality.evidence.secondaryAudibleMs,
       secondaryGapMs: take.quality.evidence.secondaryGapMs,

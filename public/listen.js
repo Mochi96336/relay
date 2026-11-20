@@ -85,6 +85,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   let micForcedMuted = false;
   let micMuteEpoch = 0;
   let roomMicForcedMuted = false;
+  let secondaryMicForcedMuted = false;
   let playbackForcedMuted = false;
   // A local B follower is also an audible song source. Do not double-play
   // Robot Monitor underneath B's own YouTube; preserve user mute preference.
@@ -120,11 +121,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   }
 
   function effectiveMuted() {
-    return userMuted
-      || micForcedMuted
-      || roomMicForcedMuted
-      || playbackForcedMuted
-      || takeReviewForcedMuted;
+    return userMuted || forcedMuteReason() !== null;
   }
 
   function audioGraphReady() {
@@ -140,7 +137,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   }
 
   function forcedMuteReason() {
-    if (micForcedMuted || roomMicForcedMuted) return 'mic';
+    if (micForcedMuted || roomMicForcedMuted || secondaryMicForcedMuted) return 'mic';
     if (playbackForcedMuted) return 'playback';
     if (takeReviewForcedMuted) return 'review';
     return null;
@@ -694,7 +691,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
 
   function restoreAfterMic(phase = 'resumed') {
     micForcedMuted = false;
-    if (roomMicForcedMuted) {
+    if (roomMicForcedMuted || secondaryMicForcedMuted) {
       reconcile('mic-owned');
       return;
     }
@@ -730,7 +727,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       reconcile('mic-owned');
       return;
     }
-    if (micForcedMuted) {
+    if (micForcedMuted || secondaryMicForcedMuted) {
       reconcile('mic-starting');
       return;
     }
@@ -757,7 +754,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       reconcile('song-owned');
       return;
     }
-    if (micForcedMuted || roomMicForcedMuted) {
+    if (micForcedMuted || roomMicForcedMuted || secondaryMicForcedMuted) {
       reconcile('mic-owned');
       return;
     }
@@ -829,7 +826,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   }
 
   toggle.addEventListener('click', async () => {
-    if (micForcedMuted || roomMicForcedMuted || playbackForcedMuted || takeReviewForcedMuted) return;
+    if (forcedMuteReason() !== null) return;
     userMuted = !userMuted;
     claimPlaybackAudio(!userMuted);
     if (!userMuted) {
@@ -916,6 +913,13 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     });
     setPlaybackForcedMute(roomPlaybackRoleForcedMute);
   });
+  window.addEventListener('relay-choir-guest-state', ({ detail }) => {
+    const forced = detail?.captureRequested === true || detail?.enabled === true;
+    if (forced === secondaryMicForcedMuted) return;
+    secondaryMicForcedMuted = forced;
+    reconcile(forced ? 'mic-active' : 'resumed');
+  });
+  window.dispatchEvent(new Event('relay-request-choir-guest-state'));
   window.addEventListener('relay-choir-local-playback', (event) => {
     choirLocalPlaybackActive = event.detail?.active === true;
     setPlaybackForcedMute(roomPlaybackRoleForcedMute);

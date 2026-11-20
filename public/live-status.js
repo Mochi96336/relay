@@ -393,8 +393,23 @@ if (
     renderAttention(status);
     renderSystem(status);
     publishProductAuthority();
-    if (observed) window.dispatchEvent(new CustomEvent('relay-product-status', { detail: status }));
+    if (observed) {
+      window.dispatchEvent(new CustomEvent('relay-product-status', { detail: status }));
+      publishRoomSecondMic(status.room?.duet?.secondaryId ?? null);
+    }
   }
+
+  // Take history reconstructs no room authority, so it does not read
+  // ProductStatus. Its feedback guard needs only who holds the second Mic.
+  let roomSecondMicId;
+  function publishRoomSecondMic(secondaryId, replay = false) {
+    if (!replay && secondaryId === roomSecondMicId) return;
+    roomSecondMicId = secondaryId;
+    window.dispatchEvent(new CustomEvent('relay-room-second-mic', { detail: { secondaryId } }));
+  }
+  window.addEventListener('relay-request-room-second-mic', () => {
+    if (roomSecondMicId !== undefined) publishRoomSecondMic(roomSecondMicId, true);
+  });
 
   function clearReconnect() {
     if (!reconnectTimer) return;

@@ -197,7 +197,10 @@ export class ChoirSecondaryCapture {
     // Each newly claimed B socket owns a fresh server decoder. Keep the
     // capture clock, but start its encoder history at the same boundary.
     // reset also fences pending output produced for the retired socket.
-    if (socket !== this.socket) this.opus?.reset(this.generation);
+    if (socket !== this.socket) {
+      this.lastChunk = null;
+      this.opus?.reset(this.generation);
+    }
     this.socket = socket;
     this.transport.bind(socket, { sampleRate });
     return true;
@@ -244,27 +247,22 @@ export class ChoirSecondaryCapture {
           this.clockSampleOrigin = this.cursor;
         }
       }
-      if (Number.isFinite(value.capturedAtContextTime)) {
-        this.lastChunk = { firstSampleIndex, contextTime: value.capturedAtContextTime, observedAt: nowMs };
-      }
       const age = Number.isFinite(value.capturedAtContextTime)
         ? this.context.currentTime - value.capturedAtContextTime : Infinity;
       const socket = this.socket;
       if (!socket || socket.readyState !== WebSocket.OPEN
         || !Number.isFinite(age) || age > 0.2 || age < -0.05
         || !samples || samples > Math.ceil(this.rate * .2)) return;
+      // Publish an anchor only for a chunk admitted to this media path.
       if (this.opus) {
-        // The encoder copies the chunk, so the buffer is still returned below.
-        if (samples === OPUS_FRAME_SAMPLES
-          && this.opus.encode(pcm, this.sequence, firstSampleIndex)) {
-          this.sequence = (this.sequence + 1) >>> 0;
-        }
-        return;
+        // The encoder copies the chunk before the worklet gets its buffer back.
+        if (samples !== OPUS_FRAME_SAMPLES || !this.opus.encode(pcm, this.sequence, firstSampleIndex)) return;
+      } else {
+        const packet = encodeChoirMicV2(pcm, this.generation, this.sequence, firstSampleIndex);
+        if (!this.sendPacket(packet)) return;
       }
-      const packet = encodeChoirMicV2(
-        pcm, this.generation, this.sequence, firstSampleIndex,
-      );
-      if (this.sendPacket(packet)) this.sequence = (this.sequence + 1) >>> 0;
+      this.sequence = (this.sequence + 1) >>> 0;
+      this.lastChunk = { firstSampleIndex, contextTime: value.capturedAtContextTime, observedAt: nowMs };
     } finally {
       // The audio thread owns its own recycled chunk buffer; return after
       // all packet bytes have been copied, never while encoding it.

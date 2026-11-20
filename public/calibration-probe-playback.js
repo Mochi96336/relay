@@ -31,6 +31,10 @@ export class CalibrationProbePlayback {
     this.#pending = null;
   }
 
+  retireRequest(requestId) {
+    if (this.#pending?.requestId === requestId || this.#playback?.requestId === requestId) this.retire();
+  }
+
   // Capture/session/background boundaries also silence future-scheduled nodes.
   retire() {
     this.cancelPending();
@@ -50,7 +54,7 @@ export class CalibrationProbePlayback {
 
   async play(requestId, leadMs) {
     this.retire();
-    const request = {};
+    const request = { requestId };
     this.#pending = request;
     const receivedAtMs = this.nowMs();
     const { context, sessionEpoch, generation } = this.getCapture();
@@ -86,7 +90,7 @@ export class CalibrationProbePlayback {
       this.#retirePlayback();
       const scheduledAtMs = this.nowMs();
       const startTime = context.currentTime + leadMs / 1000;
-      playback = { nodes: [] };
+      playback = { requestId, nodes: [] };
       this.#playback = playback;
       let remainingNotes = PROBE_NOTES.length;
       for (const note of PROBE_NOTES) {

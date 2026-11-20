@@ -58,7 +58,7 @@ export type BootProbeHost = {
   context: () => BootProbeContext;
   sourceRate: (target: ProbeTarget) => number | null;
   enabled: () => boolean;
-  takeBlocked: () => boolean;
+  audibleProbeBlocked: () => boolean;
   calibrationStale: () => boolean;
   robotRouteActive: () => boolean;
   topology: () => { backingIsRobot: boolean; robotSourceConnected: boolean };
@@ -206,7 +206,7 @@ export class BootProbeCoordinator {
   }
 
   startIfReady(nowMs: number) {
-    if (!this.host.enabled() || this.host.takeBlocked()) return;
+    if (!this.host.enabled() || this.host.audibleProbeBlocked()) return;
     if (!this.audio.active || this.calibration.collecting) return;
 
     const context = this.host.context();

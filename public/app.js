@@ -3,6 +3,7 @@ import { CaptureClockRecovery } from './capture-clock-recovery.js';
 import { CalibrationProbePlayback } from './calibration-probe-playback.js';
 import { authorityState } from './authority-freshness.js';
 import { PublisherCommandLiveness } from './publisher-command-liveness.js';
+import { openAudioSocket } from './open-audio-socket.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 import { MIC_GAIN_KEY, storeNumber, storedNumber } from './device-preferences.js';
 await window.relayIdentityReady;
@@ -665,41 +666,28 @@ function updateSingerControls() {
  * that blocks its port blocks it every time, so after one failure this page
  * stays on the tunnel instead of paying the wait on each reconnect.
  */
-const DIRECT_SOCKET_OPEN_TIMEOUT_MS = 2_500;
 let directSocketFailed = false;
+let pendingPublisherSocket = null;
 
-async function connectSocket() {
-  // Carries the Mic's PCM whenever WebTransport is unavailable.
-  const tunnelUrl = wsUrl({ compress: false });
-  const directUrl = wsUrl({ compress: false, direct: true });
-  if (!directSocketFailed && directUrl !== tunnelUrl) {
-    try {
-      return await openSocket(directUrl, DIRECT_SOCKET_OPEN_TIMEOUT_MS);
-    } catch {
-      directSocketFailed = true;
-    }
-  }
-  return openSocket(tunnelUrl);
+function closePendingPublisherSocket() {
+  const socket = pendingPublisherSocket;
+  pendingPublisherSocket = null;
+  if (socket) socket.close();
 }
 
-function openSocket(url, timeoutMs = null) {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url);
-    ws.binaryType = 'arraybuffer';
-    const timer = timeoutMs === null ? null : setTimeout(() => {
-      try { ws.close(); } catch {}
-      reject(new Error('WebSocket connection timed out.'));
-    }, timeoutMs);
-    ws.addEventListener('open', () => {
-      clearTimeout(timer);
-      sendParticipantAuthentication(ws);
-      resolve(ws);
-    }, { once: true });
-    ws.addEventListener('error', () => {
-      clearTimeout(timer);
-      reject(new Error('WebSocket connection failed.'));
-    }, { once: true });
-  });
+async function connectSocket(stillWanted) {
+  const tunnelUrl = wsUrl({ compress: false });
+  const directUrl = directSocketFailed ? tunnelUrl : wsUrl({ compress: false, direct: true });
+  let opening = null;
+  try {
+    return await openAudioSocket({
+      directUrl, tunnelUrl, stillWanted,
+      onPending: candidate => { opening = candidate; pendingPublisherSocket = candidate; },
+      onDirectFailure: () => { directSocketFailed = true; },
+    });
+  } finally {
+    if (opening === pendingPublisherSocket) pendingPublisherSocket = null;
+  }
 }
 
 function clearSocketReconnect() {
@@ -930,12 +918,13 @@ async function connectPublisherSocket(
   if (!isCurrentPublisherCapture(sessionEpoch, expectedGeneration)) return;
   clearSocketReconnect();
 
-  const ws = await connectSocket();
+  const ws = await connectSocket(() => isCurrentPublisherCapture(sessionEpoch, expectedGeneration));
   if (!isCurrentPublisherCapture(sessionEpoch, expectedGeneration)) {
     ws.close();
     return;
   }
 
+  sendParticipantAuthentication(ws);
   if (!adoptSocket(ws, sessionEpoch, expectedGeneration)) return;
   if (!isCurrentPublisherCapture(sessionEpoch, expectedGeneration) || publisherSession.socket !== ws) return;
   publisherReconnectBackoff.noteConnected(performance.now());
@@ -1000,6 +989,7 @@ async function connectPublisherSocket(
 function restartPublisherConnectionForGeneration(sessionEpoch, generation) {
   if (!isCurrentPublisherCapture(sessionEpoch, generation)) return;
   clearSocketReconnect();
+  closePendingPublisherSocket();
   const previous = publisherSession.socket;
   if (previous) {
     audioTransport.unbind(previous);
@@ -1127,6 +1117,7 @@ async function stop({ releaseMic = true } = {}) {
   // Revoke this session before any asynchronous close can yield. Everything
   // after the first await is allowed to touch only captured old resources.
   const retired = publisherSession.retire();
+  closePendingPublisherSocket();
   calibrationProbePlayback.retire();
   clearSocketReconnect();
   stopAudioUplinkHealthReporting();

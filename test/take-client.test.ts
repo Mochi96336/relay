@@ -129,7 +129,7 @@ test('Take review feedback guard belongs to history and composes local Mic with 
   assert.match(history, /relay-session-status/);
   assert.match(history, /ownerId === participantId/);
   assert.match(history, /relay-request-session-status/);
-  assert.match(history, /function phoneOwnsMic\(\) \{[\s\S]*return localMicActive \|\| roomMicActive;[\s\S]*\}/);
+  assert.match(history, /function phoneOwnsMic\(\) \{[\s\S]*return localMicActive \|\| roomMicActive \|\| secondaryCapturePending \|\| secondaryJoined;[\s\S]*\}/);
   assert.doesNotMatch(history, /relayActiveRole/);
   assert.doesNotMatch(recorder, /relay-session-status|relay-microphone-local-state/,
     'recorder lifecycle must no longer own review feedback state');

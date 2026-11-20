@@ -126,10 +126,12 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
   let takeBusy = false;
   let localMicActive = false;
   let roomMicActive = false;
+  let secondaryCapturePending = false;
+  let secondaryJoined = false;
   let reviewNoticeKind = null;
 
   function phoneOwnsMic() {
-    return localMicActive || roomMicActive;
+    return localMicActive || roomMicActive || secondaryCapturePending || secondaryJoined;
   }
 
   function noticeCopy() {
@@ -354,6 +356,20 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
   });
 
   window.addEventListener('relay-locale-changed', renderHistory);
+
+  window.addEventListener('relay-choir-start-secondary-capture', () => {
+    secondaryCapturePending = true;
+    reconcileMicFeedbackGuard();
+  });
+  window.addEventListener('relay-choir-stop-secondary-capture', () => {
+    secondaryCapturePending = false;
+    reconcileMicFeedbackGuard();
+  });
+  window.addEventListener('relay-choir-guest-state', (event) => {
+    secondaryJoined = event.detail?.enabled === true;
+    reconcileMicFeedbackGuard();
+  });
+  window.dispatchEvent(new Event('relay-request-choir-guest-state'));
 
   window.addEventListener('relay-microphone-local-state', (event) => {
     localMicActive = event.detail?.active === true;

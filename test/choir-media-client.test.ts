@@ -163,3 +163,15 @@ test('media-ready connects B at once, and a repeat never replaces that socket', 
   assert.equal(f.sockets.length, 1);
   assert.notEqual(socket.readyState, 3, 'still connected');
 });
+
+test('a direct endpoint closing before registration sends the next fresh claim to the tunnel', async () => {
+  const f = await fixture({ direct: true });
+  await f.join();
+  const direct = f.sockets.at(-1)!;
+  direct.open();
+  direct.reply({ type: 'participant-authenticated', participantId: 'participant-b' });
+  direct.close();
+  f.emit('relay-choir-media-message', { type: 'choir-media-ready' });
+  f.emit('relay-choir-media-message', { type: 'choir-secondary-media-claim', claimToken: 'e'.repeat(64) });
+  assert.equal(f.sockets.at(-1)!.url, 'wss://relay.test/ws');
+});

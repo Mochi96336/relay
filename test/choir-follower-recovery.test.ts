@@ -216,3 +216,23 @@ test('refused playback rate cannot starve play or seek', async () => {
   await f.advance(3_000);
   assert.ok(p.calls.includes('seek'));
 });
+
+test('a rejected song cue leaves the old local identity and retries the new song', async () => {
+  const f = await fixture();
+  const player = f.players[0];
+  player.config.events.onReady();
+  let attempts = 0;
+  player.cueVideoById = () => {
+    if (++attempts === 1) throw new Error('player temporarily unavailable');
+  };
+  f.emit('relay:playback-view', {
+    role: 'observer', roomReceivedAtMs: 1000,
+    room: { connected: true, handoffState: 'idle', videoId: 'lmnopqrstuv', revision: 6,
+      state: 1, serverTime: 15, playbackRate: 1, duration: 180 },
+  });
+  assert.equal(attempts, 1);
+  f.tick();
+  assert.equal(attempts, 2, 'the second tick still needs to load the new song');
+  f.tick();
+  assert.equal(attempts, 2, 'a successful cue settles the local identity');
+});

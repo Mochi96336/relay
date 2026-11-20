@@ -127,6 +127,8 @@ test('stale PCM never enters a newer capture generation and input-gap fails clos
       capturedAtContextTime: 2.1 } }, graph, epoch);
     assert.equal(sent.length, 0, 'nearly one second old audio must be dropped');
     assert.equal(c.cursor, 882);
+    c.onCapture({ data: { type: 'input-gap', recovered: true, quanta: 1, samples: 128 } }, graph, epoch);
+    assert.deepEqual(stopped, [], 'a padded quantum already recovered must not eject the singer');
     c.onCapture({ data: { type: 'input-gap', quanta: 2, samples: 256 } }, graph, epoch);
     assert.deepEqual(stopped, ['input-gap']);
     assert.equal(c.context, null);

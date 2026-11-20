@@ -1,4 +1,5 @@
 import { decideBootProbeAnalysisEvidence } from './boot-probe-analysis-evidence-policy.js';
+import { implausibleProbeMatch } from './probe-match-plausibility.js';
 import { mediaToWallMs } from './boot-calibration.js';
 import { MAX_CAPTURE_GAP_MS } from './calibration-session.js';
 import { locateProbe, PROBE_REFERENCE_MS } from './calibration-probe.js';
@@ -54,6 +55,7 @@ export class ProbeLeg {
   private state: 'requested' | 'analyzing' | 'done' = 'requested';
   private analysis: { targetSample: number; windowStart: number; windowSamples: number; deadlineMs: number } | null = null;
   correlation: number | null = null;
+  private readonly timelineGeneration: number | null;
 
   constructor(
     private readonly config: ProbeLegConfig,
@@ -62,11 +64,13 @@ export class ProbeLeg {
     private readonly sentAtMs: number,
     /** Null for the Robot, whose page has no capture of its own to name. */
     private readonly generation: number | null,
-  ) {}
+  ) {
+    this.timelineGeneration = timeline.generation();
+  }
 
   played(reply: { generation?: unknown; timingDiagnostics?: unknown }, nowMs: number): LegOutcome {
     if (this.state !== 'requested') return { kind: 'pending' };
-    if (this.generation !== null && Number(reply.generation) !== this.generation) {
+    if (this.generation !== null && reply.generation !== this.generation) {
       return this.fail('capture changed');
     }
     const client = sanitizeProbeTimingDiagnostics(reply.timingDiagnostics);
@@ -91,7 +95,7 @@ export class ProbeLeg {
       return nowMs - this.sentAtMs > this.config.replyTimeoutMs ? this.fail('page did not answer') : { kind: 'pending' };
     }
     const analysis = this.analysis!;
-    if (this.generation !== null && this.timeline.generation() !== this.generation) return this.fail('capture changed');
+    if (this.timeline.generation() !== this.timelineGeneration) return this.fail('capture changed');
     if (this.timeline.totalSamples() < analysis.windowStart + analysis.windowSamples) {
       return nowMs > analysis.deadlineMs ? this.fail('audio did not reach the analyzer in time') : { kind: 'pending' };
     }
@@ -109,9 +113,12 @@ export class ProbeLeg {
     this.correlation = correlation;
     // With headphones the notes never reach the Mic; trying again would not either.
     if (correlation < this.config.minCorrelation) return this.fail('not heard (headphones?)');
-    this.state = 'done';
     const actualSample = analysis.windowStart + offsetSamples;
-    return { kind: 'measured', latencyMs: ((actualSample - analysis.targetSample) / this.config.sampleRate) * 1000 };
+    const latencyMs = ((actualSample - analysis.targetSample) / this.config.sampleRate) * 1000;
+    const reason = implausibleProbeMatch(this.generation === null ? 'backing' : 'mic', correlation, latencyMs);
+    if (reason) return this.fail(reason);
+    this.state = 'done';
+    return { kind: 'measured', latencyMs };
   }
 
   fail(reason: string): LegOutcome {

@@ -86,23 +86,43 @@ test('B starts its Mic only on its own tap and connects when the server asks for
   assert.doesNotMatch(media, /navigator\.mediaDevices\.getUserMedia|new AudioWorkletNode|localStorage|sessionStorage|console\.log/);
 });
 
-test('second Mic reports capture failure and takeover, then clears the notice on retry', async () => {
+async function choirPage() {
   const { runInNewContext } = await import('node:vm');
-  const listeners = new Map<string, (event: { detail?: any }) => void>();
-  let join = () => {};
-  const button = { dataset: {} as Record<string, string>, addEventListener: (_: string, cb: () => void) => { join = cb; } };
+  const events: Array<{ type: string; detail?: any }> = [];
+  const window = Object.assign(new EventTarget(), {
+    relayParticipantId: 'b', relayI18n: { t: (key: string) => key },
+  });
+  const button = Object.assign(new EventTarget(), { dataset: {} as Record<string, string>, hidden: true });
+  const leave = Object.assign(new EventTarget(), { dataset: {}, hidden: true });
   const notice = { hidden: true, textContent: '' };
-  const window = { relayParticipantId: 'b', addEventListener: (type: string, fn: (e: any) => void) => listeners.set(type, fn),
-    dispatchEvent() {}, relayI18n: { t: (key: string) => key } };
   const document = { body: { dataset: {} }, querySelector: (sel: string) => sel === '#choir-capture-notice'
-    ? notice : sel === '#choir-invite-open' ? button : { addEventListener() {} } };
+    ? notice : sel === '#choir-invite-open' ? button : leave };
   const source = (await file('../public/choir-ui.js')).replace(/^import .*;$/gm, '');
-  runInNewContext(source, { document, window, Event, CustomEvent: class { constructor(..._args: any[]) {} },
-    clearTimeout() {}, setTimeout() { return 1; } });
-  const emit = (type: string, detail: object) => listeners.get(type)!({ detail });
+  let now = 0;
+  let id = 0;
+  const timers = new Map<number, { at: number; run: () => void }>();
+  for (const type of ['relay-choir-command', 'relay-choir-stop-secondary-capture', 'relay-choir-pause-secondary-media'])
+    window.addEventListener(type, event => events.push({ type, detail: (event as CustomEvent).detail }));
+  runInNewContext(source, { document, window, Event, CustomEvent,
+    setTimeout(run: () => void, ms: number) { timers.set(++id, { at: now + ms, run }); return id; },
+    clearTimeout(key: number) { timers.delete(key); },
+  });
+  const emit = (type: string, detail: object) => window.dispatchEvent(new CustomEvent(type, { detail }));
+  const presence = (authorityFresh: boolean) => emit('relay-presence-state', {
+    authorityFresh, session: { micOwnerId: 'a', micConnected: true, serverIncarnation: 'server' },
+  });
+  const join = () => button.dispatchEvent(new Event('click'));
+  const accept = () => emit('relay-choir-message', { type: 'choir-secondary-consent-status', status: 'accepted', secondaryId: 'b' });
   emit('relay-choir-availability', { available: true });
-  emit('relay-presence-state', { authorityFresh: true,
-    session: { micOwnerId: 'a', micConnected: true, serverIncarnation: 'server' } });
+  presence(true);
+  return { emit, presence, join, accept, notice, button, leave, events, advance(ms: number) {
+    now += ms;
+    for (const [key, timer] of timers) if (timer.at <= now) { timers.delete(key); timer.run(); }
+  } };
+}
+
+test('second Mic reports capture failure and takeover, then clears the notice on retry', async () => {
+  const { join, emit, notice, button } = await choirPage();
   join();
   emit('relay-choir-media-connection', { state: 'capture-failed', reason: 'permission-denied' });
   emit('relay-choir-message', { type: 'choir-secondary-consent-status', status: 'withdrawn', secondaryId: 'b' });
@@ -117,4 +137,57 @@ test('second Mic reports capture failure and takeover, then clears the notice on
   assert.equal(button.dataset.i18n, 'choir.takeOver');
   join();
   assert.equal(notice.hidden, true);
+});
+
+test('leaving during a control outage stops capture locally and never resumes', async () => {
+  const f = await choirPage();
+  f.join();
+  f.accept();
+  f.presence(false);
+  assert.equal(f.leave.hidden, false);
+  f.leave.dispatchEvent(new Event('click'));
+  assert.equal(f.events.filter(e => e.type === 'relay-choir-stop-secondary-capture').length, 1);
+  f.presence(true);
+  assert.equal(f.leave.hidden, true);
+  assert.equal(f.events.some(e => e.detail?.resume), false);
+});
+
+test('an unanswered recovery near the end of its grace cannot extend microphone capture', async () => {
+  const f = await choirPage();
+  f.join();
+  f.accept();
+  f.presence(false);
+  f.advance(14_000);
+  f.presence(true);
+  assert.equal(f.events.some(e => e.detail?.resume), true);
+  f.advance(1_000);
+  assert.equal(f.leave.hidden, true, 'original 15 s grace expired while the resume reply was pending');
+  assert.equal(f.events.filter(e => e.type === 'relay-choir-stop-secondary-capture').length, 1);
+  f.accept();
+  assert.equal(f.leave.hidden, true);
+  assert.equal(f.events.at(-1)?.detail?.type, 'choir-secondary-withdraw');
+});
+
+test('successive control drops share a grace deadline until a resume is confirmed', async () => {
+  const f = await choirPage();
+  f.join();
+  f.accept();
+  f.presence(false);
+  f.advance(7_000);
+  f.presence(true);
+  f.presence(false);
+  f.advance(8_000);
+  assert.equal(f.leave.hidden, true);
+  f.presence(true);
+  f.join();
+  f.accept();
+  f.presence(false);
+  f.advance(14_000);
+  f.presence(true);
+  f.accept();
+  f.advance(1_000);
+  assert.equal(f.leave.hidden, false, 'confirmed resume cancels its grace timer');
+  f.presence(false);
+  f.advance(15_000);
+  assert.equal(f.leave.hidden, true, 'the next outage gets its own deadline');
 });

@@ -171,7 +171,10 @@ window.addEventListener('relay-choir-media-message', (event) => {
   awaitingClaim = false;
   if (claimTimer !== null) clearTimeout(claimTimer);
   claimTimer = null;
-  connectMedia(claimToken, capture.rate, !directSocketFailed);
+  // Older servers may omit the advertised lifetime (normally 15 seconds).
+  const ttl = event.detail.expiresInMs;
+  const expiresAt = performance.now() + (Number.isFinite(ttl) && ttl > 0 ? ttl : 15_000);
+  connectMedia(claimToken, capture.rate, !directSocketFailed, expiresAt);
 });
 
 /**
@@ -190,7 +193,7 @@ window.addEventListener('relay-choir-media-message', (event) => {
 const DIRECT_SOCKET_OPEN_TIMEOUT_MS = 2_500;
 const MEDIA_REGISTER_TIMEOUT_MS = 5_000;
 let directSocketFailed = false;
-function connectMedia(claimToken, sourceRate, direct) {
+function connectMedia(claimToken, sourceRate, direct, expiresAt) {
   const tunnelUrl = wsUrl({ compress: false });
   const directUrl = wsUrl({ compress: false, direct: true });
   const viaDirect = direct && directUrl !== tunnelUrl;
@@ -202,11 +205,18 @@ function connectMedia(claimToken, sourceRate, direct) {
   const fallBack = () => {
     if (socket !== mediaSocket || opened || !viaDirect) return false;
     directSocketFailed = true;
+    mediaSocket = null;
     try { socket.close(); } catch {}
-    connectMedia(claimToken, sourceRate, false);
+    connectMedia(claimToken, sourceRate, false, expiresAt);
     return true;
   };
-  const openTimer = viaDirect ? setTimeout(fallBack, DIRECT_SOCKET_OPEN_TIMEOUT_MS) : null;
+  const remainingMs = Math.max(0, expiresAt - performance.now());
+  const openTimer = setTimeout(() => {
+    if (socket !== mediaSocket || opened) return;
+    if (performance.now() < expiresAt && fallBack()) return;
+    closeMedia();
+    notify('disconnected', 'open-timeout');
+  }, viaDirect ? Math.min(DIRECT_SOCKET_OPEN_TIMEOUT_MS, remainingMs) : remainingMs);
   let registerTimer = null;
   socket.addEventListener('open', () => {
     opened = true;

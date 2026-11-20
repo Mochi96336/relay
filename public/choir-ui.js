@@ -72,12 +72,18 @@ function render() {
 function resetJoin() {
   clearTimeout(pendingTimer);
   clearTimeout(recoveryTimer);
+  recoveryTimer = null;
   joinScope = null;
   recovering = false;
   window.dispatchEvent(new Event('relay-choir-stop-secondary-capture'));
   joined = false;
   pending = false;
   render();
+}
+
+function expireJoin() {
+  publishCommand('choir-secondary-withdraw', { reason: 'join-timeout' });
+  resetJoin();
 }
 
 // A brief control outage revokes the server ticket, but the user's join
@@ -93,12 +99,11 @@ function resumeIfReady() {
   }
   if (session?.micConnected !== true) return;
   recovering = false;
-  clearTimeout(recoveryTimer);
   pending = publishCommand('choir-secondary-join', {
     resume: true, expectedPrimaryId: joinScope.primaryId,
   });
   clearTimeout(pendingTimer);
-  pendingTimer = setTimeout(() => { if (pending) resetJoin(); }, 8_000);
+  pendingTimer = setTimeout(() => { if (pending) expireJoin(); }, 8_000);
 }
 function recoverControl() {
   if (!joined || recovering || !joinScope) return;
@@ -106,8 +111,7 @@ function recoverControl() {
   window.dispatchEvent(new Event('relay-choir-pause-secondary-media'));
   pending = false;
   clearTimeout(pendingTimer);
-  clearTimeout(recoveryTimer);
-  recoveryTimer = setTimeout(resetJoin, 15_000);
+  recoveryTimer ??= setTimeout(expireJoin, 15_000);
 }
 
 window.addEventListener('relay-presence-state', (event) => {
@@ -152,6 +156,7 @@ window.addEventListener('relay-choir-message', (event) => {
     joined = true;
     recovering = false;
     clearTimeout(recoveryTimer);
+    recoveryTimer = null;
     pending = false;
     render();
   } else if (message.status === 'withdrawn') {
@@ -197,7 +202,7 @@ joinButton?.addEventListener('click', () => {
   pending = publishCommand('choir-secondary-join');
   clearTimeout(pendingTimer);
   // An unanswered join must not leave the button disabled.
-  pendingTimer = setTimeout(() => { if (pending && !joined) resetJoin(); }, 8_000);
+  pendingTimer = setTimeout(() => { if (pending && !joined) expireJoin(); }, 8_000);
   render();
 });
 leaveButton?.addEventListener('click', () => {

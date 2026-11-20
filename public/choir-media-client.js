@@ -287,7 +287,8 @@ function connectMedia(claimToken, sourceRate, direct, expiresAt) {
 // does not have.
 window.addEventListener('relay-choir-song-anchor', (event) => {
   const detail = event.detail;
-  if (!enabled || !mediaSocket || mediaSocket.readyState !== WebSocket.OPEN || !detail) return;
+  if (!enabled || !mediaSocket || capture.socket !== mediaSocket
+    || mediaSocket.readyState !== WebSocket.OPEN || !detail) return;
   const captureAnchor = capture.anchorFor(Number(detail.sampledAtPerformanceMs));
   if (!captureAnchor) return;
   window.dispatchEvent(new CustomEvent('relay-choir-command', {

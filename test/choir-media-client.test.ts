@@ -43,9 +43,10 @@ async function fixture({ direct = false, denyMicrophone = false } = {}) {
       this.rate = 48_000;
       return this.rate;
     }
-    attach() { return true; }
+    socket: FakeSocket | null = null;
+    attach(socket: FakeSocket) { this.socket = socket; return true; }
     stop() { this.rate = null; }
-    anchorFor() { return null; }
+    anchorFor() { return { generation: 7, sampleRate: 48_000, sampleIndex: 960, mediaDeltaSeconds: 0, uncertaintyMs: 40 }; }
   }
   const window: any = {
     relayParticipantId: 'participant-b',
@@ -76,7 +77,7 @@ async function fixture({ direct = false, denyMicrophone = false } = {}) {
     && e.detail?.type === 'choir-secondary-media-claim-request').length;
   const connection = () => events.filter((e) => e.type === 'relay-choir-media-connection').map((e) => e.detail);
   return {
-    sockets, emit, claims, connection,
+    sockets, emit, claims, connection, events,
     advance(ms: number) {
       now += ms;
       for (const [id, timer] of [...timers]) if (timer.at <= now) { timers.delete(id); timer.run(); }
@@ -180,6 +181,30 @@ test('a direct open timeout hands the unspent claim to exactly one tunnel attemp
   assert.equal(f.sockets[1].readyState, 3);
   f.emit('relay-choir-media-message', { type: 'choir-media-ready' });
   assert.equal(f.claims(), 2);
+});
+
+test('song alignment anchors start only after the current media socket is registered', async () => {
+  const f = await fixture();
+  await f.join();
+  const socket = f.sockets[0];
+  const sample = () => f.emit('relay-choir-song-anchor', {
+    sampledAtPerformanceMs: 0, videoId: 'v', state: 1, currentTime: 10, playbackRate: 1,
+  });
+  const anchors = () => f.events.filter(e => e.detail?.type === 'choir-secondary-song-anchor').length;
+  socket.open();
+  sample();
+  socket.reply({ type: 'participant-authenticated', participantId: 'participant-b' });
+  sample();
+  assert.equal(anchors(), 0, 'room has not registered this audio route yet');
+  socket.reply({ type: 'choir-secondary-media-registered', sampleRate: 48_000 });
+  sample();
+  assert.equal(anchors(), 1);
+  socket.close();
+  f.emit('relay-choir-media-message', { type: 'choir-media-ready' });
+  f.emit('relay-choir-media-message', { type: 'choir-secondary-media-claim', claimToken: 'e'.repeat(64) });
+  f.sockets.at(-1)!.open();
+  sample();
+  assert.equal(anchors(), 1, 'a replacement socket must register on its own');
 });
 
 test('media-ready connects B at once, and a repeat never replaces that socket', async () => {

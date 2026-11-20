@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { openAudioSocket } from '../public/open-audio-socket.js';
 
-function fixture(outcomes: ('open' | 'error' | 'timeout')[]) {
+function fixture(outcomes: ('open' | 'error' | 'timeout' | 'close')[]) {
   const sockets: FakeSocket[] = [];
   let wanted = true;
   let failures = 0;
@@ -20,7 +20,7 @@ function fixture(outcomes: ('open' | 'error' | 'timeout')[]) {
   const connect = () => openAudioSocket({
     directUrl: 'wss://direct.example/ws', tunnelUrl: 'wss://relay.example/ws',
     onPending: () => {}, onDirectFailure: () => { failures++; },
-    stillWanted: () => wanted, timeoutMs: 10,
+    stillWanted: () => wanted, timeoutMs: 10, tunnelTimeoutMs: 30,
     WebSocketClass: FakeSocket as unknown as typeof WebSocket,
   });
   return { sockets, connect, cancel: () => { wanted = false; }, failures: () => failures };
@@ -35,7 +35,7 @@ test('Listen takes the direct route without opening a second socket', async () =
   assert.equal(f.failures(), 0);
 });
 
-for (const failure of ['error', 'timeout'] as const) {
+for (const failure of ['error', 'timeout', 'close'] as const) {
   test(`Listen falls back after direct ${failure} and closes the failed socket`, async () => {
     const f = fixture([failure, 'open']);
     const socket = await f.connect();
@@ -71,4 +71,17 @@ test('a slow tunnel handshake is not subject to the direct probe timeout', async
     WebSocketClass: SlowSocket as unknown as typeof WebSocket,
   });
   assert.equal((socket as unknown as SlowSocket).closed, false);
+});
+
+test('an unresponsive tunnel releases the attempt so the caller can reconnect', async () => {
+  const f = fixture(['close', 'timeout', 'open']);
+  const result = f.connect().then(() => 'connected', () => 'rejected');
+  await new Promise(resolve => setTimeout(resolve, 80));
+  // Also settle the original promise on an implementation with no deadline.
+  const closedAtDeadline = f.sockets[1]?.closed;
+  f.sockets[1]?.close();
+  assert.equal(closedAtDeadline, true);
+  assert.equal(await result, 'rejected');
+  const next = await f.connect();
+  assert.ok(next);
 });

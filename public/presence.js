@@ -349,6 +349,7 @@ window.relayIdentityReady = (async () => {
     await new Promise((resolve, reject) => {
       next.addEventListener('open', resolve, { once: true });
       next.addEventListener('error', reject, { once: true });
+      next.addEventListener('close', reject, { once: true });
     });
 
     if (socket !== next) {

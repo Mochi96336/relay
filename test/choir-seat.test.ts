@@ -122,13 +122,13 @@ test('anyone else can take over the second Mic; the singer replaced is told so',
   assert.equal(f.consent.isJoinSocket(f.b), false, 'the replaced B has nothing left');
 });
 
-test('B joining again from another tab moves the join there, without a revocation', () => {
+test('B joining again from another tab moves the join there and releases the old tab', () => {
   const f = fixture();
   assert.equal(f.consent.join(f.b, A), true);
   assert.equal(f.consent.join(f.anotherB, A), true);
   assert.equal(f.consent.isJoinSocket(f.anotherB), true);
   assert.equal(f.consent.isJoinSocket(f.b), false);
-  assert.equal(f.delivered.some((d) => d.payload.status === 'revoked'), false);
+  assert.equal(f.delivered.find((d) => d.payload.status === 'revoked')?.payload.reason, 'replaced');
 });
 
 test('a reconnecting B cannot automatically take the seat from a new second singer', () => {

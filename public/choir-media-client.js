@@ -258,6 +258,7 @@ function connectMedia(claimToken, sourceRate, direct) {
     clearTimeout(registerTimer);
     if (fallBack()) return;
     if (socket !== mediaSocket) return;
+    if (viaDirect && opened && !registered) directSocketFailed = true;
     // The link dropped or B's join ended; keep the microphone and reconnect
     // when the server next asks (media-ready, every 3 s).
     closeMedia();

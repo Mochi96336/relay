@@ -21,7 +21,7 @@ window.relayIdentityReady = (async () => {
   const PENDING_NICKNAME_KEY = 'relay.pendingNickname.v1';
   const RECONNECT_MS = 1_000;
   // The broadcasts handleMessage reads; Relay sends this socket no others.
-  const PRESENCE_BROADCAST_TYPES = ['session-status', 'choir-available'];
+  const PRESENCE_BROADCAST_TYPES = ['session-status', 'choir-available', 'choir-probe-response'];
   const adjectives = [
     'Blue', 'Quiet', 'Tiny', 'Silver', 'Mint', 'Soft', 'Bright', 'Lazy',
     'Lucky', 'Warm', 'Swift', 'Night', 'Sunny', 'Mellow', 'Cloud', 'Little',
@@ -229,7 +229,11 @@ window.relayIdentityReady = (async () => {
   // socket, carrying only what choir-commands.js lets each carry.
   window.addEventListener('relay-choir-command', (event) => {
     const message = choirCommandMessage(event.detail);
-    if (choirAvailable && sessionAuthorityFresh && message) send(message);
+    if (!message) return;
+    if (choirAvailable && sessionAuthorityFresh && send(message)) return;
+    if (message.type === 'choir-probe-request') window.dispatchEvent(new CustomEvent('relay-choir-probe-response', {
+      detail: { commandId: message.commandId, reason: 'reconnecting' },
+    }));
   });
 
   function sendPendingRename() {
@@ -282,6 +286,10 @@ window.relayIdentityReady = (async () => {
   window.addEventListener('relay-request-session-status', publishSessionStatus);
 
   function handleMessage(message) {
+    if (message.type === 'choir-probe-response') {
+      window.dispatchEvent(new CustomEvent('relay-choir-probe-response', { detail: message }));
+      return;
+    }
     if (message.type === 'choir-available') {
       choirAnnouncedOnConnection = true;
       choirAvailable = true;
@@ -296,7 +304,7 @@ window.relayIdentityReady = (async () => {
     }
     if ([
       'choir-media-ready', 'choir-media-rejected',
-      'choir-secondary-media-claim', 'choir-probe', 'choir-secondary-lead',
+      'choir-secondary-media-claim', 'choir-probe', 'choir-probe-retired', 'choir-secondary-lead',
     ].includes(message.type)) {
       if (choirAvailable) window.dispatchEvent(new CustomEvent(
         'relay-choir-media-message', { detail: message },

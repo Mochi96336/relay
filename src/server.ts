@@ -379,15 +379,18 @@ const choir = relayConfig.choir ? new ChoirRuntime({
     playing: roomSongPlaying,
     playbackRate: currentPlaybackRate,
   },
-  audibleProbeBlocked: takeIsActive,
+  audibleProbeBlockReason: () => takeIsActive() ? 'take-active' : !bootProbe.idle ? 'calibration-active' : null,
   robot: {
     // Never across the boot probe's own Robot request: the Robot page answers
     // one request at a time.
     available: () => backingRuntime.isRobot && sourceRuntime.connected()
       && sourceRuntime.socket !== null && bootProbe.idle,
+    cancelProbe: (requestId) => {
+      if (sourceRuntime.socket) sendJson(sourceRuntime.socket, { type: 'choir-probe-retired', requestId });
+    },
     playProbe: (request) => {
       if (!sourceRuntime.socket) return false;
-      sendJson(sourceRuntime.socket, { type: 'play-calibration-probe', target: 'backing', ...request });
+      sendJson(sourceRuntime.socket, { type: 'play-calibration-probe', target: 'backing', owner: 'choir', ...request });
       return true;
     },
     backingLatencyMs: robotBackingLatencyMs,
@@ -1073,7 +1076,7 @@ const bootProbe = new BootProbeCoordinator({
   context: bootProbeContext,
   sourceRate: (target) => target === 'mic' ? micRuntime.sampleRate : backingRuntime.sampleRate,
   enabled: robotProbeTimingActive,
-  takeBlocked: takeIsActive,
+  audibleProbeBlocked: () => takeIsActive() || choir?.probeRunning === true,
   calibrationStale: calibrationIsStale,
   robotRouteActive,
   topology: () => ({ backingIsRobot: backingRuntime.isRobot, robotSourceConnected: sourceRuntime.connected() }),

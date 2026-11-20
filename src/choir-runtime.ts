@@ -42,10 +42,11 @@ export type ChoirRuntimeDeps = {
     playbackRate: (nowMs: number) => number;
   };
   /** A Take records or finalizes: do not inject an audible test tone. */
-  audibleProbeBlocked: () => boolean;
+  audibleProbeBlockReason: () => 'take-active' | 'calibration-active' | null;
   robot: {
     /** The Robot can be asked for notes now (connected, not mid boot probe). */
     available: () => boolean;
+    cancelProbe: (requestId: number) => void;
     playProbe: (request: { requestId: number; leadMs: number }) => boolean;
     /** The Robot route's own boot probe leg, kept by the server. */
     backingLatencyMs: () => number | null;
@@ -78,9 +79,14 @@ export function refuseChoirMessage(payload: Record<string, unknown>,
   reply: (refusal: Record<string, unknown>) => void): boolean {
   const type = String(payload.type);
   if (JOIN_MESSAGES.has(type)) reply({ type: 'choir-consent-rejected', reason: 'unavailable' });
+  else if (type === 'choir-probe-request') reply(probeReply(payload, 'unavailable'));
   else if (MEDIA_MESSAGES.has(type)) reply({ type: 'choir-media-rejected', reason: 'disabled-or-unverified' });
   else return REPORT_MESSAGES.has(type);
   return true;
+}
+
+function probeReply(payload: Record<string, unknown>, reason: string | null) {
+  return { type: 'choir-probe-response', commandId: Number.isSafeInteger(payload.commandId) ? payload.commandId : null, reason };
 }
 
 /** B's lag is journaled when it moves this far, at most once per interval. */
@@ -217,6 +223,13 @@ export class ChoirRuntime {
         return true;
       },
       sendRobot: deps.robot.playProbe,
+      retireLeg: (side, requestId) => {
+        if (side === 'backing') deps.robot.cancelProbe(requestId);
+        else {
+          const socket = this.joinSocket();
+          if (socket) deps.send(socket, { type: 'choir-probe-retired', requestId });
+        }
+      },
     });
     console.log('[choir] enabled: a second Mic can join whoever holds the Mic');
   }
@@ -344,21 +357,23 @@ export class ChoirRuntime {
    * sounding, or it waits for a lag) or singing (B is in the room mix that
    * Listen and Take carry).
    */
+  get probeRunning() { return this.probe.running; }
+
   view(): ProductDuet | null {
     const joined = this.seat.active();
     if (!joined) return null;
     const secondary = this.deps.session.secondaryMic;
     // Allowed to sound is not singing: B's PCM must also be reaching the mix.
     const singing = secondary?.audible === true && secondary.blend > 0 && secondary.recentlyHeard;
-    // Where B is placed, as B's own Realign shows it: the measured target, not
-    // each step of the slew toward it, so the room status does not churn.
-    const lag = secondary?.targetLagMs ?? secondary?.lagMs ?? null;
+    const lag = secondary?.appliedLagMs ?? null;
     return {
       secondaryId: joined.secondaryId,
       secondaryNickname: this.deps.nickname(joined.secondaryId),
       state: singing ? 'singing' : this.ingress.liveTransportFor(joined.secondaryId) ? 'aligning' : 'joined',
       lagMs: lag === null || !Number.isFinite(lag) ? null : Math.round(lag),
       realigning: this.probe.running,
+      realignBlockedReason: this.deps.audibleProbeBlockReason()
+        ?? (this.deps.session.secondaryMicGeneration === null ? 'sources-not-streaming' : null),
     };
   }
 
@@ -471,7 +486,10 @@ export class ChoirRuntime {
     const nowMs = performance.now();
     const joined = this.seat.active();
     // Only the socket B joined from speaks for B, as only it may claim B's media.
-    if (!joined || socket !== joined.socket || socket.role !== 'unknown') return;
+    if (!joined || socket !== joined.socket || socket.role !== 'unknown') {
+      if (payload.type === 'choir-probe-request') deps.send(socket, probeReply(payload, 'unavailable'));
+      return;
+    }
     switch (payload.type) {
       case 'choir-probe-played':
         this.probe.played({
@@ -485,11 +503,16 @@ export class ChoirRuntime {
       case 'choir-probe-request': {
         // B's own Realign: only B's test tone; the main Mic's alignment is untouched.
         const generation = deps.session.secondaryMicGeneration;
-        if (generation !== null && !deps.audibleProbeBlocked()
-          && this.probe.realign(`${joined.secondaryId}:${generation}`, nowMs)) {
-          logChoir('b-realign', {});
+        let reason: string | null = deps.audibleProbeBlockReason();
+        if (reason === null && generation === null) reason = 'sources-not-streaming';
+        if (reason === null && this.probe.running) reason = 'calibration-active';
+        if (reason === null) {
+          this.probe.realign(`${joined.secondaryId}:${generation}`, nowMs);
+          if (!this.probe.running) reason = 'unavailable';
+          else logChoir('b-realign', {});
           deps.productStatusChanged();
         }
+        deps.send(socket, probeReply(payload, reason));
         return;
       }
       case 'choir-secondary-gain': {
@@ -611,8 +634,8 @@ export class ChoirRuntime {
   private tickSecondaryProbe(secondaryId: string, nowMs: number) {
     const { session } = this.deps;
     const generation = session.secondaryMicGeneration;
-    if (generation !== null && !session.secondaryMic?.audible && !this.deps.audibleProbeBlocked()) {
-      this.probe.begin(`${secondaryId}:${generation}`, nowMs);
+    if (generation !== null) {
+      this.probe.begin(`${secondaryId}:${generation}`, nowMs, this.deps.audibleProbeBlockReason() === null);
     }
     this.probe.tick(nowMs);
     if (this.probe.state !== this.lastProbeState) {
@@ -659,10 +682,13 @@ export class ChoirRuntime {
     const { deps } = this;
     const { session } = deps;
     this.publishSecondaryState();
-    if (!session.secondaryMic) return;
-
     const pair = this.seat.active();
-    if (!pair || !this.ingress.liveTransportFor(pair.secondaryId)) {
+    if (!session.secondaryMic || !pair || !this.ingress.liveTransportFor(pair.secondaryId)) {
+      if (this.probe.running) {
+        this.probe.cancelPending();
+        this.lastProbeState = this.probe.state;
+        deps.productStatusChanged();
+      }
       session.detachSecondaryMic();
       return;
     }

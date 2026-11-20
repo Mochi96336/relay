@@ -16,7 +16,7 @@ const CONFIG: BootProbeCoordinatorConfig = {
 function fixture(overrides: Partial<BootProbeCoordinatorConfig> = {}) {
   const config = { ...CONFIG, ...overrides };
   const state = {
-    enabled: true, takeBlocked: false, active: true, generation: 10,
+    enabled: true, audibleProbeBlocked: false, active: true, generation: 10,
     micGeneration: 2, backingGeneration: 3, micSourceRate: RATE, backingSourceRate: RATE,
     reachedSamples: 1_000_000, gapSamples: 0, frontierMissingSamples: 0,
     backingIsRobot: true, robotSourceConnected: true, ready: true,
@@ -78,7 +78,7 @@ function fixture(overrides: Partial<BootProbeCoordinatorConfig> = {}) {
     calibration, timing, context,
     sourceRate: (target) => target === 'mic' ? state.micSourceRate : state.backingSourceRate,
     enabled: () => state.enabled,
-    takeBlocked: () => state.takeBlocked,
+    audibleProbeBlocked: () => state.audibleProbeBlocked,
     calibrationStale: () => { state.staleReads++; return state.calibrationStale; },
     robotRouteActive: () => true,
     topology: () => ({ backingIsRobot: state.backingIsRobot, robotSourceConnected: state.robotSourceConnected }),
@@ -111,9 +111,9 @@ function fixture(overrides: Partial<BootProbeCoordinatorConfig> = {}) {
 }
 
 test('Take ownership, disabled probes and inactive audio cannot request a measurement', () => {
-  for (const blocked of ['takeBlocked', 'enabled', 'active'] as const) {
+  for (const blocked of ['audibleProbeBlocked', 'enabled', 'active'] as const) {
     const f = fixture();
-    f.state[blocked] = blocked === 'takeBlocked';
+    f.state[blocked] = blocked === 'audibleProbeBlocked';
     f.coordinator.startIfReady(0);
     assert.deepEqual(f.sent, []);
     assert.deepEqual(f.state.pathReads, []);

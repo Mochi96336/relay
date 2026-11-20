@@ -208,7 +208,7 @@ joinButton?.addEventListener('click', () => {
   // microphone. Capture starts now and connects once the server has a room.
   joinScope = { primaryId: session.micOwnerId, serverIncarnation: session.serverIncarnation };
   window.dispatchEvent(new Event('relay-choir-start-secondary-capture'));
-  pending = publishCommand('choir-secondary-join');
+  pending = publishCommand('choir-secondary-join', { expectedPrimaryId: joinScope.primaryId });
   clearTimeout(pendingTimer);
   // An unanswered join must not leave the button disabled.
   pendingTimer = setTimeout(() => { if (pending && !joined) expireJoin(); }, 8_000);

@@ -87,7 +87,7 @@ test('only someone other than the Mic owner sees + Second Mic, and one tap joins
   await open.click();
   expect(await page.evaluate(() => ({
     starts: window.__choirCaptureStarts, commands: window.__choirSent,
-  }))).toEqual({ starts: 1, commands: [{ type: 'choir-secondary-join', expectedPrimaryId: 'owner' }] });
+  }))).toEqual({ starts: 1, commands: [{ type: 'choir-secondary-join', expectedPrimaryId: 'owner', expectedSecondaryId: null }] });
   await expect(open).toBeDisabled();
 
   await consent(page, accepted);
@@ -144,7 +144,7 @@ test('while someone else sings second, the button takes over without an extra st
   await page.evaluate(() => window.relayI18n.applyStatic());
   await expect(open).toHaveText('接手副 Mic');
   await open.click();
-  expect((await page.evaluate(() => window.__choirSent)).at(-1)).toEqual({ type: 'choir-secondary-join', expectedPrimaryId: 'owner' });
+  expect((await page.evaluate(() => window.__choirSent)).at(-1)).toEqual({ type: 'choir-secondary-join', expectedPrimaryId: 'owner', expectedSecondaryId: 'singerB' });
 
   await openFixture(page, 'singerB', 'owner');
   await enable(page);

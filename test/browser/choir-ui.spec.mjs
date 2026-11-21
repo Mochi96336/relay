@@ -242,7 +242,9 @@ test('B survives a brief control disconnect and resumes without another micropho
     window.__captureStops = 0;
     window.addEventListener('relay-choir-stop-secondary-capture', () => window.__captureStops++);
   });
+  const notice = page.locator('#choir-capture-notice');
   await presence(page, false);
+  await expect(notice).toBeVisible();
   await expect(page.locator('#choir-withdraw')).toBeVisible();
   await expect(page.locator('#choir-invite-open')).toBeHidden();
   expect(await page.evaluate(() => window.__captureStops)).toBe(0);
@@ -250,7 +252,9 @@ test('B survives a brief control disconnect and resumes without another micropho
   expect(await page.evaluate(() => window.__choirSent.at(-1))).toEqual({
     type: 'choir-secondary-join', resume: true, expectedPrimaryId: 'owner',
   });
+  await expect(notice).toBeVisible();
   await consent(page, accepted);
+  await expect(notice).toBeHidden();
   await expect(page.locator('#choir-withdraw')).toBeVisible();
   expect(await page.evaluate(() => window.__captureStops)).toBe(0);
 });
@@ -287,7 +291,11 @@ test('B stops capture after the control recovery deadline', async ({ page }) => 
   await consent(page, accepted);
   await page.clock.install();
   await presence(page, false);
+  const notice = page.locator('#choir-capture-notice');
+  await expect(notice).toHaveText('副 Mic 正在重新連線，這個頁面的麥克風仍開啟。');
   await page.clock.fastForward(15_001);
+  await expect(notice).toBeVisible();
+  await expect(notice).toHaveText('副 Mic 重新連線逾時，這個頁面已停止收音。房間連線恢復後可重新加入。');
   await expect(page.locator('#choir-withdraw')).toBeHidden();
   await presence(page, true);
   expect(await page.evaluate(() => window.__choirSent.some(m => m.resume))).toBe(false);

@@ -65,7 +65,7 @@ test('B starts its Mic only on its own tap and connects when the server asks for
   // The media client loads with the controls, so the tap cannot be lost.
   assert.match(app, /^import '\.\/choir-media-client\.js';/m);
   // The join tap itself starts capture: browsers require a gesture for the Mic.
-  assert.match(app, /relay-choir-start-secondary-capture[\s\S]*?publishCommand\('choir-secondary-join', \{ expectedPrimaryId: joinScope.primaryId/);
+  assert.match(app, /capture-ready[\s\S]*?publishCommand\('choir-secondary-join', \{ expectedPrimaryId: joinScope.primaryId/);
   assert.match(presence, /import \{ choirCommandMessage, ChoirSeatCommands \} from '\.\/choir-commands\.js'/);
   assert.match(media, /type === 'choir-media-ready'[\s\S]*?requestClaim\(\)/);
   assert.doesNotMatch(media, /roomEpoch|choir-room-ready/);
@@ -111,11 +111,13 @@ async function choirPage() {
   const presence = (authorityFresh: boolean) => emit('relay-presence-state', {
     authorityFresh, session: { micOwnerId: 'a', micConnected: true, serverIncarnation: 'server' },
   });
-  const join = () => button.dispatchEvent(new Event('click'));
+  const tap = () => button.dispatchEvent(new Event('click'));
+  const ready = () => emit('relay-choir-media-connection', { state: 'capture-ready' });
+  const join = () => { tap(); ready(); };
   const accept = () => emit('relay-choir-message', { type: 'choir-secondary-consent-status', status: 'accepted', secondaryId: 'b' });
   emit('relay-choir-availability', { available: true });
   presence(true);
-  return { emit, presence, join, accept, notice, button, leave, events, advance(ms: number) {
+  return { emit, presence, tap, ready, join, accept, notice, button, leave, events, advance(ms: number) {
     now += ms;
     for (const [key, timer] of timers) if (timer.at <= now) { timers.delete(key); timer.run(); }
   } };
@@ -212,4 +214,29 @@ test('a join acknowledged for another Mic owner never activates the guest contro
   });
   assert.equal(f.leave.hidden, true);
   assert.ok(f.events.some(e => e.detail?.type === 'choir-secondary-withdraw'));
+});
+
+test('refused or cancelled microphone preparation leaves the current singer in place', async () => {
+  const f = await choirPage();
+  f.emit('relay-product-status', { room: { duet: { secondaryId: 'incumbent' } } });
+  f.tap();
+  assert.equal(f.notice.textContent, 'choir.preparingMic');
+  f.emit('relay-choir-media-connection', { state: 'capture-failed', reason: 'permission-denied' });
+  assert.equal(f.notice.textContent, 'voice.permissionRequired');
+  assert.equal(f.events.some(e => e.type === 'relay-choir-command'), false);
+  f.tap();
+  f.advance(20_000);
+  f.ready();
+  assert.equal(f.notice.textContent, 'choir.captureTimedOut');
+  assert.equal(f.events.some(e => e.type === 'relay-choir-command'), false);
+  f.tap();
+  f.presence(false);
+  f.ready();
+  f.presence(true);
+  assert.equal(f.events.some(e => e.type === 'relay-choir-command'), false);
+  f.tap();
+  f.emit('relay-choir-message', { type: 'choir-consent-rejected' });
+  f.ready();
+  f.ready();
+  assert.deepEqual(f.events.filter(e => e.type === 'relay-choir-command').map(e => e.detail.type), ['choir-secondary-join']);
 });

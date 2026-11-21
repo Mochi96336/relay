@@ -106,19 +106,6 @@ window.addEventListener('relay-choir-availability', (event) => {
   // Media asked for while this module still waited to hear Choir is on.
   if (enabled && !wasEnabled) requestClaim();
 });
-window.addEventListener('relay-choir-message', (event) => {
-  const msg = event.detail;
-  if (msg?.type === 'choir-secondary-consent-status' && msg.status === 'revoked'
-    && msg.reason === 'connection-closed' && msg.secondaryId === window.relayParticipantId) {
-    closeMedia();
-    return;
-  }
-  if ((msg?.type === 'choir-secondary-consent-status'
-    && ['withdrawn', 'revoked'].includes(msg.status)
-    && msg.secondaryId === window.relayParticipantId)
-    || msg?.type === 'choir-consent-rejected') disconnect();
-});
-
 window.addEventListener('relay-choir-start-secondary-capture', async () => {
   // The singer's own tap starts capture even if this module has not heard
   // that Choir is on yet (it can load after presence announced it). Media is
@@ -131,6 +118,7 @@ window.addEventListener('relay-choir-start-secondary-capture', async () => {
   try {
     const sourceRate = await capture.prepare();
     if (currentPrepare !== prepareAttempt || !sourceRate) return;
+    notify('capture-ready');
     requestClaim();
   } catch (error) {
     if (currentPrepare !== prepareAttempt) return;

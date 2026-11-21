@@ -177,6 +177,35 @@ test('the singer offset moves the song delay and is clamped', () => {
   assert.equal(delay.delayTime.value, 0);
 });
 
+test('a later voice is offered only as far as the round trip, and that is what is applied', () => {
+  const h = harness();
+  h.mix.open(h.file('a.wav'));
+  // Detached: the whole range, the request as is.
+  h.mix.setOffsetMs(-500);
+  assert.equal(h.mix.minOffsetMs, -500);
+  assert.equal(h.mix.appliedOffsetMs, -500);
+
+  // 0.0437 s round trip: 43.7 ms can be taken back, 40 on the 5 ms grid.
+  const context = fakeContext({ baseLatency: 0, outputLatency: 0.0237 });
+  h.mix.connectInput(h.capture(context));
+  const [delay] = nodeOf(context, 'delay');
+  assert.equal(h.mix.minOffsetMs, -40);
+  assert.equal(h.mix.appliedOffsetMs, -40);
+  assert.equal(h.mix.offsetMs, -500, 'the stored request is kept');
+  assert.ok(Math.abs(delay.delayTime.value - 0.0037) < 1e-9);
+
+  // A longer route (headphones) lets more of the stored request through.
+  context.outputLatency = 0.2;
+  h.mix.connectInput(h.capture(context));
+  assert.equal(h.mix.minOffsetMs, -220);
+  assert.equal(h.mix.appliedOffsetMs, -220);
+  assert.ok(Math.abs(delay.delayTime.value - 0) < 1e-9);
+
+  // Earlier offsets are not bounded by the route.
+  h.mix.setOffsetMs(250);
+  assert.equal(h.mix.appliedOffsetMs, 250);
+});
+
 test('a replacement AudioContext gets a fresh element that resumes where the song was', async () => {
   const h = harness();
   h.mix.open(h.file('a.wav'));

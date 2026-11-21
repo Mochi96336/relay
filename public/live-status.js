@@ -34,6 +34,7 @@ if (
   let productStatusRefreshTimer = null;
   let productStatusFreshnessTimer = null;
   let latestProductStatus = null;
+  let joinedSecondMic = document.body?.dataset.choirGuest === 'joined';
   let productAuthorityFresh = false;
   let lastMicPresenceTelemetryAt = Number.NEGATIVE_INFINITY;
   let roomMicOwnerId = null;
@@ -361,7 +362,7 @@ if (
     if (!duet || mic?.state !== 'live') return copy;
     const partner = duet.secondaryNickname || t('voice.someone');
     const owner = mic.ownerNickname || t('voice.someone');
-    if (duet.secondaryId === window.relayParticipantId) {
+    if (joinedSecondMic && duet.secondaryId === window.relayParticipantId) {
       return { title: t('voice.duetYours', { name: owner }), detail: t(`voice.duet.self.${duet.state}`) };
     }
     if (isSelfOwner(status)) {
@@ -557,6 +558,13 @@ if (
 
   attentionButton.addEventListener('click', () => {
     window.dispatchEvent(new Event('relay-open-system'));
+  });
+
+  window.addEventListener('relay-choir-guest-state', ({ detail }) => {
+    const enabled = detail?.enabled === true;
+    if (joinedSecondMic === enabled) return;
+    joinedSecondMic = enabled;
+    if (productAuthorityFresh && latestProductStatus) render(latestProductStatus, false);
   });
 
   window.addEventListener('relay-locale-changed', () => {

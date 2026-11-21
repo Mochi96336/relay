@@ -159,10 +159,13 @@ test('an unanswered recovery near the end of its grace cannot extend microphone 
   f.join();
   f.accept();
   f.presence(false);
+  assert.equal(f.notice.textContent, 'choir.reconnectingMic');
   f.advance(14_000);
   f.presence(true);
   assert.equal(f.events.some(e => e.detail?.resume), true);
+  assert.equal(f.notice.textContent, 'choir.reconnectingMic');
   f.advance(1_000);
+  assert.equal(f.notice.textContent, 'choir.recoveryTimedOut');
   assert.equal(f.leave.hidden, true, 'original 15 s grace expired while the resume reply was pending');
   assert.equal(f.events.filter(e => e.type === 'relay-choir-stop-secondary-capture').length, 1);
   f.accept();

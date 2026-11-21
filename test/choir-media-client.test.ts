@@ -58,11 +58,20 @@ async function fixture({ direct = false, denyMicrophone = false } = {}) {
       for (const fn of listeners.get(event.type) ?? []) fn(event);
     },
   };
+  const probeRetires = { count: 0 };
+  const documentListeners = new Map<string, Array<() => void>>();
+  const pageDocument = {
+    visibilityState: 'visible',
+    addEventListener(type: string, fn: () => void) {
+      documentListeners.set(type, [...(documentListeners.get(type) ?? []), fn]);
+    },
+  };
   const source = (await readFile(new URL('../public/choir-media-client.js', import.meta.url), 'utf8'))
     .replace(/^import[^\n]*\n/gm, '');
   vm.runInNewContext(source, {
     window, WebSocket: FakeSocket, ChoirSecondaryCapture: Capture,
-    CalibrationProbePlayback: class { play() {} retire() {} },
+    CalibrationProbePlayback: class { play() {} retire() { probeRetires.count++; } retireRequest() {} },
+    document: pageDocument,
     wsUrl: ({ direct: viaDirect = false } = {}) => (viaDirect && direct ? 'wss://pi.test/ws' : 'wss://relay.test/ws'),
     sendParticipantAuthentication: (socket: FakeSocket) => { socket.send(JSON.stringify({ type: 'participant-authenticate' })); return true; },
     MIC_GAIN_KEY: 'mic-gain', storedNumber: () => null,
@@ -77,7 +86,15 @@ async function fixture({ direct = false, denyMicrophone = false } = {}) {
     && e.detail?.type === 'choir-secondary-media-claim-request').length;
   const connection = () => events.filter((e) => e.type === 'relay-choir-media-connection').map((e) => e.detail);
   return {
-    sockets, emit, claims, connection, events,
+    sockets, emit, claims, connection, events, probeRetires,
+    hide() {
+      pageDocument.visibilityState = 'hidden';
+      for (const fn of documentListeners.get('visibilitychange') ?? []) fn();
+    },
+    show() {
+      pageDocument.visibilityState = 'visible';
+      for (const fn of documentListeners.get('visibilitychange') ?? []) fn();
+    },
     advance(ms: number) {
       now += ms;
       for (const [id, timer] of [...timers]) if (timer.at <= now) { timers.delete(id); timer.run(); }
@@ -205,6 +222,24 @@ test('song alignment anchors start only after the current media socket is regist
   f.sockets.at(-1)!.open();
   sample();
   assert.equal(anchors(), 1, 'a replacement socket must register on its own');
+});
+
+test("going to the background silences B's scheduled test tone but keeps B's capture and media", async () => {
+  const f = await fixture();
+  await f.join();
+  const socket = f.sockets.at(-1)!;
+  socket.open();
+  socket.reply({ type: 'participant-authenticated', participantId: 'participant-b' });
+  socket.reply({ type: 'choir-secondary-media-registered', sampleRate: 48_000 });
+  const before = f.probeRetires.count;
+  f.show();
+  assert.equal(f.probeRetires.count, before, 'coming back to the foreground retires nothing');
+  f.hide();
+  assert.equal(f.probeRetires.count, before + 1);
+  f.emit('pagehide');
+  assert.equal(f.probeRetires.count, before + 2);
+  assert.equal(socket.readyState, 1, 'B stays connected and singing');
+  assert.equal(f.connection().some((c: any) => c.state === 'disconnected'), false);
 });
 
 test('media-ready connects B at once, and a repeat never replaces that socket', async () => {

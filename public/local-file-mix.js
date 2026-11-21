@@ -227,13 +227,23 @@ export class LocalFileMix extends EventTarget {
     sum.channelCountMode = 'explicit';
     sum.channelInterpretation = 'speakers';
     const output = limiter(context, -1.5, 0.1);
+    // The voice's limiter holds it back by its lookahead (6 ms in Chromium)
+    // before the sum. The song takes a compressor that never compresses
+    // (ratio 1) for the same lookahead, so zero offset means aligned in any
+    // browser whatever its lookahead is.
+    const songLatencyMatch = context.createDynamicsCompressor();
+    songLatencyMatch.threshold.value = 0;
+    songLatencyMatch.knee.value = 0;
+    songLatencyMatch.ratio.value = 1;
+    songLatencyMatch.attack.value = 0.001;
+    songLatencyMatch.release.value = 0.15;
 
-    song.connect(musicGain).connect(delay).connect(sum);
+    song.connect(musicGain).connect(songLatencyMatch).connect(delay).connect(sum);
     vocalGain.connect(vocalLimiter).connect(sum);
     sum.connect(output);
 
-    const graph = { context, url: this.#file.url, element, song, musicGain, delay, vocalGain,
-      vocalLimiter, sum, output, stream: null, onState: null };
+    const graph = { context, url: this.#file.url, element, song, musicGain, songLatencyMatch, delay,
+      vocalGain, vocalLimiter, sum, output, stream: null, onState: null };
     // Read the intent when the file has loaded, not when the graph was built:
     // a pause or seek made while it loaded is the newer request.
     element.addEventListener('loadedmetadata', () => {
@@ -283,7 +293,7 @@ export class LocalFileMix extends EventTarget {
     // A media element can feed only the context it was first bound to; a
     // later context gets a fresh element on the same file.
     try { graph.element.removeAttribute('src'); graph.element.load(); } catch {}
-    for (const node of [graph.song, graph.musicGain, graph.delay, graph.vocalGain,
+    for (const node of [graph.song, graph.musicGain, graph.songLatencyMatch, graph.delay, graph.vocalGain,
       graph.vocalLimiter, graph.sum, graph.output]) {
       try { node.disconnect(); } catch {}
     }

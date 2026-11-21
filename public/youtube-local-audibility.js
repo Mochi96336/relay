@@ -4,6 +4,14 @@ let reviewActive = false;
 let restoreAudible = false;
 let remuteTimer = null;
 
+// Only the room's song player (youtube.js, on #youtube-player). The second
+// singer's follower player (choir-follower.js) is built through the same
+// YT.Player and destroyed on leaving: it must never replace this reference.
+const ROOM_PLAYER_MOUNT = 'youtube-player';
+function isRoomPlayerTarget(target) {
+  return target === ROOM_PLAYER_MOUNT || target?.id === ROOM_PLAYER_MOUNT;
+}
+
 function clearRemuteTimer() {
   if (remuteTimer === null) return;
   clearInterval(remuteTimer);
@@ -55,6 +63,7 @@ function wrapPlayerConstructor() {
   if (typeof OriginalPlayer !== 'function' || OriginalPlayer.__relayLocalAudibilityWrapped) return;
 
   function RelayPlayer(target, options = {}) {
+    if (!isRoomPlayerTarget(target)) return new OriginalPlayer(target, options);
     const originalReady = options?.events?.onReady;
     const wrappedOptions = {
       ...options,

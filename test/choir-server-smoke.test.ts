@@ -568,7 +568,16 @@ test('a takeover pressed for the previous Mic owner leaves the current duet in p
     assert.ok(track?.bufferedSamples >= 960);
     assert.equal(duet.b.messages.some(m => m.status === 'revoked'), false);
 
-    next.send({ type: 'choir-secondary-join', commandId: 42,
+    for (const expectedSecondaryId of [null, participantIdForCapability('f'.repeat(64))]) {
+      const from = next.messages.length;
+      next.send({ type: 'choir-secondary-join', commandId: 40,
+        expectedPrimaryId: participantIdForCapability(CAPABILITY_A), expectedSecondaryId });
+      const reply = await waitForNewMessage(next, from, m => m.commandId === 40);
+      assert.equal(reply.reason, 'seat-changed', 'a newly occupied seat needs a fresh takeover press');
+      assert.equal(duet.b.messages.some(m => m.status === 'revoked'), false);
+    }
+
+    next.send({ type: 'choir-secondary-join', commandId: 42, expectedSecondaryId: participantIdForCapability(CAPABILITY_B),
       expectedPrimaryId: participantIdForCapability(CAPABILITY_A) });
     assert.equal((await next.waitFor(m => m.commandId === 42)).status, 'accepted');
   } finally {

@@ -150,6 +150,7 @@ window.addEventListener('relay-choir-message', (event) => {
   if (joinScope?.waitingForCapture) return;
   const message = event.detail;
   if (message?.type === 'choir-consent-rejected') {
+    if (joinScope && message.reason === 'seat-changed') noticeKey = 'choir.seatChanged';
     resetJoin();
     return;
   }
@@ -192,7 +193,9 @@ window.addEventListener('relay-choir-media-connection', (event) => {
     if (!canJoin()) { resetJoin(); return; }
     joinScope.waitingForCapture = false;
     noticeKey = null;
-    publishCommand('choir-secondary-join', { expectedPrimaryId: joinScope.primaryId });
+    publishCommand('choir-secondary-join', {
+      expectedPrimaryId: joinScope.primaryId, expectedSecondaryId: joinScope.secondaryId,
+    });
     clearTimeout(pendingTimer);
     pendingTimer = setTimeout(expireJoin, 8_000);
     render();
@@ -225,7 +228,10 @@ joinButton?.addEventListener('click', () => {
   // Start capture in the tap gesture. Keep the current singer in place
   // until this page has a working capture to offer.
   pending = true;
-  joinScope = { primaryId: session.micOwnerId, serverIncarnation: session.serverIncarnation, waitingForCapture: true };
+  joinScope = {
+    primaryId: session.micOwnerId, secondaryId: duetSecondaryId,
+    serverIncarnation: session.serverIncarnation, waitingForCapture: true,
+  };
   clearTimeout(pendingTimer);
   pendingTimer = setTimeout(expireJoin, 20_000);
   window.dispatchEvent(new Event('relay-choir-start-secondary-capture'));

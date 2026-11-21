@@ -131,6 +131,7 @@ function render() {
     myId: window.relayParticipantId,
     micOwnerId: roomMicOwnerId,
     roomLocalFile,
+    capturing: micActive,
   });
   const noticeOnly = surface === 'none' && duetNoticeKey !== null;
   panel.hidden = surface === 'none' && !noticeOnly;

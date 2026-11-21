@@ -75,13 +75,18 @@ function limiter(context, thresholdDb, releaseSeconds) {
  *   nobody does yet) and replaces the YouTube surface;
  * - 'standby': a file is open here but someone else holds the Mic, whose
  *   room song stays visible;
- * - 'observer': another phone is playing its local file;
+ * - 'observer': a local file is the room's song and this page does not hold
+ *   it: another phone, or another tab of this participant (`capturing` is
+ *   false), shows its title read-only;
  * - 'none'.
+ * A page that captures the Mic with no file open is not the room's local
+ * file even when the room still announces one (it is closing).
  */
-export function localFileSurface({ fileOpen, myId, micOwnerId, roomLocalFile }) {
+export function localFileSurface({ fileOpen, myId, micOwnerId, roomLocalFile, capturing = false }) {
   const othersMic = typeof micOwnerId === 'string' && micOwnerId !== myId;
   if (fileOpen) return othersMic ? 'standby' : 'owner';
-  return othersMic && roomLocalFile ? 'observer' : 'none';
+  if (!roomLocalFile || typeof micOwnerId !== 'string') return 'none';
+  return othersMic || !capturing ? 'observer' : 'none';
 }
 
 /** This page held the Mic and someone else holds it now: its local file is over. */

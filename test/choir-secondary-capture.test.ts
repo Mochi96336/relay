@@ -196,3 +196,49 @@ test('a HyperX-style 66% AudioContext capture clock cannot pass as valid seconda
     Object.assign(globalThis, { WebSocket: previous });
   }
 });
+
+test('an Opus chunk becomes the song anchor only once its encoded packet is sent', () => {
+  const previous = globalThis.WebSocket;
+  Object.assign(globalThis, { WebSocket: { OPEN: 1 } });
+  try {
+    const c = new ChoirSecondaryCapture();
+    const sent: ArrayBuffer[] = [];
+    const socket = { readyState: 1, bufferedAmount: 0, send: (packet: ArrayBuffer) => sent.push(packet) };
+    const graph = { returnBuffer: () => {}, dispose: () => {} };
+    const queued: number[] = [];
+    c.graph = graph;
+    c.context = { state: 'running', currentTime: 1, close: async () => {} };
+    c.socket = socket;
+    c.transport.bind(socket, { sampleRate: 48_000 });
+    c.rate = 48_000;
+    c.generation = 55;
+    c.opus = { encode: (_pcm: ArrayBuffer, _seq: number, first: number) => { queued.push(first); return true; },
+      reset() {}, close() {}, bitrate: 32_000 };
+    const encoded = (first: number, generation = 55) => {
+      const packet = new ArrayBuffer(28 + 40);
+      const view = new DataView(packet);
+      view.setUint16(0, 0x4c52, true); view.setUint8(2, 3); view.setUint8(3, 1);
+      view.setUint32(4, generation, true); view.setUint32(12, 960, true); view.setFloat64(16, first, true);
+      return packet;
+    };
+    const epoch = c.epoch;
+    const capture = () => c.onCapture({ data: { type: 'pcm', buffer: new Int16Array(960).buffer,
+      capturedAtContextTime: 0.98 } }, graph, epoch);
+    capture();
+    assert.deepEqual(queued, [0]);
+    assert.equal(c.anchorFor(performance.now()), null, 'queued for encoding is not yet sent');
+    socket.bufferedAmount = 300_000;
+    assert.equal(c.sendOpusPacket(encoded(0)), false);
+    assert.equal(c.anchorFor(performance.now()), null, 'a packet the socket refused anchors nothing');
+    capture();
+    socket.bufferedAmount = 0;
+    assert.equal(c.sendOpusPacket(encoded(960)), true);
+    assert.equal(c.anchorFor(performance.now())?.sampleIndex, 960);
+    capture();
+    assert.equal(c.sendOpusPacket(encoded(1920, 54)), true);
+    assert.equal(c.anchorFor(performance.now())?.sampleIndex, 960, 'another capture generation never anchors');
+    c.stop();
+  } finally {
+    Object.assign(globalThis, { WebSocket: previous });
+  }
+});

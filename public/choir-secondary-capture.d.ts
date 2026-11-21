@@ -33,5 +33,6 @@ export class ChoirSecondaryCapture {
   attach(socket: any, sampleRate: number): boolean;
   onCapture(event: { data: unknown }, graph: any, epoch: number): void;
   sendPacket(packet: ArrayBuffer): boolean;
+  sendOpusPacket(packet: ArrayBuffer): boolean;
   stop(): void;
 }

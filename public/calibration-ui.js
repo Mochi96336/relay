@@ -31,6 +31,7 @@ function initialize() {
   // B pressed Realign and the room has not yet said the test tone started.
   let secondMicRequestPending = null;
   let joinedSecondMic = document.body?.dataset.choirGuest === 'joined';
+  let secondMicReconnecting = false;
   let nextSecondMicCommandId = 1;
   let secondMicTimer = null;
   let secondMicError = null;
@@ -78,7 +79,7 @@ function initialize() {
    */
   function renderSecondMic() {
     const duet = latestProductStatus.room.duet;
-    const fresh = productAuthority?.authorityFresh === true;
+    const fresh = productAuthority?.authorityFresh === true && !secondMicReconnecting;
     setText(activeTimingValue, fresh ? formatTimingValueMs(duet.lagMs) ?? '—' : '—');
     setHidden(false);
     const busy = duet.realigning === true || secondMicRequestPending !== null;
@@ -248,9 +249,11 @@ function initialize() {
 
   window.addEventListener('relay-choir-guest-state', ({ detail }) => {
     const enabled = detail?.enabled === true;
-    if (joinedSecondMic === enabled) return;
+    const reconnecting = detail?.reconnecting === true;
+    if (joinedSecondMic === enabled && secondMicReconnecting === reconnecting) return;
     joinedSecondMic = enabled;
-    if (!enabled) settleSecondMic();
+    secondMicReconnecting = reconnecting;
+    if (!enabled || reconnecting) settleSecondMic();
     render();
   });
 
@@ -303,6 +306,7 @@ function initialize() {
   setHidden(true);
   setDisabled(true);
   render();
+  window.dispatchEvent(new Event('relay-request-choir-guest-state'));
 }
 
 initialize();

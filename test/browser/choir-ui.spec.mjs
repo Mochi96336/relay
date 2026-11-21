@@ -238,13 +238,24 @@ test('B survives a brief control disconnect and resumes without another micropho
   await enable(page);
   await page.locator('#choir-invite-open').click();
   await consent(page, accepted);
-  await page.evaluate(() => {
+  await page.evaluate(async () => {
+    await import('/calibration-ui.js');
+    window.__fixtureDuet = { secondaryId: 'singerB', state: 'singing', lagMs: 85 };
+    window.dispatchEvent(new CustomEvent('relay-product-status', { detail: {
+      room: { mic: { ownerId: 'owner', state: 'live' }, duet: window.__fixtureDuet },
+    } }));
     window.__captureStops = 0;
     window.addEventListener('relay-choir-stop-secondary-capture', () => window.__captureStops++);
   });
+  const realign = page.locator('#calibrate-timing');
+  const timingValue = page.locator('#timing-active-value');
+  await expect(realign).toBeEnabled();
+  await expect(timingValue).toHaveText('+85 ms');
   const notice = page.locator('#choir-capture-notice');
   await presence(page, false);
   await expect(notice).toBeVisible();
+  await expect(realign).toBeDisabled();
+  await expect(timingValue).toHaveText('—');
   await expect(page.locator('#choir-withdraw')).toBeVisible();
   await expect(page.locator('#choir-invite-open')).toBeHidden();
   expect(await page.evaluate(() => window.__captureStops)).toBe(0);
@@ -253,8 +264,12 @@ test('B survives a brief control disconnect and resumes without another micropho
     type: 'choir-secondary-join', resume: true, expectedPrimaryId: 'owner',
   });
   await expect(notice).toBeVisible();
+  await expect(realign).toBeDisabled();
+  await expect(timingValue).toHaveText('—');
   await consent(page, accepted);
   await expect(notice).toBeHidden();
+  await expect(realign).toBeEnabled();
+  await expect(timingValue).toHaveText('+85 ms');
   await expect(page.locator('#choir-withdraw')).toBeVisible();
   expect(await page.evaluate(() => window.__captureStops)).toBe(0);
 });

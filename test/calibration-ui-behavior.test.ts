@@ -494,3 +494,27 @@ test("the second Mic's Realign shows B's own value and replays only B's test ton
   ui.emit('relay-choir-guest-state', { enabled: true });
   assert.equal(ui.button.disabled, false, 'the previous seat has no pending request here');
 });
+
+test('second Mic Realign waits until the control reconnect is admitted', () => {
+  const ui = harness();
+  ui.emit('relay-product-status', { room: {
+    mic: { ownerId: 'other', state: 'live' },
+    duet: { secondaryId: 'self', lagMs: 85, realigning: false },
+  } });
+  ui.emit('relay-choir-guest-state', { enabled: true });
+  ui.button.click();
+  const commands = ui.dispatched.filter(event => event.type === 'relay-choir-command').length;
+  assert.equal(commands, 1);
+
+  ui.emit('relay-choir-guest-state', { enabled: true, reconnecting: true });
+  assert.equal(ui.button.hidden, false);
+  assert.equal(ui.button.disabled, true);
+  assert.equal(ui.status.textContent, '重新連線中…');
+  assert.equal(ui.value.textContent, '—');
+  ui.button.click();
+  assert.equal(ui.dispatched.filter(event => event.type === 'relay-choir-command').length, commands);
+
+  ui.emit('relay-choir-guest-state', { enabled: true, reconnecting: false });
+  assert.equal(ui.button.disabled, false, 'the interrupted calibration request is no longer pending');
+  assert.equal(ui.value.textContent, '+85 ms');
+});

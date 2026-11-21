@@ -165,6 +165,10 @@ test('OPEN socket loses timing authority after six missed polls and a fresh snap
     get detail() { return this.init.detail; }
   }
 
+  class Event {
+    constructor(public type: string) {}
+  }
+
   const document = new FakeDocument();
   // index.html's Realign action: the button, its value and its status line.
   document.attach(new FakeElement({ id: 'calibrate-timing' }));
@@ -183,6 +187,7 @@ test('OPEN socket loses timing authority after six missed polls and a fresh snap
     URLSearchParams,
     WebSocket: FakeWebSocket,
     CustomEvent,
+    Event,
     Date: { now: () => clock.now },
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,

@@ -128,10 +128,14 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
   let roomMicActive = false;
   let secondaryCapturePending = false;
   let secondaryJoined = false;
+  // Who holds the second Mic in the room, from live-status: tabs of one
+  // browser share this identity and usually one speaker.
+  let roomSecondaryId = null;
   let reviewNoticeKind = null;
 
   function phoneOwnsMic() {
-    return localMicActive || roomMicActive || secondaryCapturePending || secondaryJoined;
+    return localMicActive || roomMicActive || secondaryCapturePending || secondaryJoined
+      || (roomSecondaryId !== null && roomSecondaryId === window.relayParticipantId);
   }
 
   function noticeCopy() {
@@ -367,6 +371,7 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
   });
   window.addEventListener('relay-choir-guest-state', (event) => {
     secondaryJoined = event.detail?.enabled === true;
+    if (typeof event.detail?.captureRequested === 'boolean') secondaryCapturePending = event.detail.captureRequested;
     reconcileMicFeedbackGuard();
   });
   window.dispatchEvent(new Event('relay-request-choir-guest-state'));
@@ -383,6 +388,12 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
 
   window.addEventListener('relay-microphone-ended', reconcileMicFeedbackGuard);
 
+  window.addEventListener('relay-room-second-mic', ({ detail }) => {
+    roomSecondaryId = typeof detail?.secondaryId === 'string' ? detail.secondaryId : null;
+    reconcileMicFeedbackGuard();
+  });
+  window.dispatchEvent(new Event('relay-request-room-second-mic'));
+
   window.addEventListener('relay-session-status', (event) => {
     const participantId = typeof window.relayParticipantId === 'string'
       ? window.relayParticipantId
@@ -397,6 +408,7 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
   });
 
   Promise.resolve(window.relayIdentityReady).then(() => {
+    reconcileMicFeedbackGuard();
     window.dispatchEvent(new Event('relay-request-session-status'));
   });
 

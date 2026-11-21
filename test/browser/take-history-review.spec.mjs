@@ -296,3 +296,27 @@ test('Take History review-first sheet stays readable on desktop', async ({ page 
 
   await page.screenshot({ path: 'screenshots/take-history-review-desktop.png' });
 });
+
+test('a sibling tab pauses Take review while this browser holds the second Mic', async ({ page }) => {
+  await installTakeHistoryHarness(page);
+  await publishHistory(page, initialHistory());
+  const result = await page.evaluate(async () => {
+    const player = document.querySelector('#recording-player');
+    const status = secondaryId => window.dispatchEvent(new CustomEvent('relay-room-second-mic', {
+      detail: { secondaryId: secondaryId ?? null },
+    }));
+    window.relayParticipantId = 'singer-b';
+    status('other');
+    await player.play();
+    const listenerPlaying = !player.paused;
+    status('singer-b');
+    const interrupted = player.paused;
+    await player.play();
+    const blocked = player.paused;
+    status(null);
+    const stayedPaused = player.paused;
+    await player.play();
+    return { listenerPlaying, interrupted, blocked, stayedPaused, resumed: !player.paused };
+  });
+  expect(result).toEqual({ listenerPlaying: true, interrupted: true, blocked: true, stayedPaused: true, resumed: true });
+});

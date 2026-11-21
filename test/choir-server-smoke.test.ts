@@ -496,6 +496,63 @@ test('without Content, B is placed by its YouTube time against the Robot', async
   }
 });
 
+test("B's gain survives a media reconnect within the seat; the next singer starts from the default", async () => {
+  const duet = await startDuet();
+  const { b } = duet;
+  try {
+    await duet.join();
+    await duet.claimMedia();
+    const pcm = Buffer.from(new Int16Array(960).fill(3_000).buffer);
+    const sing = (media: any) => {
+      let sequence = 0;
+      const timer = setInterval(() => {
+        media.sendBinary(encodeAudioPacket({ source: 'mic', generation: 7, firstSampleIndex: 960 * sequence, sequence, pcm }));
+        sequence += 1;
+      }, 20);
+      return () => clearInterval(timer);
+    };
+    let stop = sing(duet.bMedia);
+    await duet.waitForSecondary((d) => d?.bufferedSamples > 0, 4_000);
+    b.send({ type: 'choir-secondary-gain', micGainDb: 7 });
+    assert.equal((await duet.waitForSecondary((d) => d?.gainDb === 7))?.gainDb, 7);
+    stop();
+
+    // Only the media socket drops; the seat (control socket) stays. Claim
+    // again once the server has noticed and asks for media afresh.
+    const askedFrom = b.messages.length;
+    duet.bMedia.close();
+    await waitForNewMessage(b, askedFrom, (m) => m.type === 'choir-media-ready', 6_000);
+    const media = await duet.connect();
+    await duet.authenticate(media, CAPABILITY_B, 'B');
+    const claimFrom = b.messages.length;
+    b.send({ type: 'choir-secondary-media-claim-request' });
+    const claim = await waitForNewMessage(b, claimFrom, (m) => m.type === 'choir-secondary-media-claim');
+    const registerFrom = media.messages.length;
+    media.send({ type: 'choir-secondary-media-register', claimToken: claim.claimToken, sampleRate: 48_000, packetVersion: 2 });
+    const registered = await waitForNewMessage(media, registerFrom, (m) =>
+      m.type === 'choir-secondary-media-registered' || m.type === 'choir-media-rejected');
+    assert.equal(registered.type, 'choir-secondary-media-registered', JSON.stringify(registered));
+    stop = sing(media);
+    const kept = await duet.waitForSecondary((d) => d?.bufferedSamples > 0 && Number.isFinite(d?.gainDb), 6_000);
+    stop();
+    assert.equal(kept?.gainDb, 7, `a registration without micGainDb keeps the seat's gain: ${JSON.stringify(kept)}`);
+
+    // Another singer takes the seat and registers without a stored gain.
+    const c = await duet.connect();
+    const cMedia = await duet.connect();
+    await duet.authenticate(c, 'e'.repeat(64), 'C');
+    await duet.authenticate(cMedia, 'e'.repeat(64), 'C');
+    await duet.join(c);
+    await duet.claimMedia({}, c, cMedia);
+    stop = sing(cMedia);
+    const next = await duet.waitForSecondary((d) => d?.bufferedSamples > 0 && d?.gainDb !== 7, 6_000);
+    stop();
+    assert.equal(next?.gainDb, 24, `the next singer starts from the default: ${JSON.stringify(next)}`);
+  } finally {
+    await duet.close();
+  }
+});
+
 test('rapid second Mic rejoin ignores replies for earlier presses', async () => {
   const duet = await startDuet();
   try {

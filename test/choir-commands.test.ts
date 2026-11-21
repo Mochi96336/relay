@@ -6,6 +6,8 @@ test('each second Mic command carries only its own fields', () => {
   const extra = { capability: 'secret', participantId: 'someone-else', seat: 'primary' };
   assert.deepEqual(choirCommandMessage({ type: 'choir-secondary-join', ...extra }),
     { type: 'choir-secondary-join' });
+  assert.deepEqual(choirCommandMessage({ type: 'choir-secondary-join', expectedPrimaryId: 'a', ...extra }),
+    { type: 'choir-secondary-join', expectedPrimaryId: 'a' });
   assert.deepEqual(choirCommandMessage({ type: 'choir-secondary-join', resume: true, expectedPrimaryId: 'a', ...extra }),
     { type: 'choir-secondary-join', resume: true, expectedPrimaryId: 'a' });
   assert.deepEqual(choirCommandMessage({ type: 'choir-secondary-gain', micGainDb: 12, ...extra }),

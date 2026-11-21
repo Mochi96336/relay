@@ -548,3 +548,30 @@ test('moving the second Mic to another tab of the same singer requests fresh aud
     await duet.close();
   }
 });
+
+test('a takeover pressed for the previous Mic owner leaves the current duet in place', async () => {
+  const duet = await startDuet();
+  try {
+    await duet.join();
+    await duet.claimMedia();
+    const next = await duet.connect();
+    await duet.authenticate(next, 'e'.repeat(64), 'Next');
+    next.send({ type: 'choir-secondary-join', commandId: 41,
+      expectedPrimaryId: participantIdForCapability('f'.repeat(64)) });
+    const stale = await next.waitFor(m => m.commandId === 41);
+    assert.equal(stale.type, 'choir-consent-rejected');
+    duet.bMedia.sendBinary(encodeAudioPacket({
+      source: 'mic', generation: 5, sequence: 0, firstSampleIndex: 0,
+      pcm: Buffer.from(new Int16Array(960).fill(900).buffer),
+    }));
+    const track = await duet.waitForSecondary(d => d?.bufferedSamples >= 960);
+    assert.ok(track?.bufferedSamples >= 960);
+    assert.equal(duet.b.messages.some(m => m.status === 'revoked'), false);
+
+    next.send({ type: 'choir-secondary-join', commandId: 42,
+      expectedPrimaryId: participantIdForCapability(CAPABILITY_A) });
+    assert.equal((await next.waitFor(m => m.commandId === 42)).status, 'accepted');
+  } finally {
+    await duet.close();
+  }
+});

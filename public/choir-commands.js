@@ -8,8 +8,10 @@ const reason = (value, max) => (typeof value === 'string' ? value.slice(0, max) 
  * and B's actual identity.
  */
 const COMMANDS = new Map([
-  ['choir-secondary-join', (p) => (p.resume === true
-    ? { resume: true, expectedPrimaryId: p.expectedPrimaryId } : {})],
+  ['choir-secondary-join', (p) => ({
+    ...(p.resume === true ? { resume: true } : {}),
+    ...(typeof p.expectedPrimaryId === 'string' ? { expectedPrimaryId: p.expectedPrimaryId } : {}),
+  })],
   ['choir-secondary-withdraw', (p) => ({ reason: reason(p.reason, 80) })],
   ['choir-secondary-media-claim-request', () => ({})],
   ['choir-secondary-gain', (p) => ({ micGainDb: p.micGainDb })],

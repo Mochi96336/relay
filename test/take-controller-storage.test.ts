@@ -107,7 +107,7 @@ test('TakeController publishes product-shaped finalized history beside lifecycle
     assert.equal(productEntry.songVideoId, null);
     assert.deepEqual(
       Object.keys(productEntry).sort(),
-      ['artifact', 'endedAtMs', 'qualityVerdict', 'recovered', 'songVideoId', 'takeId'].sort(),
+      ['artifact', 'endedAtMs', 'localFileTitle', 'qualityVerdict', 'recovered', 'songVideoId', 'takeId'].sort(),
       'browser history must be a deliberate product DTO rather than the durable metadata schema',
     );
     assert.deepEqual(Object.keys(productEntry.artifact).sort(), ['durationMs', 'url'].sort());
@@ -196,4 +196,53 @@ test('status delivery reads cached Take history instead of scanning storage', as
   const pruneEnd = source.indexOf('\n  private ', pruneStart + 1);
   assert.doesNotMatch(source.slice(pruneStart, pruneEnd), /refreshHistoryCache\(\)|library\.list\(\)/,
     'the refresh after every recording must not block the live room on a synchronous rescan');
+});
+
+test('a local file heard during the Take is kept through a restart; one left silent is not', async () => {
+  const { TakeLibrary } = await import('../src/take-library.js');
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-controller-local-file-'));
+  try {
+    let resolveReady: (() => void) | null = null;
+    let ready = new Promise<void>((resolve) => { resolveReady = resolve; });
+    const controller = new TakeController({
+      directory,
+      sampleRate: 48_000,
+      storagePolicy: { maxBytes: 0, maxAgeMs: 0, minFreeBytes: 0 },
+      onStorageError: (error) => { throw error; },
+      onChange: (status) => { if (status.lifecycle === 'ready') resolveReady?.(); },
+    });
+    const loaded = { ...VOICE_ONLY_SONG, localFile: { title: 'audit', heard: false } };
+
+    // Loaded at Start, started during the recording.
+    const heard = controller.start('participant-a', loaded, BOUNDARY, 1_000);
+    assert.equal(heard.ok, true);
+    if (!heard.ok) return;
+    assert.equal(controller.noteLocalFileHeard('audit'), true);
+    controller.stop(heard.takeId, 'participant-a', BOUNDARY, 'user', 1_100);
+    await ready;
+    await settleStorageMaintenance(controller);
+    assert.equal(controller.noteLocalFileHeard('audit'), false, 'no Take is recording');
+
+    // Loaded and never played.
+    ready = new Promise<void>((resolve) => { resolveReady = resolve; });
+    const silent = controller.start('participant-a', loaded, BOUNDARY, 2_000);
+    assert.equal(silent.ok, true);
+    if (!silent.ok) return;
+    controller.stop(silent.takeId, 'participant-a', BOUNDARY, 'user', 2_100);
+    await ready;
+    await settleStorageMaintenance(controller);
+
+    const byId = new Map(controller.statusPayload().history.map((entry) => [entry.takeId, entry]));
+    assert.equal(byId.get(heard.takeId)?.localFileTitle, 'audit');
+    assert.equal(byId.get(silent.takeId)?.localFileTitle, null);
+
+    const library = new TakeLibrary({ directory });
+    library.prepare();
+    const reread = new Map(library.list().map((entry) => [entry.takeId, entry]));
+    assert.deepEqual(reread.get(heard.takeId)?.song?.localFile, { title: 'audit', heard: true });
+    assert.deepEqual(reread.get(silent.takeId)?.song?.localFile, { title: 'audit', heard: false });
+    assert.equal(reread.get(heard.takeId)?.song?.videoId, null, 'no videoId is made up for a local file');
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

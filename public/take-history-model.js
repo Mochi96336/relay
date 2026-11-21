@@ -9,6 +9,9 @@ export function validHistoryEntry(entry) {
     && typeof entry.takeId === 'string'
     && Number.isFinite(Number(entry.endedAtMs))
     && (entry.songVideoId === null || typeof entry.songVideoId === 'string')
+    // Absent from servers that predate local file Takes.
+    && (entry.localFileTitle === undefined || entry.localFileTitle === null
+      || typeof entry.localFileTitle === 'string')
     && entry.artifact
     && typeof entry.artifact.url === 'string'
     && Number.isFinite(Number(entry.artifact.durationMs))
@@ -33,6 +36,9 @@ function historyEntryFromCurrentTake(take) {
     endedAtMs: Number(take.endedAtMs),
     songVideoId: typeof take.song?.videoId === 'string' && take.song.videoId
       ? take.song.videoId
+      : null,
+    localFileTitle: take.song?.localFile?.heard === true
+      ? (typeof take.song.localFile.title === 'string' ? take.song.localFile.title : '')
       : null,
     artifact: {
       url: take.artifact.url,
@@ -70,13 +76,19 @@ export function groupHistory(entries) {
     const videoId = typeof entry.songVideoId === 'string' && entry.songVideoId
       ? entry.songVideoId
       : null;
-    const kind = entry.recovered === true && !videoId
-      ? 'recovered'
-      : videoId
-        ? 'song'
-        : 'voice';
-    const key = kind === 'song' ? `song:${videoId}` : kind;
-    if (!groups.has(key)) groups.set(key, { key, kind, videoId, entries: [] });
+    // A local file heard in the Take; '' is one without a name.
+    const localFileTitle = !videoId && typeof entry.localFileTitle === 'string'
+      ? entry.localFileTitle
+      : null;
+    const kind = videoId
+      ? 'song'
+      : localFileTitle !== null
+        ? 'localFile'
+        : entry.recovered === true
+          ? 'recovered'
+          : 'voice';
+    const key = kind === 'song' ? `song:${videoId}` : kind === 'localFile' ? `localFile:${localFileTitle}` : kind;
+    if (!groups.has(key)) groups.set(key, { key, kind, videoId, localFileTitle, entries: [] });
     groups.get(key).entries.push(entry);
   }
   return [...groups.values()];

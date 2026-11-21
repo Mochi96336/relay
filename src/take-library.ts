@@ -14,6 +14,7 @@ import path from 'node:path';
 
 import { durableRename, durableRenameSync } from './file-durability.js';
 import { normalizePersistedTakeRichFields } from './take-metadata-validation.js';
+import { cloneSong } from './take-session.js';
 import type {
   TakeArtifact,
   TakeMixSampleRange,
@@ -308,7 +309,7 @@ function metadataMatchesArtifact(metadata: PersistedTakeLibraryEntry, artifact: 
 function cloneEntry(entry: TakeLibraryEntry): TakeLibraryEntry {
   return {
     ...entry,
-    song: entry.song ? { ...entry.song } : null,
+    song: entry.song ? cloneSong(entry.song) : null,
     artifact: { ...entry.artifact },
     mixSampleRange: entry.mixSampleRange ? { ...entry.mixSampleRange } : null,
     quality: entry.quality ? structuredClone(entry.quality) : null,
@@ -324,7 +325,7 @@ function entryFromTake(take: TakeRecord, artifact: TakeArtifact): TakeLibraryEnt
     startedByParticipantId: take.startedByParticipantId,
     stoppedByParticipantId: take.stoppedByParticipantId,
     stopReason: take.stopReason,
-    song: { ...take.song },
+    song: cloneSong(take.song),
     artifact: { ...artifact },
     mixSampleRange: take.mixSampleRange ? { ...take.mixSampleRange } : null,
     quality: take.quality ? structuredClone(take.quality) : null,

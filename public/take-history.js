@@ -173,6 +173,11 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
   function groupLabel(group) {
     if (group.kind === 'song') return t('takeHistory.group.song');
     if (group.kind === 'voice') return t('takeHistory.group.voice');
+    if (group.kind === 'localFile') {
+      return group.localFileTitle
+        ? t('takeHistory.group.localFile', { title: group.localFileTitle })
+        : t('takeHistory.group.localFileUntitled');
+    }
     return t('takeHistory.group.recovered');
   }
 

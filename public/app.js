@@ -951,7 +951,10 @@ async function connectPublisherSocket(
     premixed: publisherSession.graph?.premixed === true,
   };
   micBitratePolicy.floor = registration.premixed ? 64000 : 32000;
-  if (registration.premixed) registration.localFileTitle = localFileMix.title;
+  if (registration.premixed) {
+    registration.localFileTitle = localFileMix.title;
+    registration.localFilePlaying = localFileMix.playing;
+  }
   // This device's own last gain, so a new owner does not start from the
   // previous singer's.
   const rememberedGainDb = storedNumber(MIC_GAIN_KEY, 0, 40);
@@ -1091,10 +1094,14 @@ function syncLocalFileMode() {
 localFileMix.addEventListener('change', (event) => {
   const kind = event.detail?.kind;
   if (kind === 'mode') syncLocalFileMode();
-  // Another file on the same premixed capture: only its name changes for the room.
-  if (kind === 'file' && publisherSession.graph?.premixed && publisherSession.socket?.readyState === WebSocket.OPEN) {
+  // Another file on the same premixed capture changes only its name for the
+  // room; play and pause tell Relay whether a Take hears it.
+  const reported = kind === 'file' || kind === 'play' || kind === 'pause' || kind === 'ended';
+  if (reported && publisherSession.graph?.premixed && publisherSession.socket?.readyState === WebSocket.OPEN) {
     try {
-      publisherSession.socket.send(JSON.stringify({ type: 'set-local-file', title: localFileMix.title }));
+      publisherSession.socket.send(JSON.stringify({
+        type: 'set-local-file', title: localFileMix.title, playing: localFileMix.playing,
+      }));
     } catch {}
   }
 });

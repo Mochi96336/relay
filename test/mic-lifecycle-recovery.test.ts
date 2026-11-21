@@ -102,8 +102,8 @@ test('room Mic ownership force-mutes Listen in sibling tabs that share the parti
 
   assert.match(listen, /let roomMicForcedMuted = false/);
   assert.match(listen, /userMuted[\s\S]*micForcedMuted[\s\S]*roomMicForcedMuted[\s\S]*playbackForcedMuted[\s\S]*takeReviewForcedMuted/);
-  assert.match(listen, /if \(micForcedMuted \|\| roomMicForcedMuted\) return 'mic'/);
-  assert.match(listen, /function restoreAfterMic[\s\S]*if \(roomMicForcedMuted\)[\s\S]*reconcile\('mic-owned'\)/,
+  assert.match(listen, /if \(micForcedMuted \|\| roomMicForcedMuted \|\| secondaryMicForcedMuted\) return 'mic'/);
+  assert.match(listen, /function restoreAfterMic[\s\S]*if \(roomMicForcedMuted \|\| secondaryMicForcedMuted\)[\s\S]*reconcile\('mic-owned'\)/,
     'a local terminal event must not unmute while another tab still owns the room Mic');
   assert.match(listen, /setRoomMicForcedMute\(Boolean\(participantId && ownerId === participantId\)\)/,
     'all tabs with the owner participant identity must follow server Mic ownership');
@@ -111,7 +111,9 @@ test('room Mic ownership force-mutes Listen in sibling tabs that share the parti
   const replayAt = listen.indexOf("window.dispatchEvent(new Event('relay-request-session-status'))", sessionListenerAt);
   assert.ok(sessionListenerAt >= 0 && replayAt > sessionListenerAt,
     'Listen must subscribe before requesting the initial authoritative replay');
-  assert.match(listen, /if \(micForcedMuted \|\| roomMicForcedMuted \|\| playbackForcedMuted \|\| takeReviewForcedMuted\) return/,
+  assert.match(listen, /function forcedMuteReason\(\) \{[\s\S]*?playbackForcedMuted[\s\S]*?takeReviewForcedMuted[\s\S]*?\n  \}/,
+    'every forced mute has a reason');
+  assert.match(listen, /toggle\.addEventListener\('click'[\s\S]*?if \(forcedMuteReason\(\) !== null\) return/,
     'forced room ownership cannot be bypassed by the Listen toggle');
 });
 

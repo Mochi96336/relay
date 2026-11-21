@@ -164,6 +164,8 @@ export class ChoirRuntime {
       participantConnected: deps.participantConnected,
       socketOpen: open,
       ended: (join, reason) => {
+        // The next seat, even the same singer's other tab, starts from its own default.
+        this.secondaryGainDb = null;
         this.claims.disconnected(join.socket as RelaySocket);
         this.ingress.endSeat();
         session.detachSecondaryMic();
@@ -436,7 +438,11 @@ export class ChoirRuntime {
       participant: deps.logLabel(socket.participantId),
       sampleRate: rate, codec: version === 3 ? 'opus' : 'pcm',
     });
-    this.secondaryGainDb = deps.requestedGainDb(payload.micGainDb);
+    // A media reconnect within the same seat keeps the gain the singer set.
+    // Their page reads the registration value from device storage, which can
+    // be unavailable; the seat's own value then still holds.
+    const requestedGainDb = deps.requestedGainDb(payload.micGainDb);
+    if (requestedGainDb !== null) this.secondaryGainDb = requestedGainDb;
     if (this.secondaryGainDb !== null) deps.session.setSecondaryMicGainDb(this.secondaryGainDb);
     deps.send(socket, { type: 'choir-secondary-media-registered', packetVersion: version, sampleRate: rate });
   }

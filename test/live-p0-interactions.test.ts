@@ -40,7 +40,9 @@ test('recorder serializes Start while the first command is awaiting server state
     /if \(startCommandPending \|\| !recordingState\(\)\.canStart\) return;/,
   );
   assert.match(source, /startCommandPending = true;/);
-  assert.match(source, /if \(message\.command === 'start'\) startCommandPending = false;/);
+  // A rejected Start settles the pending command (and its confirmation timer).
+  assert.match(source, /if \(message\.command === 'start'\) settleStart\(\);/);
+  assert.match(source, /function settleStart\(\) \{[\s\S]*?startCommandPending = false;/);
 });
 
 test('recording presentation keeps hidden controls authoritative and Stop on the action edge', async () => {

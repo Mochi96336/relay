@@ -322,3 +322,25 @@ test('a replayed ready snapshot keeps the older Take being reviewed; a new Take 
   await publishHistory(page, history, ready(newest));
   await expect(page.locator('[data-take-id="recording-0720"]')).toHaveAttribute('aria-pressed', 'true');
 });
+
+test('a replayed snapshot keeps keyboard focus on the same Take and never takes it from elsewhere', async ({ page }) => {
+  await installTakeHistoryHarness(page);
+  const history = initialHistory();
+  const ready = {
+    lifecycle: 'ready',
+    take: { takeId: history[0].takeId, endedAtMs: history[0].endedAtMs, song: null, artifact: history[0].artifact, quality: { verdict: 'clean' } },
+  };
+  await publishHistory(page, history, ready);
+  await openHistory(page);
+  await page.locator('[data-take-id="recording-0705"]').click();
+  await page.locator('[data-take-id="recording-0705"]').focus();
+
+  // The recorder reconnects: the list is rebuilt from the same snapshot.
+  await publishHistory(page, history, ready);
+  await expect(page.locator('[data-take-id="recording-0705"]')).toBeFocused();
+  await expect(page.locator('[data-take-id="recording-0705"]')).toHaveAttribute('aria-pressed', 'true');
+
+  await page.locator('#close-take-history').focus();
+  await publishHistory(page, history, ready);
+  await expect(page.locator('#close-take-history')).toBeFocused();
+});

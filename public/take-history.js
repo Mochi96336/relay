@@ -290,7 +290,18 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
     if (!historyEntries.some((entry) => entry.takeId === selectedTakeId)) {
       selectedTakeId = historyEntries[0]?.takeId ?? null;
     }
+    // The list is rebuilt on every snapshot (a reconnect replays the same
+    // one): a Take button that had focus hands it to its replacement.
+    const focused = document.activeElement;
+    const focusedTakeId = focused instanceof HTMLElement && groupsNode.contains(focused)
+      ? focused.dataset.takeId ?? null
+      : null;
     groupsNode.replaceChildren(...groupHistory(historyEntries).map(createGroup));
+    if (focusedTakeId !== null) {
+      const replacement = [...groupsNode.querySelectorAll('[data-take-id]')]
+        .find((button) => button.dataset.takeId === focusedTakeId);
+      replacement?.focus({ preventScroll: true });
+    }
     renderSelection();
     renderRecent();
   }

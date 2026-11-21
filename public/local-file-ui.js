@@ -195,7 +195,12 @@ localFileMix.addEventListener('change', (event) => {
   const kind = event.detail?.kind;
   if (kind === 'attached') syncVocalGain();
   if (kind === 'play-failed') transientNote = t('localFile.playFailed');
-  if (kind === 'mode' || kind === 'file') transientNote = null;
+  if (kind === 'mode' || kind === 'file') {
+    transientNote = null;
+    // A file opened while this page does not hold the Mic belongs to no
+    // earlier singing here: the next singer taking the Mic leaves it ready.
+    if (localFileMix.active && roomMicOwnerId !== window.relayParticipantId) lastMicOwnerId = null;
+  }
   render();
 });
 

@@ -172,6 +172,22 @@ test('a replacement AudioContext gets a fresh element that resumes where the son
   h.mix.pause();
 });
 
+test('a pause or seek made while the replacement element loads wins over the rebuild', async () => {
+  const h = harness();
+  h.mix.open(h.file('a.wav'));
+  h.mix.connectInput(h.capture(fakeContext()));
+  await h.mix.play();
+  h.elements[0].currentTime = 2;
+
+  h.mix.connectInput(h.capture(fakeContext()));
+  h.mix.pause();
+  h.mix.seek(6);
+  h.elements[1].emit('loadedmetadata');
+  await Promise.resolve();
+  assert.equal(h.elements[1].paused, true, 'the pause made during loading holds');
+  assert.equal(h.elements[1].currentTime, 6, 'the newer position holds');
+});
+
 test('a closed capture context detaches the song until the next Mic capture', async () => {
   const h = harness();
   h.mix.open(h.file('a.wav'));

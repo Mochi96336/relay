@@ -125,6 +125,80 @@ test('retired enumeration cannot stop a replacement graph or block its device ch
   f.dispose(current);
 });
 
+const input = (deviceId: string) => ({ kind: 'audioinput', deviceId });
+
+for (const [label, stale, latest, removed] of [
+  ['the Mic leaves between notifications', [input('mic-a'), input('mic-b')], [input('mic-b')], true],
+  ['the Mic returns between notifications', [input('mic-b')], [input('mic-a'), input('mic-b')], false],
+] as const) {
+  test(`a devicechange during enumeration is decided by the latest list: ${label}`, async () => {
+    const f = captureFixture(); const graph = f.install();
+    const first = deferred<any[]>();
+    f.mediaDevices.enumerate = () => first.promise;
+    f.mediaDevices.emit();
+    f.mediaDevices.enumerate = async () => [...latest];
+    f.mediaDevices.emit();
+    f.mediaDevices.emit();
+    assert.equal(f.mediaDevices.enumerations, 1, 'at most one enumeration in flight');
+    first.resolve([...stale]);
+    await f.flush();
+    assert.equal(f.mediaDevices.enumerations, 2, 'one more after a burst, not one per notification');
+    assert.deepEqual(f.effects, removed ? ['input-device-removed:false'] : []);
+    f.dispose(graph);
+  });
+}
+
+test('a burst after a failed enumeration, on an empty list or a disposed graph claims nothing stale', async () => {
+  {
+    const f = captureFixture(); const graph = f.install();
+    const first = deferred<any[]>();
+    f.mediaDevices.enumerate = () => first.promise;
+    f.mediaDevices.emit();
+    f.mediaDevices.enumerate = async () => [input('mic-b')];
+    f.mediaDevices.emit();
+    first.reject(new Error('enumeration unavailable'));
+    await f.flush();
+    assert.deepEqual(f.effects, ['input-device-removed:false'], 'the newer check still runs');
+    f.dispose(graph);
+  }
+  {
+    const f = captureFixture(); const graph = f.install();
+    const first = deferred<any[]>();
+    f.mediaDevices.enumerate = () => first.promise;
+    f.mediaDevices.emit();
+    f.mediaDevices.enumerate = async () => [];
+    f.mediaDevices.emit();
+    first.resolve([input('mic-b')]);
+    await f.flush();
+    assert.deepEqual(f.effects, [], 'an empty latest list is not removal evidence');
+    f.dispose(graph);
+  }
+  {
+    const f = captureFixture(); const graph = f.install();
+    const first = deferred<any[]>();
+    f.mediaDevices.enumerate = () => first.promise;
+    f.mediaDevices.emit();
+    f.mediaDevices.emit();
+    f.dispose(graph);
+    first.resolve([input('mic-b')]);
+    await f.flush();
+    assert.equal(f.mediaDevices.enumerations, 1, 'a disposed graph does not enumerate again');
+    assert.deepEqual(f.effects, []);
+  }
+  {
+    const f = captureFixture(); const graph = f.install();
+    const first = deferred<any[]>();
+    f.mediaDevices.enumerate = () => first.promise;
+    f.mediaDevices.emit();
+    f.track.deviceId = 'mic-b';
+    f.mediaDevices.emit();
+    first.resolve([input('mic-b')]);
+    await f.flush();
+    assert.deepEqual(f.effects, ['input-device-changed'], 'a real route change still rebuilds');
+    f.dispose(graph);
+  }
+});
+
 for (const failure of ['source', 'worklet', 'gain', 'protocol', 'connect-source', 'connect-worklet', 'connect-gain']) {
   test(`partial graph failure (${failure}) releases every acquired resource without activation`, () => {
     const f = captureFixture(failure);

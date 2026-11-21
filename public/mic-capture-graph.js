@@ -41,6 +41,9 @@ export function createMicCaptureGraph({
   let worker = null;
   let visualAnalysis = null;
   let deviceCheckPending = false;
+  // A devicechange that arrived while an enumeration was in flight: that
+  // enumeration's list is already stale, and one more runs after it settles.
+  let deviceCheckAgain = false;
   let inputDeviceId = null;
   let processorErrorListener = null;
   let deviceChangeListener = null;
@@ -69,6 +72,7 @@ export function createMicCaptureGraph({
     // Revoke queued callbacks before releasing anything that can emit an event.
     disposed = true;
     deviceCheckPending = false;
+    deviceCheckAgain = false;
     try { if (graph.capture) graph.capture.port.onmessage = null; } catch {}
     try {
       if (deviceChangeListener) mediaDevices?.removeEventListener?.('devicechange', deviceChangeListener);
@@ -131,7 +135,11 @@ export function createMicCaptureGraph({
   }
 
   function checkDevicePresence() {
-    if (!admitted() || deviceCheckPending) return;
+    if (!admitted()) return;
+    if (deviceCheckPending) {
+      deviceCheckAgain = true;
+      return;
+    }
     const track = stream.getAudioTracks?.()[0] ?? null;
     if (!track || track.readyState === 'ended') return;
     if (checkInputDeviceChange()) return;
@@ -146,6 +154,8 @@ export function createMicCaptureGraph({
       return;
     }
     Promise.resolve(enumeration).then((devices) => {
+      // A newer notification's list decides, not this one.
+      if (deviceCheckAgain) return;
       if (!admitted() || track.readyState === 'ended') return;
       // WebKit may update the live track's route only after enumeration settles.
       if (checkInputDeviceChange()) return;
@@ -155,7 +165,13 @@ export function createMicCaptureGraph({
       if (inputs.length === 0 || inputs.some(device => device.deviceId === deviceId)) return;
       return onInputDeviceRemoved(graph);
     }).catch(error => warn('Microphone device presence check failed', error))
-      .finally(() => { deviceCheckPending = false; });
+      .finally(() => {
+        if (!admitted()) return;
+        deviceCheckPending = false;
+        if (!deviceCheckAgain) return;
+        deviceCheckAgain = false;
+        checkDevicePresence();
+      });
   }
 
   try {

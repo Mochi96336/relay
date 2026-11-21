@@ -296,3 +296,29 @@ test('Take History review-first sheet stays readable on desktop', async ({ page 
 
   await page.screenshot({ path: 'screenshots/take-history-review-desktop.png' });
 });
+
+test('a replayed ready snapshot keeps the older Take being reviewed; a new Take still takes over', async ({ page }) => {
+  await installTakeHistoryHarness(page);
+  const history = initialHistory();
+  const latest = history[0];
+  const ready = (entry) => ({
+    lifecycle: 'ready',
+    take: { takeId: entry.takeId, endedAtMs: entry.endedAtMs, song: null, artifact: entry.artifact, quality: { verdict: 'clean' } },
+  });
+  await publishHistory(page, history, ready(latest));
+  await openHistory(page);
+  await page.locator('[data-take-id="recording-0658"]').click();
+  await page.evaluate(() => document.querySelector('#recording-player').play());
+  await expect(page.locator('#recording-player')).toHaveJSProperty('paused', false);
+
+  // The recorder reconnects and replays the same latest snapshot.
+  await publishHistory(page, history, ready(latest));
+  await expect(page.locator('[data-take-id="recording-0658"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#recording-player')).toHaveAttribute('src', /recording-0658\.wav/);
+  await expect(page.locator('#recording-player')).toHaveJSProperty('paused', false);
+
+  // A Take that actually finished becomes the comparison target.
+  const newest = historyEntry('recording-0720', 7, 20, 41_000);
+  await publishHistory(page, history, ready(newest));
+  await expect(page.locator('[data-take-id="recording-0720"]')).toHaveAttribute('aria-pressed', 'true');
+});

@@ -74,6 +74,8 @@ test('durable Take history keeps Live compact and reuses one review player in a 
   assert.match(history, /recordingDownload\.download = `relay-take-/);
   assert.match(history, /selectedTakeId = status\.take\.takeId/,
     'a newly finalized Take becomes the comparison target immediately');
+  assert.match(history, /status\.take\.takeId !== lastReadyTakeId\) \{\s*lastReadyTakeId = status\.take\.takeId;\s*selectedTakeId = status\.take\.takeId;/,
+    'a replayed ready snapshot (every recorder reconnect) keeps the Take being reviewed');
   assert.match(history, /takeBusy = status\?\.lifecycle === 'recording' \|\| status\?\.lifecycle === 'finalizing'/);
   assert.match(history, /if \(!recordingPlayer\.paused\) recordingPlayer\.pause\(\)/,
     'history review must stop while a new Take is recording or finalizing');

@@ -71,6 +71,8 @@ export class ChoirSecondaryCapture {
     this.clockSampleOrigin = 0;
     /** The Opus encoder while B sends Opus v3; null sends PCM v2. */
     this.opus = null;
+    /** Capture timing of chunks queued for Opus, by first sample, until sent. */
+    this.queuedAnchors = new Map();
   }
 
   /** The AudioPacket version B registers and sends with. */
@@ -132,7 +134,7 @@ export class ChoirSecondaryCapture {
         // An encoder that will not start leaves B on PCM, not out of the room.
         const opus = await createMicOpusTrial({
           bitrate: micCodec.bitrate,
-          onPacket: packet => this.sendPacket(packet),
+          onPacket: packet => this.sendOpusPacket(packet),
           onDrop: () => {},
           onError: () => { if (this.epoch === epoch) this.fail('opus-failed'); },
         }).catch(() => null);
@@ -199,6 +201,7 @@ export class ChoirSecondaryCapture {
     // reset also fences pending output produced for the retired socket.
     if (socket !== this.socket) {
       this.lastChunk = null;
+      this.queuedAnchors.clear();
       this.opus?.reset(this.generation);
     }
     this.socket = socket;
@@ -257,6 +260,12 @@ export class ChoirSecondaryCapture {
       if (this.opus) {
         // The encoder copies the chunk before the worklet gets its buffer back.
         if (samples !== OPUS_FRAME_SAMPLES || !this.opus.encode(pcm, this.sequence, firstSampleIndex)) return;
+        this.sequence = (this.sequence + 1) >>> 0;
+        // Queued for encoding is not sent: the anchor moves only when the
+        // encoded packet actually leaves on this socket (sendOpusPacket).
+        this.queuedAnchors.set(firstSampleIndex, { contextTime: value.capturedAtContextTime, observedAt: nowMs });
+        while (this.queuedAnchors.size > 8) this.queuedAnchors.delete(this.queuedAnchors.keys().next().value);
+        return;
       } else {
         const packet = encodeChoirMicV2(pcm, this.generation, this.sequence, firstSampleIndex);
         if (!this.sendPacket(packet)) return;
@@ -276,6 +285,17 @@ export class ChoirSecondaryCapture {
   sendPacket(packet) {
     if (!this.socket || this.transport.socket !== this.socket) return false;
     return this.transport.send(packet).sent;
+  }
+
+  /** An encoded Opus packet; a sent one becomes the song anchor's chunk. */
+  sendOpusPacket(packet) {
+    const view = new DataView(packet);
+    const firstSampleIndex = view.getFloat64(16, true);
+    const chunk = this.queuedAnchors.get(firstSampleIndex);
+    this.queuedAnchors.delete(firstSampleIndex);
+    if (!this.sendPacket(packet)) return false;
+    if (chunk && view.getUint32(4, true) === this.generation) this.lastChunk = { firstSampleIndex, ...chunk };
+    return true;
   }
 
   fail(reason) {
@@ -307,5 +327,6 @@ export class ChoirSecondaryCapture {
     this.clockWallOriginMs = null;
     this.clockSampleOrigin = 0;
     this.lastChunk = null;
+    this.queuedAnchors.clear();
   }
 }

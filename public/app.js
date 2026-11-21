@@ -1222,14 +1222,19 @@ async function startPublisher(takeoverExpectedOwnerId = null) {
           if (preparing) micStartup.cancel(startup, error);
           else finishMicrophoneSession('opus-failed', { releaseMic: false }).catch(console.error);
         },
-      }), { stage: 'preparing compressed microphone audio', dispose: encoder => encoder.close() });
+      }).catch((error) => {
+        // An encoder that will not start leaves this press on PCM (v2), with
+        // the microphone already open, rather than failing the Mic.
+        console.warn('Mic Opus unavailable; sending PCM', error);
+        return null;
+      }), { stage: 'preparing compressed microphone audio', dispose: encoder => encoder?.close() });
     }
     const preparedContext = micStartup.own(
       startup,
       new AudioContext({ latencyHint: 'interactive', ...(micCodecConfig.opus ? { sampleRate: 48000 } : {}) }),
       context => context.close(),
     );
-    if (micCodecConfig.opus && preparedContext.sampleRate !== 48000) throw new Error('Opus trial requires 48 kHz capture');
+    if (preparedEncoder && preparedContext.sampleRate !== 48000) throw new Error('Opus trial requires 48 kHz capture');
     const captureContext = preparedContext;
     captureContext.addEventListener('statechange', () => {
       if (!publisherSession.active || publisherSession.context !== captureContext) return;

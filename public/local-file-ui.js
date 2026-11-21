@@ -194,6 +194,8 @@ music.addEventListener('input', () => localFileMix.setMusicLevel(Number(music.va
 offset.addEventListener('input', () => localFileMix.setOffsetMs(Number(offset.value)));
 micGain?.addEventListener('input', syncVocalGain);
 micGain?.addEventListener('change', syncVocalGain);
+// The Relay's confirmed gain arrives after the capture attaches.
+window.addEventListener('relay-mic-gain-shown', syncVocalGain);
 
 localFileMix.addEventListener('change', (event) => {
   const kind = event.detail?.kind;

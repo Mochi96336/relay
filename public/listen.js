@@ -13,7 +13,7 @@ import {
   createMonitorPcmReceiver,
 } from './monitor-pcm-continuity.js';
 import { createStreamingResampler } from './streaming-resampler.js';
-import { createListenOpusDecoder, listenOpusDecodingSupported } from './listen-opus-decoder.js';
+import { createListenOpusDecoder, listenOpusDecodingSupported, opusCapabilityWithin } from './listen-opus-decoder.js';
 import { LISTEN_VOLUME_KEY, storeNumber, storedNumber } from './device-preferences.js';
 await window.relayIdentityReady;
 import { shouldForceMuteListen } from './playback-recovery.js';
@@ -223,7 +223,8 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   function offerOpus() {
     if (opusRefused) return Promise.resolve(false);
     opusOffer ??= listenOpusDecodingSupported();
-    return opusOffer;
+    // This connect registers PCM if the browser has not answered in time.
+    return opusCapabilityWithin(opusOffer);
   }
 
   /** Decoded room mix, PCM or Opus, into the resampler and the worklet. */

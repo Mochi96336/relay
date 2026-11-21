@@ -2,6 +2,7 @@ import { authorityState } from './authority-freshness.js';
 import { productIssueTitleKey } from './product-issue-copy.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 import { wsUrl } from './ws-url.js';
+import { waitForSocketOpen } from './socket-open.js';
 import { micPresenceDisplayValues } from '../shared/mic-presence-precision.js';
 await window.relayIdentityReady;
 const t = (key, vars) => window.relayI18n?.t(key, vars) ?? key;
@@ -464,11 +465,13 @@ if (
     const next = new WebSocket(wsUrl());
     socket = next;
 
-    await new Promise((resolve, reject) => {
-      next.addEventListener('open', resolve, { once: true });
-      next.addEventListener('error', reject, { once: true });
-      next.addEventListener('close', reject, { once: true });
-    });
+    try {
+      await waitForSocketOpen(next);
+    } catch (error) {
+      // A failed or timed-out handshake leaves no socket that blocks the retry.
+      if (socket === next) socket = null;
+      throw error;
+    }
 
     if (socket !== next) {
       next.close();

@@ -142,6 +142,21 @@ test('a reconnecting B cannot automatically take the seat from a new second sing
   assert.equal(f.consent.join(f.anotherB, A), true, 'an explicit press can still take over');
 });
 
+test("an old tab's resume leaves the seat with the singer's newer tab", () => {
+  const f = fixture();
+  const newestB = { participantId: B, open: true };
+  assert.equal(f.consent.join(f.b, A), true);
+  f.b.open = false;
+  f.consent.disconnected(f.b);
+  assert.equal(f.consent.join(f.anotherB, A), true, 'the singer chose a new tab');
+  const revokedBefore = f.delivered.filter((d) => d.payload.status === 'revoked').length;
+  assert.equal(f.consent.join(newestB, A, { resume: true }), false);
+  assert.equal(f.consent.isJoinSocket(f.anotherB), true);
+  assert.equal(f.delivered.filter((d) => d.payload.status === 'revoked').length, revokedBefore,
+    'the newer tab is not revoked');
+  assert.equal(f.consent.join(newestB, A), true, 'an explicit press can still move the seat');
+});
+
 test('a fresh authenticated B can resume an empty seat after control disconnect', () => {
   const f = fixture();
   assert.equal(f.consent.join(f.b, A), true);

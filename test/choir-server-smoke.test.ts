@@ -549,6 +549,35 @@ test('moving the second Mic to another tab of the same singer requests fresh aud
   }
 });
 
+test("an old tab's automatic resume never revokes the singer's newer tab", async () => {
+  const duet = await startDuet();
+  try {
+    await duet.join();
+    const tab = await duet.connect();
+    const media = await duet.connect();
+    const retry = await duet.connect();
+    await duet.authenticate(tab, CAPABILITY_B, 'B');
+    await duet.authenticate(media, CAPABILITY_B, 'B');
+    await duet.authenticate(retry, CAPABILITY_B, 'B');
+    await duet.join(tab);
+    await tab.waitForType('choir-media-ready', 1_000);
+    const revokedFrom = tab.messages.length;
+    retry.send({ type: 'choir-secondary-join', resume: true, expectedPrimaryId: participantIdForCapability(CAPABILITY_A) });
+    const refused = await retry.waitFor((m) => m.type === 'choir-consent-rejected');
+    assert.equal(refused.reason, 'replaced');
+    await duet.claimMedia({}, tab, media);
+    media.sendBinary(encodeAudioPacket({
+      source: 'mic', generation: 7, firstSampleIndex: 0, sequence: 0,
+      pcm: Buffer.from(new Int16Array(960).fill(900).buffer),
+    }));
+    const track = await duet.waitForSecondary(d => d?.bufferedSamples > 0);
+    assert.ok(track?.bufferedSamples > 0, 'the newer tab still reaches the room');
+    assert.equal(tab.messages.slice(revokedFrom).some(m => m.status === 'revoked'), false);
+  } finally {
+    await duet.close();
+  }
+});
+
 test('a takeover pressed for the previous Mic owner leaves the current duet in place', async () => {
   const duet = await startDuet();
   try {

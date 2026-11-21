@@ -72,6 +72,14 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
   let audioContext = null;
   let playbackNode = null;
   let gainNode = null;
+  // The playback worklet can stop running while its context, node and the
+  // network all look fine (a processor exception; some browsers never send
+  // processorerror). It reports health every 500 ms whatever the audio, so
+  // silence from the node itself is the evidence. See replacePlaybackNode.
+  let playbackModuleContext = null;
+  let lastPlaybackNodeMessageAt = 0;
+  let lastPlaybackPostAt = 0;
+  const playbackNodeReplacements = [];
   let audioSetupPromise = null;
   let audioUnlockArmed = false;
   // This is a consecutive recovery counter, not a page-lifetime gesture count.
@@ -237,6 +245,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     });
     if (samples.length > 0) {
       playbackNode.port.postMessage(samples.buffer, [samples.buffer]);
+      lastPlaybackPostAt = performance.now();
     }
   }
 
@@ -566,12 +575,104 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     window.dispatchEvent(new CustomEvent('relay-listen-health', { detail }));
   }
 
+  /** The playback worklet node and its gain, on a context that may outlive them. */
+  async function installPlaybackNode(context) {
+    if (playbackModuleContext !== context) {
+      await context.audioWorklet.addModule('/playback-worklet.js');
+      playbackModuleContext = context;
+    }
+    const node = new AudioWorkletNode(context, 'playback-processor', {
+      numberOfInputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [1],
+    });
+    node.port.postMessage({
+      type: 'configure',
+      healthEpoch: playbackHealthEpoch,
+      prebufferMs: PREBUFFER_MS,
+      maxQueueMs: MAX_QUEUE_MS,
+    });
+    node.port.onmessage = (event) => {
+      if (node === playbackNode) lastPlaybackNodeMessageAt = performance.now();
+      if (node !== playbackNode || !transportEnabled || effectiveMuted() || !audioRendering()) return;
+      if (event.data?.type === 'health') {
+        publishListenHealth(event.data);
+        return;
+      }
+      if (event.data?.type === 'buffering') render('buffering');
+      if (event.data?.type === 'playing') render('playing');
+    };
+    node.addEventListener?.('processorerror', () => {
+      if (node === playbackNode) replacePlaybackNode('processorerror');
+    });
+
+    const localGain = context.createGain();
+    gainNode = localGain;
+    playbackNode = node;
+    lastPlaybackNodeMessageAt = performance.now();
+    node.connect(localGain).connect(context.destination);
+    updateGain();
+  }
+
+  /**
+   * A playback node that stopped running is replaced on the same context
+   * (a new context could need another user gesture on phones), and the
+   * monitor restarts at the live edge. The user's volume and any forced mute
+   * carry over through updateGain/reconcile. Bounded: after three
+   * replacements in a minute Listen shows Retry, as after a failed start,
+   * and the next press builds a fresh node.
+   */
+  function replacePlaybackNode(reason) {
+    const context = audioContext;
+    const dead = playbackNode;
+    if (!context || !dead) return;
+    const now = performance.now();
+    while (playbackNodeReplacements.length && now - playbackNodeReplacements[0] > 60_000) playbackNodeReplacements.shift();
+    console.warn('Listen playback worklet stopped; replacing it', reason);
+    playbackNode = null;
+    try { dead.port.onmessage = null; dead.disconnect(); } catch {}
+    try { gainNode?.disconnect(); } catch {}
+    gainNode = null;
+    resetPlaybackHealth(false);
+    if (playbackNodeReplacements.length >= 3) {
+      // As a failed start: Retry builds a fresh node on the next press.
+      userMuted = true;
+      claimPlaybackAudio(false);
+      closeTransport();
+      render('start-failed');
+      return;
+    }
+    playbackNodeReplacements.push(now);
+    render('interrupted');
+    void installPlaybackNode(context).then(() => {
+      if (audioContext !== context) return;
+      if (monitorTransportWanted()) restartMonitorAtLiveEdge();
+      else reconcile('resumed');
+    }).catch((error) => console.error('Listen playback node could not be replaced', error));
+  }
+
+  // Only while the context runs and audio is being handed to the node: a
+  // suspended or hidden-and-paused page, or a muted Listen, proves nothing.
+  setInterval(() => {
+    if (!playbackNode || !audioRendering() || !transportEnabled || effectiveMuted()) return;
+    const now = performance.now();
+    if (now - lastPlaybackPostAt > 1_000) return;
+    if (now - lastPlaybackNodeMessageAt > 3_000) replacePlaybackNode('silent');
+  }, 1_000);
+
   async function ensureAudioGraph() {
     if (audioGraphReady()) {
       resumeAudioGraph();
       return;
     }
     if (audioSetupPromise) return audioSetupPromise;
+    // The context survived but its playback node was retired: replace only the node.
+    if (audioContext && !playbackNode) {
+      audioSetupPromise = installPlaybackNode(audioContext);
+      try { await audioSetupPromise; } finally { audioSetupPromise = null; }
+      resumeAudioGraph();
+      return;
+    }
 
     audioSetupPromise = (async () => {
       // Tell iOS this document intends durable media playback before creating
@@ -603,34 +704,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       // ran, every later press awaited the same dead promise. The button
       // stopped responding for the rest of the session.
       startResume(context);
-      await context.audioWorklet.addModule('/playback-worklet.js');
-
-      const node = new AudioWorkletNode(context, 'playback-processor', {
-        numberOfInputs: 0,
-        numberOfOutputs: 1,
-        outputChannelCount: [1],
-      });
-      node.port.postMessage({
-        type: 'configure',
-        healthEpoch: playbackHealthEpoch,
-        prebufferMs: PREBUFFER_MS,
-        maxQueueMs: MAX_QUEUE_MS,
-      });
-      node.port.onmessage = (event) => {
-        if (node !== playbackNode || !transportEnabled || effectiveMuted() || !audioRendering()) return;
-        if (event.data?.type === 'health') {
-          publishListenHealth(event.data);
-          return;
-        }
-        if (event.data?.type === 'buffering') render('buffering');
-        if (event.data?.type === 'playing') render('playing');
-      };
-
-      const localGain = context.createGain();
-      gainNode = localGain;
-      playbackNode = node;
-      node.connect(localGain).connect(context.destination);
-      updateGain();
+      await installPlaybackNode(context);
     })();
 
     try {

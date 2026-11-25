@@ -181,7 +181,10 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
 
   // Listen owns WebAudio and mute truth. It deliberately does not own product
   // copy or visible control state: room-sound-ui.js is the single presenter.
+  // What the Listen button presents now: a press of a Retry is a start.
+  let presentedPhase = '';
   function render(phase = '') {
+    presentedPhase = phase;
     const detail = listenState(phase);
     window.relayListenState = detail;
     window.dispatchEvent(new CustomEvent('relay-listen-state', { detail }));
@@ -581,6 +584,9 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       await context.audioWorklet.addModule('/playback-worklet.js');
       playbackModuleContext = context;
     }
+    // Replaced while the module loaded (a newer context, or another install
+    // already won): the graph now playing is not this request's to touch.
+    if (audioContext !== context || playbackNode) return false;
     const node = new AudioWorkletNode(context, 'playback-processor', {
       numberOfInputs: 0,
       numberOfOutputs: 1,
@@ -612,6 +618,55 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     lastPlaybackNodeMessageAt = performance.now();
     node.connect(localGain).connect(context.destination);
     updateGain();
+    return true;
+  }
+
+  /** One node install at a time on a surviving context; shares audioSetupPromise. */
+  function installNodeOnce(context) {
+    if (audioSetupPromise) return audioSetupPromise;
+    const setup = installPlaybackNode(context);
+    audioSetupPromise = setup;
+    const settle = () => { if (audioSetupPromise === setup) audioSetupPromise = null; };
+    setup.then(settle, settle);
+    return setup;
+  }
+
+  /** Within the replacement budget (three a minute), counting this one. */
+  function takePlaybackNodeReplacement() {
+    const now = performance.now();
+    while (playbackNodeReplacements.length && now - playbackNodeReplacements[0] > 60_000) playbackNodeReplacements.shift();
+    if (playbackNodeReplacements.length >= 3) return false;
+    playbackNodeReplacements.push(now);
+    return true;
+  }
+
+  /** As a failed start: Listen shows Retry and the next press builds a fresh node. */
+  function offerPlaybackRetry() {
+    userMuted = true;
+    claimPlaybackAudio(false);
+    closeTransport();
+    render('start-failed');
+  }
+
+  function installReplacementNode(context) {
+    installNodeOnce(context).then(() => {
+      if (audioContext !== context || !playbackNode) return;
+      if (monitorTransportWanted()) restartMonitorAtLiveEdge();
+      else reconcile('resumed');
+    }).catch((error) => {
+      console.error('Listen playback node could not be replaced', error);
+      if (audioContext !== context || playbackNode) return;
+      // Nothing plays now, and the silence watchdog only watches a node:
+      // try again within the same budget, then offer Retry.
+      if (!takePlaybackNodeReplacement()) {
+        offerPlaybackRetry();
+        return;
+      }
+      setTimeout(() => {
+        if (audioContext !== context || playbackNode || effectiveMuted()) return;
+        installReplacementNode(context);
+      }, 500);
+    });
   }
 
   /**
@@ -626,29 +681,18 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     const context = audioContext;
     const dead = playbackNode;
     if (!context || !dead) return;
-    const now = performance.now();
-    while (playbackNodeReplacements.length && now - playbackNodeReplacements[0] > 60_000) playbackNodeReplacements.shift();
     console.warn('Listen playback worklet stopped; replacing it', reason);
     playbackNode = null;
     try { dead.port.onmessage = null; dead.disconnect(); } catch {}
     try { gainNode?.disconnect(); } catch {}
     gainNode = null;
     resetPlaybackHealth(false);
-    if (playbackNodeReplacements.length >= 3) {
-      // As a failed start: Retry builds a fresh node on the next press.
-      userMuted = true;
-      claimPlaybackAudio(false);
-      closeTransport();
-      render('start-failed');
+    if (!takePlaybackNodeReplacement()) {
+      offerPlaybackRetry();
       return;
     }
-    playbackNodeReplacements.push(now);
     render('interrupted');
-    void installPlaybackNode(context).then(() => {
-      if (audioContext !== context) return;
-      if (monitorTransportWanted()) restartMonitorAtLiveEdge();
-      else reconcile('resumed');
-    }).catch((error) => console.error('Listen playback node could not be replaced', error));
+    installReplacementNode(context);
   }
 
   // Only while the context runs and audio is being handed to the node: a
@@ -660,57 +704,81 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     if (now - lastPlaybackNodeMessageAt > 3_000) replacePlaybackNode('silent');
   }, 1_000);
 
+  /** Resolves false when a newer request replaced this one before it finished. */
   async function ensureAudioGraph() {
     if (audioGraphReady()) {
       resumeAudioGraph();
-      return;
+      return true;
     }
+    // Waiters share the whole request, so a replaced request answers them
+    // false too, never with its own late failure.
     if (audioSetupPromise) return audioSetupPromise;
     // The context survived but its playback node was retired: replace only the node.
     if (audioContext && !playbackNode) {
-      audioSetupPromise = installPlaybackNode(audioContext);
-      try { await audioSetupPromise; } finally { audioSetupPromise = null; }
+      const context = audioContext;
+      await installNodeOnce(context);
+      if (audioContext !== context) return false;
       resumeAudioGraph();
-      return;
+      return true;
     }
+    const setup = createAudioGraph();
+    audioSetupPromise = setup;
+    try {
+      return await setup;
+    } finally {
+      if (audioSetupPromise === setup) audioSetupPromise = null;
+    }
+  }
 
-    audioSetupPromise = (async () => {
-      // Tell iOS this document intends durable media playback before creating
-      // the WebAudio graph. Unsupported browsers simply ignore the policy.
-      claimPlaybackAudio(true);
-      const context = new AudioContext({ latencyHint: 'interactive' });
-      audioContext = context;
-      context.addEventListener('statechange', () => {
-        if (audioContext !== context) return;
-        if (context.state === 'running') {
-          if (audioEverRunning) finishAudioInterruptionEvidence();
-          audioEverRunning = true;
-          stalledResumeGestures = 0;
-          disarmAudioUnlock();
-        } else if (!effectiveMuted()) {
-          if (audioEverRunning) audioInterruption.begin();
-          startResume(context);
-          armAudioUnlock();
-        }
-        reconcile(context.state === 'running' ? 'resumed' : 'interrupted');
-      });
-      // Consume the user's first interaction immediately. Fetching the worklet
-      // before resume can lose transient autoplay permission on mobile.
-      // Asked for, never waited on. iOS Safari leaves this promise pending
-      // indefinitely when it will not start the context yet - no error, no
-      // resolution - and awaiting it here stranded the whole graph: the
-      // worklet was never fetched, `reconcile()` never ran, and because
-      // `audioSetupPromise` is only cleared in a `finally` that also never
-      // ran, every later press awaited the same dead promise. The button
-      // stopped responding for the rest of the session.
-      startResume(context);
-      await installPlaybackNode(context);
-    })();
+  async function createAudioGraph() {
+    // Tell iOS this document intends durable media playback before creating
+    // the WebAudio graph. Unsupported browsers simply ignore the policy.
+    claimPlaybackAudio(true);
+    let context;
+    try {
+      context = new AudioContext({ latencyHint: 'interactive' });
+    } catch (error) {
+      claimPlaybackAudio(false);
+      throw error;
+    }
+    audioContext = context;
+    context.addEventListener('statechange', () => {
+      if (audioContext !== context) return;
+      if (context.state === 'running') {
+        if (audioEverRunning) finishAudioInterruptionEvidence();
+        audioEverRunning = true;
+        stalledResumeGestures = 0;
+        disarmAudioUnlock();
+      } else if (!effectiveMuted()) {
+        if (audioEverRunning) audioInterruption.begin();
+        startResume(context);
+        armAudioUnlock();
+      }
+      reconcile(context.state === 'running' ? 'resumed' : 'interrupted');
+    });
+    // Consume the user's first interaction immediately. Fetching the worklet
+    // before resume can lose transient autoplay permission on mobile.
+    // Asked for, never waited on. iOS Safari leaves this promise pending
+    // indefinitely when it will not start the context yet - no error, no
+    // resolution - and awaiting it here stranded the whole graph: the
+    // worklet was never fetched, `reconcile()` never ran, and because
+    // `audioSetupPromise` is only cleared in a `finally` that also never
+    // ran, every later press awaited the same dead promise. The button
+    // stopped responding for the rest of the session.
+    startResume(context);
 
     try {
-      await audioSetupPromise;
+      await installPlaybackNode(context);
+      return audioContext === context;
     } catch (error) {
-      const failed = audioContext;
+      // This request owns only its own context. If a newer one replaced it
+      // while the worklet loaded (a stuck context discarded by a gesture),
+      // the graph now playing belongs to that request: leave it running,
+      // and its callers leave the presentation to that request too.
+      if (audioContext !== context) {
+        try { await context.close(); } catch {}
+        return false;
+      }
       audioContext = null;
       playbackNode = null;
       gainNode = null;
@@ -718,10 +786,8 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       liveEdgeRecoveryRequired = false;
       audioInterruption.reset();
       claimPlaybackAudio(false);
-      try { await failed?.close(); } catch {}
+      try { await context.close(); } catch {}
       throw error;
-    } finally {
-      audioSetupPromise = null;
     }
   }
 
@@ -881,7 +947,10 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
     }
   }
 
-  async function activateFromGesture() {
+  async function activateFromGesture(event) {
+    // A press on the Listen button is that button's own action (its click
+    // follows); unlocking here too would act twice on one press.
+    if (event?.target instanceof Node && toggle.contains(event.target)) return;
     if (audioContext && !audioRendering() && !effectiveMuted()) {
       if (stalledResumeGestures >= 1) {
         discardStuckAudioGraph();
@@ -891,7 +960,7 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
       }
     }
     try {
-      await ensureAudioGraph();
+      if (await ensureAudioGraph() === false) return;
       reconcile();
       if (audioContext && !audioRendering() && !effectiveMuted()) {
         stalledResumeGestures = Math.max(1, stalledResumeGestures);
@@ -905,11 +974,14 @@ if (toggle && gainControl && publisherButton && takeoverButton) {
 
   toggle.addEventListener('click', async () => {
     if (micForcedMuted || roomMicForcedMuted || playbackForcedMuted || takeReviewForcedMuted) return;
-    userMuted = !userMuted;
+    // The button shows Retry (a failed start, or a failed unlock that left
+    // userMuted false): pressing it means start, never mute.
+    const retryShown = presentedPhase === 'retry' || presentedPhase === 'start-failed';
+    userMuted = retryShown ? false : !userMuted;
     claimPlaybackAudio(!userMuted);
     if (!userMuted) {
       try {
-        await ensureAudioGraph();
+        if (await ensureAudioGraph() === false) return;
       } catch (error) {
         console.error(error);
         userMuted = true;

@@ -151,8 +151,8 @@ test('Phone capture dispatch trims stale worklet PCM without shifting later capt
 });
 
 test('Listen uses playback and play-and-record AudioSession claims at user intent boundaries', () => {
-  assert.match(listenSource, /claimPlaybackAudio\(true\);\n      const context = new AudioContext/);
-  assert.match(listenSource, /userMuted = !userMuted;\n    claimPlaybackAudio\(!userMuted\);/);
+  assert.match(listenSource, /claimPlaybackAudio\(true\);\n    let context;\n    try \{\n      context = new AudioContext/);
+  assert.match(listenSource, /userMuted = retryShown \? false : !userMuted;\n    claimPlaybackAudio\(!userMuted\);/);
   assert.match(listenSource, /publisherButton\.addEventListener\('click',[\s\S]*claimMicrophoneAudio\(true\)[\s\S]*\{ capture: true \}/);
   assert.match(listenSource, /relay-request-microphone'[\s\S]*claimMicrophoneAudio\(true\)[\s\S]*\{ capture: true \}/);
   assert.match(

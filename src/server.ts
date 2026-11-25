@@ -95,7 +95,7 @@ import {
 import { takeFrameBoundaryAtOrAfter } from './take-boundary.js';
 import { TakeController, type TakeSongSnapshot } from './take-controller.js';
 import { createTakeCommandHandlers } from './take-command-handlers.js';
-import { takeSongSnapshotFromRoom } from './take-song-snapshot.js';
+import { takeSongSnapshotForMic } from './take-song-snapshot.js';
 import { SERVER_INCARNATION } from './server-incarnation.js';
 import {
   WebTransportMediaRuntime,
@@ -1269,14 +1269,13 @@ function cancelPendingRoomSongCommand(reason: string, nowMs = performance.now())
 }
 
 function takeSongSnapshot(nowMs = performance.now()): TakeSongSnapshot {
-  const song = takeSongSnapshotFromRoom(
-    youtubeTimeline.roomStatusPayload(nowMs) as Record<string, unknown>,
-  );
   // Local file mode: the song is in the Mic itself; say which, and whether
-  // it is playing (a loaded file can sit silent under the whole Take).
-  return session.micPremixed
-    ? { ...song, localFile: { title: localFileTitle, heard: localFilePlaying } }
-    : song;
+  // it is playing (a loaded file can sit silent under the whole Take). A
+  // YouTube video only cued in the room is not this Take's song.
+  return takeSongSnapshotForMic(
+    youtubeTimeline.roomStatusPayload(nowMs) as Record<string, unknown>,
+    session.micPremixed ? { title: localFileTitle, heard: localFilePlaying } : null,
+  );
 }
 
 function takeFrameBoundary(nowMs = performance.now()) {

@@ -41,6 +41,7 @@ let roomMicOwnerName = null;
 // between does not count as a handoff.
 let lastMicOwnerId = null;
 let roomHasDuet = false;
+// An i18n key, translated at render so a language switch reaches it too.
 let transientNote = null;
 let seeking = false;
 
@@ -88,7 +89,7 @@ function renderOwner() {
   time.textContent = `${clock(localFileMix.currentTime)} / ${clock(duration)}`;
   // What happened (transient) never hides what the singer can do now.
   const nextStep = !ready ? t('localFile.needsMic') : heldByRoom ? t('localFile.blockedSong') : '';
-  note.textContent = [transientNote, nextStep].filter(Boolean).join(' ');
+  note.textContent = [transientNote && t(transientNote), nextStep].filter(Boolean).join(' ');
 
   music.value = String(Math.round(localFileMix.musicLevel * 100));
   musicValue.value = `${music.value}%`;
@@ -208,7 +209,7 @@ window.addEventListener('relay-mic-gain-shown', syncVocalGain);
 localFileMix.addEventListener('change', (event) => {
   const kind = event.detail?.kind;
   if (kind === 'attached') syncVocalGain();
-  if (kind === 'play-failed') transientNote = t('localFile.playFailed');
+  if (kind === 'play-failed') transientNote = 'localFile.playFailed';
   if (kind === 'mode' || kind === 'file') {
     transientNote = null;
     // A file opened while this page does not hold the Mic belongs to no
@@ -251,7 +252,7 @@ window.addEventListener('relay-product-status', (event) => {
 // Robot on top of the one mixed here.
 window.addEventListener('relay:playback-view', (event) => {
   const next = roomSongHoldsLocalFile(event.detail?.room);
-  if (next && !roomSongPlaying && localFileMix.playing) transientNote = t('localFile.roomSongPaused');
+  if (next && !roomSongPlaying && localFileMix.playing) transientNote = 'localFile.roomSongPaused';
   // Every view while the room song plays, not only its first: this also
   // withdraws a local play still waiting to start.
   if (next && localFileMix.active) localFileMix.pause();

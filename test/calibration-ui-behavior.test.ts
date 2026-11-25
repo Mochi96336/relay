@@ -22,11 +22,13 @@ const copy: Record<string, string> = {
   'timing.blocked.calibration-active': '對齊中…',
 };
 
-function harness(options: { selfMic?: 'live' | 'off' } = {}) {
+function harness(options: { selfMic?: 'live' | 'off'; heldPreflight?: boolean } = {}) {
   const windowListeners = new Map<string, Listener[]>();
   let commandCount = 0;
   const dispatched: Array<{ type: string; detail?: any }> = [];
   let preflightCommandCount = 0;
+  // Each preflight command's settle functions, in send order.
+  const preflightCommands: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
 
   class Element {
     id: string;
@@ -120,7 +122,8 @@ function harness(options: { selfMic?: 'live' | 'off' } = {}) {
     formatTimingValueMs,
     sendPreflightCalibrationCommand: () => {
       preflightCommandCount += 1;
-      return Promise.resolve();
+      if (!options.heldPreflight) return Promise.resolve();
+      return new Promise<void>((resolve, reject) => preflightCommands.push({ resolve, reject }));
     },
   });
 
@@ -177,6 +180,7 @@ function harness(options: { selfMic?: 'live' | 'off' } = {}) {
     commandCount: () => commandCount,
     dispatched,
     preflightCommandCount: () => preflightCommandCount,
+    preflightCommands,
   };
 }
 
@@ -517,4 +521,76 @@ test('second Mic Realign waits until the control reconnect is admitted', () => {
   ui.emit('relay-choir-guest-state', { enabled: true, reconnecting: false });
   assert.equal(ui.button.disabled, false, 'the interrupted calibration request is no longer pending');
   assert.equal(ui.value.textContent, '+85 ms');
+});
+
+test("B's accepted Realign stays held until the room's realigning snapshot, whichever arrives first", () => {
+  const ui = harness({ selfMic: 'off' });
+  const status = (duet: Record<string, unknown>) => ui.emit('relay-product-status', {
+    type: 'product-status', actions: {},
+    room: { mic: { ownerId: 'other', state: 'live' }, duet: { secondaryId: 'self', lagMs: 85, realigning: false, ...duet } },
+  });
+  status({});
+  ui.emit('relay-choir-guest-state', { enabled: true });
+  const sent = () => ui.dispatched.filter(event => event.type === 'relay-choir-command').length;
+
+  ui.button.click();
+  const commandId = ui.dispatched.at(-1)?.detail.commandId;
+  ui.emit('relay-choir-probe-response', { commandId, reason: null });
+  assert.equal(ui.button.disabled, true, 'accepted, but the room has not said it started');
+  ui.button.click();
+  assert.equal(sent(), 1, 'one press, one request');
+  status({ realigning: true });
+  assert.equal(ui.button.disabled, true);
+  status({ realigning: false });
+  assert.equal(ui.button.disabled, false);
+});
+
+test("B's refusal clears once the room lifts the same reason, and stays while it holds", () => {
+  const ui = harness({ selfMic: 'off' });
+  const status = (duet: Record<string, unknown>) => ui.emit('relay-product-status', {
+    type: 'product-status', actions: {},
+    room: { mic: { ownerId: 'other', state: 'live' }, duet: { secondaryId: 'self', lagMs: 85, realigning: false, ...duet } },
+  });
+  status({});
+  ui.emit('relay-choir-guest-state', { enabled: true });
+  ui.button.click();
+  ui.emit('relay-choir-probe-response', { commandId: ui.dispatched.at(-1)?.detail.commandId, reason: 'unavailable' });
+  status({});
+  assert.equal(ui.status.textContent, '目前無法重新對齊', 'a reason the room never showed stays until the next press');
+
+  ui.button.click();
+  ui.emit('relay-choir-probe-response', { commandId: ui.dispatched.at(-1)?.detail.commandId, reason: 'take-active' });
+  status({ realignBlockedReason: 'take-active' });
+  status({ realignBlockedReason: 'take-active' });
+  assert.equal(ui.button.disabled, true);
+  status({});
+  assert.equal(ui.button.disabled, false);
+  assert.equal(ui.status.textContent, '', 'the room confirmed and then lifted it');
+});
+
+test('a no-Song Realign the room confirmed is not failed by its late timeout or an old round', async () => {
+  const ui = harness({ selfMic: 'live', heldPreflight: true });
+  const room = (active: boolean) => ui.emitProductStatus({
+    canStartCalibration: !active,
+    startCalibrationBlockedReason: active ? 'calibration-active' : null,
+    startCalibrationMode: 'boot-probe',
+  }, { state: 'idle' }, 'self', null);
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+
+  room(false);
+  ui.button.click();
+  room(true);
+  ui.preflightCommands[0].reject(new Error('timeout'));
+  await settle();
+  assert.equal(ui.status.textContent, '對齊中…', 'the room said it is measuring');
+
+  room(false);
+  ui.button.click();
+  ui.preflightCommands[0].reject(new Error('closed'));
+  await settle();
+  assert.equal(ui.status.textContent, '對齊中…', 'the first round cannot speak for the second');
+
+  ui.preflightCommands[1].reject(new Error('refused'));
+  await settle();
+  assert.equal(ui.status.textContent, '目前無法重新對齊', 'the current, unconfirmed request did fail');
 });

@@ -246,3 +246,46 @@ test('a local file heard during the Take is kept through a restart; one left sil
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('the first local file actually heard names the Take, not the one waiting at Start', async () => {
+  const { TakeLibrary } = await import('../src/take-library.js');
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'relay-take-controller-local-swap-'));
+  try {
+    let resolveReady: (() => void) | null = null;
+    let ready = new Promise<void>((resolve) => { resolveReady = resolve; });
+    const controller = new TakeController({
+      directory,
+      sampleRate: 48_000,
+      storagePolicy: { maxBytes: 0, maxAgeMs: 0, minFreeBytes: 0 },
+      onStorageError: (error) => { throw error; },
+      onChange: (status) => { if (status.lifecycle === 'ready') resolveReady?.(); },
+    });
+    const loaded = { ...VOICE_ONLY_SONG, localFile: { title: 'audit', heard: false } };
+    const record = async (atMs: number, heardTitles: string[]) => {
+      ready = new Promise<void>((resolve) => { resolveReady = resolve; });
+      const started = controller.start('participant-a', loaded, BOUNDARY, atMs);
+      assert.equal(started.ok, true);
+      if (!started.ok) throw new Error('not started');
+      for (const title of heardTitles) controller.noteLocalFileHeard(title);
+      controller.stop(started.takeId, 'participant-a', BOUNDARY, 'user', atMs + 100);
+      await ready;
+      await settleStorageMaintenance(controller);
+      return started.takeId;
+    };
+    // audit waited paused at Start; on-air replaced it and was the one played.
+    const swapped = await record(1_000, ['on-air']);
+    // audit played first, then on-air: the Take stays audit's.
+    const secondAfterFirst = await record(2_000, ['audit', 'on-air']);
+
+    const byId = new Map(controller.statusPayload().history.map((entry) => [entry.takeId, entry]));
+    assert.equal(byId.get(swapped)?.localFileTitle, 'on-air');
+    assert.equal(byId.get(secondAfterFirst)?.localFileTitle, 'audit');
+    const library = new TakeLibrary({ directory });
+    library.prepare();
+    const reread = new Map(library.list().map((entry) => [entry.takeId, entry]));
+    assert.deepEqual(reread.get(swapped)?.song?.localFile, { title: 'on-air', heard: true });
+    assert.deepEqual(reread.get(secondAfterFirst)?.song?.localFile, { title: 'audit', heard: true });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

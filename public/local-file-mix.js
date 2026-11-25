@@ -86,7 +86,10 @@ function limiter(context, thresholdDb, releaseSeconds) {
  */
 export function localFileSurface({ fileOpen, myId, micOwnerId, roomLocalFile, capturing = false }) {
   const othersMic = typeof micOwnerId === 'string' && micOwnerId !== myId;
-  if (fileOpen) return othersMic ? 'standby' : 'owner';
+  // This identity's Mic captured by another tab: that tab is the singer, and
+  // a file opened here waits like one opened while someone else sings.
+  const siblingMic = micOwnerId === myId && typeof myId === 'string' && !capturing;
+  if (fileOpen) return othersMic || siblingMic ? 'standby' : 'owner';
   if (!roomLocalFile || typeof micOwnerId !== 'string') return 'none';
   return othersMic || !capturing ? 'observer' : 'none';
 }

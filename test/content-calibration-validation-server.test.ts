@@ -357,19 +357,28 @@ describe('continuous content calibration validation server policy', () => {
       );
 
       // Waits are bounded at 3 s, so the jump has landed by then either way.
-      let landed: any = null;
-      for (let attempt = 0; attempt < 20 && !landed; attempt += 1) {
+      // The receipt is written beside the first complete mixed frame after
+      // the jump, not when the read head merely reaches its target, so wait
+      // for the receipt itself; a busy host may not have mixed that frame yet.
+      const isReceipt = (m: any) => {
+        const revision = m.confirmedCalibrationRevision;
+        return Math.abs(Number(m.heardMicAdvanceMs) - Number(m.appliedMicAdvanceMs)) < 1
+          && m.micReadHead?.renderedCalibration?.revision === revision
+          && m.micReadHead?.settled?.authority?.revision === revision;
+      };
+      let receipt: any = null;
+      let lastStatus: any = null;
+      for (let attempt = 0; attempt < 30 && !receipt; attempt += 1) {
         const from = monitor.messages.length;
-        monitor.send({ type: 'source-status-request' });
-        const status = await waitForNewMessage(monitor, from, (m) => m.type === 'source-status', 2_000);
-        if (Math.abs(Number(status.heardMicAdvanceMs) - Number(status.appliedMicAdvanceMs)) < 1) landed = status;
+        monitor.send({ type: 'timing-calibration-status-request' });
+        lastStatus = await waitForNewMessage(monitor, from, m => m.type === 'timing-calibration-status', 2_000);
+        if (isReceipt(lastStatus)) receipt = lastStatus;
         else await sleep(200);
       }
-      assert.ok(landed, 'the heard read head should land on the validated lag');
-      assert.ok(Math.abs(Number(landed.activeCalibratedMicLagMs) - promotedLag) < 1);
-      const receiptFrom = monitor.messages.length;
-      monitor.send({ type: 'timing-calibration-status-request' });
-      const receipt = await waitForNewMessage(monitor, receiptFrom, m => m.type === 'timing-calibration-status');
+      assert.ok(receipt, `the heard read head should settle on the validated revision: ${JSON.stringify({
+        heard: lastStatus?.heardMicAdvanceMs, applied: lastStatus?.appliedMicAdvanceMs,
+        confirmed: lastStatus?.confirmedCalibrationRevision, readHead: lastStatus?.micReadHead })}`);
+      assert.ok(Math.abs(Number(receipt.activeMicLagMs) - promotedLag) < 1);
       assert.equal(receipt.micReadHead.renderedCalibration.kind, 'content');
       assert.equal(receipt.micReadHead.renderedCalibration.revision, receipt.confirmedCalibrationRevision);
       assert.equal(receipt.micReadHead.settled.authority.revision, receipt.confirmedCalibrationRevision);

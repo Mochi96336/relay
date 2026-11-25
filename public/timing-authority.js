@@ -5,6 +5,12 @@ const REFRESH_MS = 250;
 // Six missed polls tolerates short response jitter without treating an OPEN
 // transport as indefinitely authoritative.
 const FRESHNESS_TTL_MS = REFRESH_MS * 6;
+// A socket whose handshake has not completed by then is abandoned for a new one.
+const OPEN_DEADLINE_MS = 5_000;
+// An OPEN socket that has answered nothing for this long - never since it
+// opened, or not since its last answer - is replaced. Twice the freshness TTL,
+// so the value is already withdrawn and a short delay never churns the socket.
+const STALLED_AFTER_MS = FRESHNESS_TTL_MS * 2;
 // acceptSourceStatus reads only source status, and polls for it; Relay
 // broadcasts this socket nothing else.
 const TIMING_AUTHORITY_BROADCAST_TYPES = ['source-status'];
@@ -14,6 +20,8 @@ let reconnectTimer = null;
 let refreshTimer = null;
 let freshnessDeadlineTimer = null;
 let lastObservedAt = null;
+// The current socket's deadline: handshake, then first answer, then each next.
+let socketDeadlineTimer = null;
 
 function currentState() {
   const state = window.relayTimingAuthority;
@@ -79,6 +87,35 @@ function startRefresh() {
   refreshTimer = setInterval(requestSourceStatus, REFRESH_MS);
 }
 
+function stopSocketDeadline() {
+  if (socketDeadlineTimer !== null) clearTimeout(socketDeadlineTimer);
+  socketDeadlineTimer = null;
+}
+
+function armSocketDeadline(target, ms) {
+  stopSocketDeadline();
+  socketDeadlineTimer = setTimeout(() => {
+    socketDeadlineTimer = null;
+    retireSocket(target);
+  }, ms);
+}
+
+/**
+ * Gives up on `target` if it is still the current socket: it stops speaking
+ * for the value at once, and its own late answers or close event are ignored
+ * (each handler checks it is still the current socket), so only the next
+ * connection can publish or poll.
+ */
+function retireSocket(target) {
+  if (socket !== target) return;
+  socket = null;
+  stopSocketDeadline();
+  stopRefresh();
+  expireTimingAuthority();
+  try { target.close(); } catch {}
+  scheduleReconnect();
+}
+
 function scheduleReconnect() {
   if (reconnectTimer !== null) return;
   reconnectTimer = setTimeout(() => {
@@ -129,9 +166,11 @@ function connect() {
 
   const next = new WebSocket(wsUrl());
   socket = next;
+  armSocketDeadline(next, OPEN_DEADLINE_MS);
 
   next.addEventListener('open', () => {
     if (socket !== next) return;
+    armSocketDeadline(next, STALLED_AFTER_MS);
     // Keep observing across idle -> active transitions. An inactive mix means
     // there is no applied value to paint yet; it must not stop the authority
     // adapter or the first later calibration can remain invisible forever.
@@ -144,12 +183,14 @@ function connect() {
     if (socket !== next || typeof event.data !== 'string') return;
     let message;
     try { message = JSON.parse(event.data); } catch { return; }
+    if (message?.type === 'source-status') armSocketDeadline(next, STALLED_AFTER_MS);
     acceptSourceStatus(message);
   });
 
   next.addEventListener('close', () => {
     if (socket !== next) return;
     socket = null;
+    stopSocketDeadline();
     stopRefresh();
     expireTimingAuthority();
     scheduleReconnect();

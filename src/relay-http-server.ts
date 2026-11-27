@@ -3,6 +3,7 @@ import { createServer, type Server } from 'node:http';
 import path from 'node:path';
 
 import express from 'express';
+import type { SongLyrics } from './song-lyrics.js';
 
 const TAKE_ARTIFACT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -20,6 +21,7 @@ export type RelayHttpServerOptions = {
   observationStatusV1: () => unknown;
   readiness: () => RelayHttpReadiness;
   micOpusTrial?: boolean;
+  songLyrics?: { currentVideoId: () => string | null; lookup: (videoId: string) => Promise<SongLyrics | null> };
   /** Where a Mic may open its socket without the tunnel (direct-socket.ts), read per request. */
   directSocketUrl?: () => string | null;
 };
@@ -39,6 +41,38 @@ export function createRelayHttpServer(options: RelayHttpServerOptions): Server {
   app.get('/mic-opus.wasm', (_req, res) => {
     res.type('application/wasm');
     res.sendFile(path.resolve(options.publicDir, '../node_modules/@evan/opus/wasm/opus.wasm'));
+  });
+
+  app.get('/api/song-lyrics', async (req, res) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    if (options.relayKey && req.query.key !== options.relayKey) {
+      res.sendStatus(401);
+      return;
+    }
+    const service = options.songLyrics;
+    const videoId = req.query.videoId;
+    if (typeof videoId !== 'string' || !/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+      res.sendStatus(400);
+      return;
+    }
+    if (!service) {
+      res.sendStatus(404);
+      return;
+    }
+    if (videoId !== service.currentVideoId()) {
+      res.sendStatus(409);
+      return;
+    }
+    try {
+      const result = await service.lookup(videoId);
+      if (videoId !== service.currentVideoId()) {
+        res.sendStatus(409);
+        return;
+      }
+      res.json({ videoId, lyrics: result });
+    } catch {
+      res.sendStatus(503);
+    }
   });
 
   app.get('/takes/:takeId.wav', (req, res) => {

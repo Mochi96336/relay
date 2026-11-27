@@ -74,6 +74,7 @@
           <span id="song-heading-title" class="song-heading-title" hidden></span>
           <div class="song-heading-actions">
             <span id="song-device-note" class="song-device-note" aria-live="polite">Connecting…</span>
+            <button id="show-song-lyrics" class="text-action" type="button" aria-controls="song-lyrics" aria-expanded="false" hidden data-i18n="song.lyrics">Lyrics</button>
             <button id="change-youtube" class="text-action" type="button" hidden data-i18n="song.change">Change song</button>
           </div>
         </div>
@@ -177,6 +178,11 @@
           </div>
         </div>
 
+
+        <div id="song-lyrics" tabindex="0" role="region" hidden aria-label="Lyrics" data-i18n-aria-label="song.lyrics">
+          <div id="song-lyrics-text"></div>
+          <div id="song-lyrics-source" hidden></div>
+        </div>
 
         <details id="mic-live-control" class="mic-live-control">
           <summary>
@@ -452,6 +458,7 @@
     <script type="module" src="/listen.js"></script>
     <script type="module" src="/recorder.js"></script>
     <script type="module" src="/song-surface.js"></script>
+    <script type="module" src="/song-lyrics.js"></script>
     <script type="module" src="/youtube-local-audibility.js"></script>
     <script type="module" src="/youtube.js"></script>
     <script type="module" src="/youtube-sync.js"></script>

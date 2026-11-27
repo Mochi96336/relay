@@ -2,6 +2,7 @@ const base = window.relayI18n;
 
 const messages = {
   en: {
+    'song.lyrics': 'Lyrics',
     'people.inRoom': 'In the room',
     'people.status.online': 'Online',
     'people.status.reconnecting': 'Reconnecting',
@@ -112,6 +113,7 @@ const messages = {
     'roomSound.micTakeover': 'Taking over Mic…',
   },
   'zh-Hant': {
+    'song.lyrics': '歌詞',
     'people.inRoom': '房間裡',
     'people.status.online': '在線',
     'people.status.reconnecting': '重新連線中',

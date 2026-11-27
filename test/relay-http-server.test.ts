@@ -160,3 +160,33 @@ test('live status is never cacheable, so a CDN cannot replay an old snapshot', a
     }
   });
 });
+
+test('lyrics lookup is limited to the authenticated current song and rejects a stale result', async () => {
+  const videoId = 'aaaaaaaaaaa';
+  let currentVideoId = videoId;
+  let calls = 0;
+  await withHttpServer({
+    relayKey: 'test-key',
+    songLyrics: {
+      currentVideoId: () => currentVideoId,
+      lookup: async () => {
+        calls++;
+        if (calls === 1) return null;
+        currentVideoId = 'bbbbbbbbbbb';
+        return { text: 'Old song', source: null };
+      },
+    },
+  }, async (baseUrl) => {
+    const route = baseUrl + '/api/song-lyrics?videoId=';
+    assert.equal((await fetch(route + videoId)).status, 401);
+    assert.equal((await fetch(route + 'bbbbbbbbbbb&key=test-key')).status, 409);
+    assert.equal(calls, 0);
+
+    const missing = await fetch(route + videoId + '&key=test-key');
+    assert.equal(missing.headers.get('cache-control'), 'private, no-store');
+    assert.deepEqual(await missing.json(), { videoId, lyrics: null });
+
+    const stale = await fetch(route + videoId + '&key=test-key');
+    assert.equal(stale.status, 409);
+  });
+});

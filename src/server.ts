@@ -52,6 +52,7 @@ import {
   type RobotPlayerError,
 } from './relay-status-projection.js';
 import { createRelayHttpServer } from './relay-http-server.js';
+import { createSongLyricsLookup } from './song-lyrics.js';
 import { createRelayBuildTracker, validPageBuild } from './relay-build.js';
 import { createRelayQueryProtocol } from './relay-query-protocol.js';
 import { loadMonitorOpusEncoder } from './monitor-opus.js';
@@ -197,6 +198,13 @@ const server = createRelayHttpServer({
   observationStatusV1: () => observationStatusV1Payload(),
   readiness: () => readinessPayload(),
   micOpusTrial: relayConfig.micOpusTrial,
+  songLyrics: {
+    currentVideoId: () => {
+      const { videoId } = youtubeTimeline.roomStatusPayload();
+      return typeof videoId === 'string' ? videoId : null;
+    },
+    lookup: createSongLyricsLookup(),
+  },
 });
 const wss = createRelayWebSocketServer(directSocketServer ? [server, directSocketServer] : server, {
   relayKey,

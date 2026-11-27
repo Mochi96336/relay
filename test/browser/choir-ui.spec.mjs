@@ -348,3 +348,48 @@ test('a cancelled permission request cannot block or cancel a newer capture atte
   });
   expect(result).toEqual({ attempts: 2, failures: 0 });
 });
+
+test('Second Mic can keep lyrics open without covering its leave or gain controls', async ({ page }) => {
+  const videoId = 'PZGwZwGQTlk';
+  await page.route('**/api/song-lyrics?*', (route) => route.fulfill({
+    json: { videoId, lyrics: { text: '副 Mic 示意歌詞\n第二行', source: null } },
+  }));
+  await openFixture(page, 'singerB', 'owner');
+  await enable(page);
+  await page.evaluate(async (id) => {
+    await import('/song-lyrics.js');
+    const room = {
+      videoId: id, state: 1, duration: 240, serverTime: 20, handoffState: 'idle',
+      leaderConnected: true, leaderFresh: true, ageMs: 0,
+    };
+    window.dispatchEvent(new CustomEvent('relay:playback-view', {
+      detail: { role: 'observer', room, timeline: room },
+    }));
+  }, videoId);
+
+  const lyrics = page.getByRole('button', { name: '歌詞', exact: true });
+  const panel = page.locator('#song-lyrics');
+  const leave = page.locator('#choir-withdraw');
+  await lyrics.click();
+  await expect(panel).toContainText('副 Mic 示意歌詞');
+  await page.locator('#choir-invite-open').click();
+  await consent(page, accepted);
+  await expect(page.locator('.song-stage')).toHaveAttribute('data-choir-follower', 'active');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText('副 Mic 示意歌詞');
+
+  const panelBox = await panel.boundingBox();
+  const leaveBox = await leave.boundingBox();
+  const gainBox = await page.locator('.mic-live-control').boundingBox();
+  expect(panelBox.y).toBeGreaterThanOrEqual(leaveBox.y + leaveBox.height);
+  expect(panelBox.y + panelBox.height).toBeLessThanOrEqual(gainBox.y);
+  await page.locator('#mic-gain').fill('12');
+  await expect(page.locator('#mic-gain-value')).toHaveText('+12 dB');
+
+  await leave.click();
+  expect(await page.evaluate(() => window.__choirSent.at(-1)))
+    .toEqual({ type: 'choir-secondary-withdraw', reason: 'user' });
+  await consent(page, { type: 'choir-secondary-consent-status', status: 'withdrawn', secondaryId: 'singerB' });
+  await expect(leave).toBeHidden();
+  await expect(panel).toBeVisible();
+});

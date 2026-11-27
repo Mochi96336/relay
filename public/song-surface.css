@@ -220,11 +220,10 @@
 
 #show-song-lyrics[aria-expanded="true"] { color: #eee; }
 
-.performance-stage { position: relative; }
-
 #song-lyrics {
-  position: absolute;
-  inset-inline: 0;
+  box-sizing: border-box;
+  block-size: 100%;
+  padding-block: 10px;
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-width: none;

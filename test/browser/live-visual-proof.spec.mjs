@@ -259,7 +259,7 @@ test('listeners can read the current room song lyrics without moving the room co
       return;
     }
     await route.fulfill({
-      json: { videoId, lyrics: videoId === song ? { text: '示意歌詞\n第二行', source: null } : null },
+      json: { videoId, lyrics: videoId === song ? { text: '示意歌詞\n'.repeat(50), source: null } : null },
     });
   });
   await openState(page, 'listener');
@@ -269,6 +269,8 @@ test('listeners can read the current room song lyrics without moving the room co
   const panel = page.locator('#song-lyrics');
   await selectListenerSong(page, song);
   await expect(lyrics).toBeVisible();
+  const diagnostics = page.locator('#diag-overview-ledger [data-row=lyrics]');
+  await expect(diagnostics).toContainText('可用');
   const controls = page.locator('.live-actions');
   const before = await controls.boundingBox();
   await lyrics.click();
@@ -291,6 +293,7 @@ test('listeners can read the current room song lyrics without moving the room co
   await expect(lyrics).toBeHidden();
   await expect(panel).toBeHidden();
   await expect(panel).not.toContainText('示意歌詞');
+  await expect(diagnostics).toContainText('來源查無歌詞');
 });
 
 test('late results cannot replace lyrics after a quick A–B–A song change', async ({ page }) => {

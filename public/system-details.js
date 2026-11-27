@@ -444,7 +444,17 @@ if (
     const playbackClientLastRejection = snapshots.get('playback-client-last-rejection');
     const facts = { product, readiness, source, timing, timeline, statusz: latestStatusz };
 
-    renderLedger('diag-overview-ledger', describeOverview(facts, t));
+    const lyrics = window.relayLyricsDiagnostics;
+    const overview = describeOverview(facts, t);
+    if (lyrics?.videoId) {
+      overview.push({
+        key: 'lyrics',
+        label: t('diag.lyrics.label'),
+        value: t('diag.lyrics.' + lyrics.state),
+        note: lyrics.state === 'failed' && lyrics.httpStatus !== null ? 'HTTP ' + lyrics.httpStatus : '',
+      });
+    }
+    renderLedger('diag-overview-ledger', overview);
     renderLedger('diag-mic-ledger', describeMicTransport(latestStatusz, t));
     renderLedger('diag-audio-ledger', describeAudio(facts, t));
     renderListeners(session);
@@ -471,6 +481,7 @@ if (
       playbackClient: playbackClient ?? null,
       playbackClientLastRejection: playbackClientLastRejection ?? null,
       statusz: latestStatusz ?? null,
+      lyrics: lyrics?.videoId ? lyrics : null,
     }, null, 2);
   }
 
@@ -543,6 +554,8 @@ if (
     rememberPlaybackDiagnostics(event.detail);
     renderDiagnostics();
   });
+
+  window.addEventListener('relay:lyrics-diagnostics', renderDiagnostics);
 
   window.addEventListener('beforeunload', () => {
     stopReadinessRefresh();

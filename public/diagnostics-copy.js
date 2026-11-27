@@ -8,6 +8,13 @@
  */
 
 const en = {
+  'diag.lyrics.label': 'Lyrics',
+  'diag.lyrics.loading': 'Checking…',
+  'diag.lyrics.available': 'Available',
+  'diag.lyrics.missing': 'No lyrics returned',
+  'diag.lyrics.retrying': 'Waiting to retry',
+  'diag.lyrics.failed': 'Lookup failed',
+  'diag.lyrics.no-space': 'Available · not enough room on this screen',
   // Panel chrome
   'diag.title': 'Technical details',
   'diag.tab.overview': 'Overview',
@@ -383,6 +390,13 @@ const en = {
 };
 
 const zhHant = {
+  'diag.lyrics.label': '歌詞',
+  'diag.lyrics.loading': '查詢中…',
+  'diag.lyrics.available': '可用',
+  'diag.lyrics.missing': '來源查無歌詞',
+  'diag.lyrics.retrying': '等待重試',
+  'diag.lyrics.failed': '查詢失敗',
+  'diag.lyrics.no-space': '有歌詞，但畫面留白不足',
   'diag.title': '技術細節',
   'diag.tab.overview': '總覽',
   'diag.tab.mic': 'Mic',

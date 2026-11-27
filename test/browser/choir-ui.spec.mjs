@@ -6,6 +6,7 @@ test.use({ viewport: { width: 390, height: 844 } });
 
 async function openFixture(page, participantId, micOwnerId = null) {
   await page.goto(new URL('__live-visual.html', BASE).href);
+  await page.waitForFunction(() => window.__relayVisualReady === true);
   await page.evaluate(async ({ participantId, micOwnerId }) => {
     window.relayParticipantId = participantId;
     window.__choirSent = [];

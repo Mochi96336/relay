@@ -231,3 +231,49 @@ test('Diagnostics tabs: click, locale changes and reopening retain the active pa
   await page.keyboard.press('Tab');
   await expect(page.getByRole('tabpanel')).toBeFocused();
 });
+
+test('listeners can read the current room song lyrics without moving the room controls', async ({ page }) => {
+  const song = 'PZGwZwGQTlk';
+  const missing = 'RNTq42Tg6Qs';
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.route('**/api/song-lyrics?*', async (route) => {
+    const videoId = new URL(route.request().url()).searchParams.get('videoId');
+    await route.fulfill({
+      json: { videoId, lyrics: videoId === song ? { text: '示意歌詞\n第二行', source: null } : null },
+    });
+  });
+  await openState(page, 'listener');
+  await page.evaluate(async () => { await import('/song-lyrics.js'); });
+
+  function selectSong(videoId) {
+    return page.evaluate((id) => {
+      window.dispatchEvent(new CustomEvent('relay:playback-view', {
+        detail: {
+          role: 'observer',
+          room: { videoId: id },
+          timeline: {
+            videoId: id, state: 1, duration: 200, serverTime: 20, handoffState: 'idle',
+            leaderConnected: true, leaderFresh: true, ageMs: 0,
+          },
+        },
+      }));
+    }, videoId);
+  }
+
+  const lyrics = page.getByRole('button', { name: '歌詞', exact: true });
+  const panel = page.locator('#song-lyrics');
+  await selectSong(song);
+  await expect(lyrics).toBeVisible();
+  const controls = page.locator('.live-actions');
+  const before = await controls.boundingBox();
+  await lyrics.click();
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText('示意歌詞');
+  await expect(page.locator('#start-publisher')).toHaveText('接手 Mic');
+  expect(await controls.boundingBox()).toEqual(before);
+
+  await selectSong(missing);
+  await expect(lyrics).toBeHidden();
+  await expect(panel).toBeHidden();
+  await expect(panel).not.toContainText('示意歌詞');
+});

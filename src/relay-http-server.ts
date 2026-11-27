@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:http';
 import path from 'node:path';
 
 import express from 'express';
-import type { SongLyrics } from './song-lyrics.js';
+import { SongLyricsRetryLater, type SongLyrics } from './song-lyrics.js';
 
 const TAKE_ARTIFACT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -70,7 +70,8 @@ export function createRelayHttpServer(options: RelayHttpServerOptions): Server {
         return;
       }
       res.json({ videoId, lyrics: result });
-    } catch {
+    } catch (error) {
+      if (error instanceof SongLyricsRetryLater) res.setHeader('Retry-After', error.retryAfterSeconds);
       res.sendStatus(503);
     }
   });

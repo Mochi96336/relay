@@ -1,5 +1,11 @@
 export type SongLyrics = { text: string; source: string | null };
 
+export class SongLyricsRetryLater extends Error {
+  constructor(readonly retryAfterSeconds: number) {
+    super('Lyrics upstream temporarily unavailable');
+  }
+}
+
 const origin = 'https://music.youtube.com';
 const maxResponseBytes = 512 * 1024;
 const maxTextLength = 24_000;
@@ -21,6 +27,7 @@ export function createSongLyricsLookup(fetcher = fetch) {
     const versionDate = new Date().toISOString().slice(0, 10).replaceAll('-', '');
     const response = await fetcher(origin + '/youtubei/v1/' + endpoint + '?alt=json', {
       method: 'POST',
+      redirect: 'error',
       headers: { 'Content-Type': 'application/json', Origin: origin },
       body: JSON.stringify({
         ...body,
@@ -34,9 +41,11 @@ export function createSongLyricsLookup(fetcher = fetch) {
         const seconds = Number(retryAfter);
         const delay = retryAfter && Number.isFinite(seconds) ? seconds * 1_000
           : retryAfter ? Date.parse(retryAfter) - Date.now() : 0;
-        cooldownUntil = Date.now() + Math.max(60_000, Math.min(3_600_000, delay || 0));
+        const cooldownMs = Math.max(60_000, Math.min(3_600_000, delay || 0));
+        cooldownUntil = Math.max(cooldownUntil, Date.now() + cooldownMs);
       }
       await response.body?.cancel();
+      if (response.status === 429) throw new SongLyricsRetryLater(Math.ceil((cooldownUntil - Date.now()) / 1_000));
       throw new Error('Lyrics upstream unavailable');
     }
     const reader = response.body.getReader();
@@ -107,9 +116,9 @@ export function createSongLyricsLookup(fetcher = fetch) {
     }
     const request = pending.get(videoId);
     if (request) return request;
-    if (pending.size >= 2 || Date.now() < cooldownUntil) {
-      return Promise.reject(new Error('Lyrics lookup temporarily unavailable'));
-    }
+    const cooldownMs = cooldownUntil - Date.now();
+    if (cooldownMs > 0) return Promise.reject(new SongLyricsRetryLater(Math.ceil(cooldownMs / 1_000)));
+    if (pending.size >= 2) return Promise.reject(new SongLyricsRetryLater(5));
 
     const task = fetchLyrics(videoId).then((value) => {
       if (cache.size >= maxEntries) {

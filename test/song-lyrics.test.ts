@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createSongLyricsLookup } from '../src/song-lyrics.js';
+import { SongLyricsRetryLater, createSongLyricsLookup } from '../src/song-lyrics.js';
 
 const videoId = 'aaaaaaaaaaa';
 const otherId = 'bbbbbbbbbbb';
@@ -51,4 +51,17 @@ test('a version mismatch is cached as missing and temporary failures can retry',
   assert.equal(await lookup(videoId), null);
   assert.equal(await lookup(videoId), null);
   assert.equal(requests, 2);
+});
+
+test('upstream rate limiting delays both the original and subsequent lookups', async () => {
+  let requests = 0;
+  const lookup = createSongLyricsLookup(async () => {
+    requests++;
+    return new Response(null, { status: 429, headers: { 'Retry-After': '120' } });
+  });
+  const shouldBackOff = (error: unknown) => error instanceof SongLyricsRetryLater
+    && error.retryAfterSeconds > 0 && error.retryAfterSeconds <= 120;
+  await assert.rejects(lookup(videoId), shouldBackOff);
+  await assert.rejects(lookup(otherId), shouldBackOff);
+  assert.equal(requests, 1);
 });

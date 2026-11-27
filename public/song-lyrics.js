@@ -4,7 +4,7 @@ const text = document.getElementById('song-lyrics-text');
 const source = document.getElementById('song-lyrics-source');
 const stage = panel.parentElement;
 const heading = toggle.closest('.song-heading-row');
-const localFile = document.getElementById('local-file-panel');
+const songStage = heading.closest('.song-stage');
 const controlsAbove = stage.querySelectorAll('.mic-actions, #mic-takeover, #choir-capture-notice');
 const controlsBelow = stage.querySelectorAll('.take-strip, #mic-live-control');
 const key = new URLSearchParams(location.search).get('key');
@@ -44,15 +44,24 @@ function layout() {
   updateScrollHint();
 }
 
-async function load(song, retry = true) {
+async function load(song, retriesLeft = 2) {
   const controller = new AbortController();
   request = controller;
   const url = new URL('/api/song-lyrics', location.origin);
   url.searchParams.set('videoId', song);
   if (key) url.searchParams.set('key', key);
+  const deadline = setTimeout(() => controller.abort(), 10_000);
+  let retryDelay = 15_000;
   try {
     const response = await fetch(url, { signal: controller.signal });
-    if (response.status === 409 || response.status === 503) throw new Error('Lyrics temporarily unavailable');
+    if (response.status === 409 || response.status >= 500) {
+      const retryAfter = response.headers.get('Retry-After');
+      if (response.status === 409) retryDelay = 1_000;
+      if (retryAfter && /^\d+$/.test(retryAfter)) {
+        retryDelay = Math.max(1_000, Math.min(3_600_000, Number(retryAfter) * 1_000));
+      }
+      throw new Error('Lyrics temporarily unavailable');
+    }
     if (!response.ok) return;
     const result = await response.json();
     if (controller !== request || result.videoId !== videoId || !result.lyrics?.text) return;
@@ -62,14 +71,17 @@ async function load(song, retry = true) {
     hasLyrics = true;
     layout();
   } catch {
-    if (retry && controller === request) {
-      retryTimer = setTimeout(() => load(song, false), 30_000);
+    if (retriesLeft > 0 && controller === request) {
+      retryTimer = setTimeout(() => load(song, retriesLeft - 1), retryDelay);
     }
+  } finally {
+    clearTimeout(deadline);
   }
 }
 
 function selectSong() {
-  const next = localFile.hidden && /^[A-Za-z0-9_-]{11}$/.test(roomVideoId ?? '') ? roomVideoId : null;
+  const next = songStage.dataset.localFile !== 'on'
+    && typeof roomVideoId === 'string' && /^[A-Za-z0-9_-]{11}$/.test(roomVideoId) ? roomVideoId : null;
   if (next === videoId) return;
 
   request?.abort();
@@ -89,7 +101,8 @@ window.addEventListener('relay:playback-view', ({ detail }) => {
   roomVideoId = detail?.room?.videoId ?? null;
   selectSong();
 });
-new MutationObserver(selectSong).observe(localFile, { attributes: true, attributeFilter: ['hidden'] });
+new MutationObserver(selectSong).observe(songStage, { attributeFilter: ['data-local-file'] });
+window.addEventListener('resize', layout);
 const resize = new ResizeObserver(layout);
 for (const element of [stage, ...controlsAbove, ...controlsBelow]) resize.observe(element);
 

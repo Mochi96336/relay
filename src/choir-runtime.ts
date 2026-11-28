@@ -455,13 +455,16 @@ export class ChoirRuntime {
     if (!joining) {
       accepted = this.seat.withdraw(socket);
     } else {
-      // The joiner never names the other singer: it is whoever holds the Mic.
+      // The current owner is authoritative. A newer page also reports the
+      // owner it displayed, so an in-flight tap cannot replace the next duet.
+      const ownerMatches = payload.expectedPrimaryId === undefined
+        ? payload.resume !== true : payload.expectedPrimaryId === ownerId;
       accepted = ownerId !== null
         // A local file song exists only on the Mic owner's phone: a second
         // singer could neither hear it nor be aligned to it.
         && !deps.session.micPremixed
         && deps.mic.mediaOwnerId() === ownerId
-        && (payload.resume !== true || payload.expectedPrimaryId === ownerId)
+        && ownerMatches
         && this.seat.join(socket, ownerId, { resume: payload.resume === true, ...seatCommandId(payload) });
       if (accepted) {
         // Ask for B's media now rather than on the next mix frame.

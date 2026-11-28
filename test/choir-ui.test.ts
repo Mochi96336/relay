@@ -65,7 +65,7 @@ test('B starts its Mic only on its own tap and connects when the server asks for
   // The media client loads with the controls, so the tap cannot be lost.
   assert.match(app, /^import '\.\/choir-media-client\.js';/m);
   // The join tap itself starts capture: browsers require a gesture for the Mic.
-  assert.match(app, /relay-choir-start-secondary-capture[\s\S]*?publishCommand\('choir-secondary-join'\)/);
+  assert.match(app, /relay-choir-start-secondary-capture[\s\S]*?publishCommand\('choir-secondary-join', \{ expectedPrimaryId: joinScope.primaryId/);
   assert.match(presence, /import \{ choirCommandMessage, ChoirSeatCommands \} from '\.\/choir-commands\.js'/);
   assert.match(media, /type === 'choir-media-ready'[\s\S]*?requestClaim\(\)/);
   assert.doesNotMatch(media, /roomEpoch|choir-room-ready/);

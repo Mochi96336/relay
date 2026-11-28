@@ -5,6 +5,7 @@ import { encodePcmFrame } from '../src/pcm-frame.js';
 import { encodeAudioPacket } from '../src/audio-packet.js';
 import { participantIdForCapability } from '../src/participant-capability.js';
 import { laggedMultibandMusicPair } from './helpers/music-calibration.js';
+import { ChoirSeatCommands } from '../public/choir-commands.js';
 import { registerPlayback } from './support/client-commands.js';
 
 /**
@@ -26,8 +27,10 @@ test('with Choir off, no second Mic is offered and its messages take no role', a
     const participantId = participantIdForCapability(capability)!;
     client.send({ type: 'participant-authenticate', participantId, capability, nickname: 'A' });
     await client.waitForType('participant-authenticated');
-    client.send({ type: 'choir-secondary-join' });
-    assert.equal((await client.waitForType('choir-consent-rejected')).reason, 'unavailable');
+    client.send({ type: 'choir-secondary-join', commandId: 10 });
+    const refusal = await client.waitForType('choir-consent-rejected');
+    assert.equal(refusal.reason, 'unavailable');
+    assert.equal(refusal.commandId, 10);
     client.send({ type: 'choir-secondary-media-claim-request' });
     await client.waitFor((m) => m.type === 'choir-media-rejected' && m.reason === 'disabled-or-unverified');
     client.send({ type: 'choir-secondary-media-register',
@@ -488,6 +491,35 @@ test('without Content, B is placed by its YouTube time against the Robot', async
       `B far behind is clamped, and the journal says so\n${duet.choirLog(20)}`);
     assert.match(relay.stdout(), /"event":"b-lead"/);
     assert.ok(settledLine(), `B's lag settles at the target, unclamped (lead ${bLeadMs} ms)\n${duet.choirLog(20)}`);
+  } finally {
+    await duet.close();
+  }
+});
+
+test('rapid second Mic rejoin ignores replies for earlier presses', async () => {
+  const duet = await startDuet();
+  try {
+    const { b } = duet;
+    const commands = new ChoirSeatCommands();
+    const start = b.messages.length;
+    // No event loop turn between presses: a rejected leave, a join, a leave,
+    // then two join attempts (the latter can follow a local timeout).
+    for (const action of ['withdraw', 'join', 'withdraw', 'join', 'join']) {
+      b.send(commands.outgoing({ type: 'choir-secondary-' + action }));
+    }
+    await waitForNewMessage(b, start, m => m.commandId === 5);
+    const replies = b.messages.slice(start).filter(m =>
+      m.type === 'choir-consent-rejected' || m.type === 'choir-secondary-consent-status');
+    assert.deepEqual(replies.map(m => [m.commandId, m.status ?? m.reason]), [
+      [1, 'invalid-or-stale'], [2, 'accepted'], [3, 'withdrawn'], [4, 'accepted'], [5, 'accepted'],
+    ]);
+    assert.deepEqual(replies.filter(m => commands.accepts(m)).map(m => m.commandId), [5]);
+    const c = await duet.connect();
+    await duet.authenticate(c, 'e'.repeat(64), 'C');
+    await duet.join(c);
+    const revoke = await b.waitFor(m => m.status === 'revoked');
+    assert.equal(revoke.commandId, 5);
+    assert.equal(commands.accepts(revoke), true);
   } finally {
     await duet.close();
   }

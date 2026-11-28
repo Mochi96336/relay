@@ -1,5 +1,6 @@
 import { classifyTabCaptureDispatch } from './capture-dispatch.js';
 
+let captureEpoch = 0;
 let stream = null;
 let audioContext = null;
 let source = null;
@@ -105,12 +106,17 @@ function connectRelay() {
 
   const socket = new WebSocket(relayWsUrl(relayPageUrl));
   relaySocket = socket;
+  let retry = true;
+  const registerTimer = setTimeout(() => {
+    if (relaySocket === socket && !relayReady) socket.close();
+  }, 10_000);
   reportState('connecting');
 
   socket.addEventListener('open', () => {
     if (relaySocket !== socket || !audioContext) return;
     const infrastructureKey = relayInfrastructureKey(relayPageUrl);
     if (!/^[0-9a-f]{64}$/.test(infrastructureKey)) {
+      retry = false;
       console.error('Relay source page is missing a valid #infra= capability.');
       reportState('error');
       socket.close();
@@ -143,12 +149,15 @@ function connectRelay() {
     }
 
     if (message.type === 'infrastructure-auth-rejected') {
+      retry = false;
       console.error('Relay rejected infrastructure capability:', message.message);
       reportState('error');
+      socket.close();
       return;
     }
 
     if (message.type === 'registered' && message.role === 'backing') {
+      clearTimeout(registerTimer);
       relayReady = true;
       reportState('sending');
       return;
@@ -161,9 +170,11 @@ function connectRelay() {
   });
 
   socket.addEventListener('close', () => {
+    clearTimeout(registerTimer);
     if (relaySocket !== socket) return;
     relaySocket = null;
     relayReady = false;
+    if (!retry) return;
     reportState('disconnected');
     if (stream && Number.isInteger(activeTabId)) {
       reconnectTimer = setTimeout(connectRelay, 1_000);
@@ -280,6 +291,7 @@ function handlePcm(message) {
 }
 
 async function stopCapture(notify = false) {
+  ++captureEpoch;
   closeRelay();
 
   if (stream) {
@@ -288,6 +300,7 @@ async function stopCapture(notify = false) {
   }
 
   try {
+    if (captureNode) captureNode.port.onmessage = null;
     captureNode?.disconnect();
   } catch {}
   try {
@@ -300,10 +313,8 @@ async function stopCapture(notify = false) {
   silentGain = null;
   source = null;
 
-  if (audioContext) {
-    await audioContext.close().catch(() => {});
-    audioContext = null;
-  }
+  const closing = audioContext;
+  audioContext = null;
 
   if (notify && Number.isInteger(activeTabId)) {
     chrome.runtime.sendMessage({
@@ -322,14 +333,14 @@ async function stopCapture(notify = false) {
   captureBacklogMaxLagMs = 0;
   lastCaptureBacklogWarningAt = 0;
   activeTabId = null;
+  if (closing) await closing.close().catch(() => {});
 }
 
-async function startCapture(streamId, tabId, pageUrl) {
-  await stopCapture(false);
+async function startCapture(streamId, tabId, pageUrl, epoch) {
   activeTabId = tabId;
   relayPageUrl = pageUrl;
 
-  stream = await navigator.mediaDevices.getUserMedia({
+  const acquired = await navigator.mediaDevices.getUserMedia({
     audio: {
       mandatory: {
         chromeMediaSource: 'tab',
@@ -339,13 +350,22 @@ async function startCapture(streamId, tabId, pageUrl) {
     video: false,
   });
 
+  if (epoch !== captureEpoch) {
+    for (const track of acquired.getTracks()) track.stop();
+    return;
+  }
+  stream = acquired;
   const [audioTrack] = stream.getAudioTracks();
   if (!audioTrack) throw new Error('Captured tab stream has no audio track.');
-  audioTrack.addEventListener('ended', () => stopCapture(true), { once: true });
+  audioTrack.addEventListener('ended', () => {
+    if (epoch === captureEpoch) void stopCapture(true);
+  }, { once: true });
 
   audioContext = new AudioContext({ latencyHint: 'interactive' });
   await audioContext.audioWorklet.addModule(chrome.runtime.getURL('capture-worklet.js'));
+  if (epoch !== captureEpoch) return;
   await audioContext.resume();
+  if (epoch !== captureEpoch) return;
 
   captureGeneration = (captureGeneration + 1) >>> 0;
   captureSampleCursor = 0;
@@ -358,7 +378,9 @@ async function startCapture(streamId, tabId, pageUrl) {
   });
   silentGain = audioContext.createGain();
   silentGain.gain.value = 0;
-  captureNode.port.onmessage = (event) => handlePcm(event.data);
+  captureNode.port.onmessage = (event) => {
+    if (epoch === captureEpoch) handlePcm(event.data);
+  };
   captureNode.port.postMessage({ type: 'capture-protocol', pcmEnvelope: true });
 
   // tabCapture removes this tab from Chrome's normal output. Route the captured
@@ -373,15 +395,14 @@ chrome.runtime.onMessage.addListener((message) => {
   if (message?.target !== 'offscreen') return;
 
   if (message.type === 'start-capture') {
-    startCapture(message.streamId, message.tabId, message.pageUrl).catch(async (error) => {
+    const stopped = stopCapture();
+    const epoch = captureEpoch;
+    void stopped.then(() => {
+      if (epoch === captureEpoch) return startCapture(message.streamId, message.tabId, message.pageUrl, epoch);
+    }).catch(error => {
+      if (epoch !== captureEpoch) return;
       console.error('Relay tab source failed', error);
-      const tabId = message.tabId;
-      await stopCapture(false);
-      chrome.runtime.sendMessage({
-        target: 'service-worker',
-        type: 'capture-ended',
-        tabId,
-      }).catch(() => {});
+      void stopCapture(true);
     });
     return;
   }

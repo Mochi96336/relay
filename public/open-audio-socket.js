@@ -2,7 +2,7 @@
 // An endpoint that fails before opening falls back once to the page's tunnel.
 export async function openAudioSocket({
   directUrl, tunnelUrl, onPending, onDirectFailure, stillWanted,
-  WebSocketClass = WebSocket, timeoutMs = 2500,
+  WebSocketClass = WebSocket, timeoutMs = 2500, tunnelTimeoutMs = 20_000,
 }) {
   const urls = directUrl === tunnelUrl ? [tunnelUrl] : [directUrl, tunnelUrl];
   for (let index = 0; index < urls.length; index++) {
@@ -27,9 +27,9 @@ export async function openAudioSocket({
         socket.addEventListener('open', opened);
         socket.addEventListener('error', failed);
         socket.addEventListener('close', failed);
-        // Only bound the optional direct probe. The tunnel may need longer
-        // on a slow network; browser errors or revoked intent still close it.
-        if (urls[index] !== tunnelUrl) timer = setTimeout(failed, timeoutMs);
+        // Give a slow tunnel its own deadline. Otherwise a radio handoff
+        // without a browser close/error can leave reconnect waiting forever.
+        timer = setTimeout(failed, urls[index] === tunnelUrl ? tunnelTimeoutMs : timeoutMs);
       });
       if (!stillWanted()) throw new Error('Audio connection cancelled.');
       return socket;

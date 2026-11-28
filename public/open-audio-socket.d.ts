@@ -6,4 +6,5 @@ export declare function openAudioSocket(options: {
   stillWanted: () => boolean;
   WebSocketClass?: typeof WebSocket;
   timeoutMs?: number;
+  tunnelTimeoutMs?: number;
 }): Promise<WebSocket>;

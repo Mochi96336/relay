@@ -12,11 +12,12 @@ const FRAME_SAMPLES = 960;
 async function registerMonitor(client: RelayClient, extra: Record<string, unknown> = {}) {
   client.send({ type: 'register', role: 'monitor', monitorPacketVersion: 1, ...extra });
   await client.waitForType('registered');
-  // The registration snapshot is sent directly and is not filtered. A reply
-  // that is not part of it marks where the snapshot ends.
-  client.send({ type: 'product-status-request' });
-  await client.waitForType('product-status');
-  return client.messages.length;
+  // The directly sent registration snapshot can itself include product-status.
+  // A correlated pong on this ordered socket marks the end of that snapshot.
+  const id = 'after-monitor-registration';
+  client.send({ type: 'clock-ping', id });
+  const marker = await client.waitFor(m => m.type === 'clock-pong' && m.id === id);
+  return client.messages.indexOf(marker) + 1;
 }
 
 function typesSince(client: RelayClient, from: number) {

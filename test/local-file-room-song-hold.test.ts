@@ -40,7 +40,8 @@ test('every room playing view pauses the local file, including a play still pend
 
 test('the note always ends with what the singer can do now', () => {
   assert.match(ui, /const nextStep = !ready \? t\('localFile\.needsMic'\) : heldByRoom \? t\('localFile\.blockedSong'\) : '';/);
-  assert.match(ui, /note\.textContent = \[transientNote, nextStep\]\.filter\(Boolean\)\.join\(' '\);/);
+  assert.match(ui, /note\.textContent = \[transientNote && t\(transientNote\), nextStep\]\.filter\(Boolean\)\.join\(' '\);/);
+  assert.doesNotMatch(ui, /transientNote = t\(/, 'the note keeps a key, so a language switch re-translates it');
   const micState = ui.slice(ui.indexOf("window.addEventListener('relay-microphone-local-state'"));
   assert.match(micState, /if \(!micActive\) transientNote = null;/, 'a released Mic drops the last session note');
 });

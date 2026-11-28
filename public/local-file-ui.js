@@ -101,6 +101,26 @@ function renderObserver() {
   note.textContent = '';
 }
 
+// With no file open the panel is otherwise hidden, so a refused or closed
+// file is explained there on its own for a few seconds.
+let duetNoticeKey = null;
+let duetNoticeTimer = null;
+function showDuetNotice(key) {
+  duetNoticeKey = key;
+  clearTimeout(duetNoticeTimer);
+  duetNoticeTimer = setTimeout(() => { duetNoticeKey = null; render(); }, 8_000);
+  render();
+}
+
+function renderDuetNotice() {
+  title.textContent = '';
+  source.textContent = t('localFile.label');
+  closeButton.hidden = true;
+  transport.hidden = true;
+  mixDetails.hidden = true;
+  note.textContent = t(duetNoticeKey);
+}
+
 function render() {
   renderMenu();
   const surface = localFileSurface({
@@ -109,12 +129,14 @@ function render() {
     micOwnerId: roomMicOwnerId,
     roomLocalFile,
   });
-  panel.hidden = surface === 'none';
+  const noticeOnly = surface === 'none' && duetNoticeKey !== null;
+  panel.hidden = surface === 'none' && !noticeOnly;
   // Standby keeps the room's own song visible: someone else is singing.
   songStage.dataset.localFile = surface === 'owner' || surface === 'observer' ? 'on' : 'off';
   document.body.dataset.localFile = localFileMix.active ? 'on' : 'off';
   if (surface === 'owner' || surface === 'standby') renderOwner();
   else if (surface === 'observer') renderObserver();
+  else if (noticeOnly) renderDuetNotice();
 }
 
 openButton.addEventListener('click', () => {
@@ -126,6 +148,12 @@ fileInput.addEventListener('change', () => {
   const file = fileInput.files?.[0];
   fileInput.value = '';
   if (!file) return;
+  // The picker may have been open while a second singer joined: a local file
+  // and a duet cannot share the room, and the singer already in stays.
+  if (roomHasDuet) {
+    showDuetNotice('localFile.blockedDuet');
+    return;
+  }
   transientNote = null;
   localFileMix.open(file);
 });
@@ -185,6 +213,12 @@ window.addEventListener('relay-product-status', (event) => {
     lastMicOwnerId = roomMicOwnerId;
   }
   roomHasDuet = Boolean(room?.duet);
+  // A join the room admitted just before this phone's file took effect: keep
+  // the singer who joined, close the file here and say why.
+  if (roomHasDuet && localFileMix.active) {
+    localFileMix.close();
+    showDuetNotice('localFile.closedForDuet');
+  }
   render();
 });
 

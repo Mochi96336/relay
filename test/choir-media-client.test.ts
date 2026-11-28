@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const CLAIM = 'c'.repeat(64);
 
-async function fixture({ direct = false } = {}) {
+async function fixture({ direct = false, denyMicrophone = false } = {}) {
   let now = 0;
   let timerId = 0;
   const timers = new Map<number, { at: number; run: () => void }>();
@@ -38,7 +38,11 @@ async function fixture({ direct = false } = {}) {
   }
   class Capture {
     rate: number | null = null;
-    async prepare() { this.rate = 48_000; return this.rate; }
+    async prepare() {
+      if (denyMicrophone) throw new DOMException('Microphone denied', 'NotAllowedError');
+      this.rate = 48_000;
+      return this.rate;
+    }
     attach() { return true; }
     stop() { this.rate = null; }
     anchorFor() { return null; }
@@ -137,6 +141,15 @@ test('a direct socket that opens but goes quiet sends the next claim through the
   f.emit('relay-choir-media-message', { type: 'choir-media-ready' });
   f.emit('relay-choir-media-message', { type: 'choir-secondary-media-claim', claimToken: CLAIM });
   assert.equal(f.sockets.at(-1)!.url, 'wss://relay.test/ws');
+});
+
+test('permission refusal is reported to the second singer and opens no media socket', async () => {
+  const f = await fixture({ denyMicrophone: true });
+  f.emit('relay-choir-availability', { available: true });
+  f.emit('relay-choir-start-secondary-capture');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.connection().at(-1)?.reason, 'permission-denied');
+  assert.equal(f.sockets.length, 0);
 });
 
 test('media-ready connects B at once, and a repeat never replaces that socket', async () => {

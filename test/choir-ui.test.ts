@@ -85,3 +85,29 @@ test('B starts its Mic only on its own tap and connects when the server asks for
   assert.match(native, /this\.cursor \+= samples/);
   assert.doesNotMatch(media, /navigator\.mediaDevices\.getUserMedia|new AudioWorkletNode|localStorage|sessionStorage|console\.log/);
 });
+
+test('second Mic permission feedback survives a delayed withdraw reply and clears on retry', async () => {
+  const { runInNewContext } = await import('node:vm');
+  const listeners = new Map<string, (event: { detail?: any }) => void>();
+  let join = () => {};
+  const button = { dataset: {}, addEventListener: (_: string, cb: () => void) => { join = cb; } };
+  const notice = { hidden: true, textContent: '' };
+  const window = { relayParticipantId: 'b', addEventListener: (type: string, fn: (e: any) => void) => listeners.set(type, fn),
+    dispatchEvent() {}, relayI18n: { t: (key: string) => key } };
+  const document = { body: { dataset: {} }, querySelector: (sel: string) => sel === '#choir-capture-notice'
+    ? notice : sel === '#choir-invite-open' ? button : { addEventListener() {} } };
+  const source = (await file('../public/choir-ui.js')).replace(/^import .*;$/gm, '');
+  runInNewContext(source, { document, window, Event, CustomEvent: class { constructor(..._args: any[]) {} },
+    clearTimeout() {}, setTimeout() { return 1; } });
+  const emit = (type: string, detail: object) => listeners.get(type)!({ detail });
+  emit('relay-choir-availability', { available: true });
+  emit('relay-presence-state', { authorityFresh: true,
+    session: { micOwnerId: 'a', micConnected: true, serverIncarnation: 'server' } });
+  join();
+  emit('relay-choir-media-connection', { state: 'capture-failed', reason: 'permission-denied' });
+  emit('relay-choir-message', { type: 'choir-secondary-consent-status', status: 'withdrawn', secondaryId: 'b' });
+  assert.equal(notice.hidden, false);
+  assert.equal(notice.textContent, 'voice.permissionRequired');
+  join();
+  assert.equal(notice.hidden, true);
+});

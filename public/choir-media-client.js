@@ -132,10 +132,10 @@ window.addEventListener('relay-choir-start-secondary-capture', async () => {
     const sourceRate = await capture.prepare();
     if (currentPrepare !== prepareAttempt || !sourceRate) return;
     requestClaim();
-  } catch {
+  } catch (error) {
     if (currentPrepare !== prepareAttempt) return;
     disconnect();
-    notify('capture-failed');
+    notify('capture-failed', error?.name === 'NotAllowedError' ? 'permission-denied' : 'capture-unavailable');
   } finally {
     if (currentPrepare === prepareAttempt) preparing = false;
   }

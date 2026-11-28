@@ -39,7 +39,9 @@ test('every room playing view pauses the local file, including a play still pend
 });
 
 test('the note always ends with what the singer can do now', () => {
-  assert.match(ui, /const nextStep = !ready \? t\('localFile\.needsMic'\) : heldByRoom \? t\('localFile\.blockedSong'\) : '';/);
+  assert.match(ui, /const nextStep = !ready \? needsMic : heldByRoom \? t\('localFile\.blockedSong'\) : '';/);
+  // A sibling tab holding this identity's Mic hides Take Mic here.
+  assert.match(ui, /const needsMic = siblingHoldsMic \? t\('localFile\.micInOtherTab'\) : t\('localFile\.needsMic'\);/);
   assert.match(ui, /note\.textContent = \[transientNote && t\(transientNote\), nextStep\]\.filter\(Boolean\)\.join\(' '\);/);
   assert.doesNotMatch(ui, /transientNote = t\(/, 'the note keeps a key, so a language switch re-translates it');
   const micState = ui.slice(ui.indexOf("window.addEventListener('relay-microphone-local-state'"));

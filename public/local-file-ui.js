@@ -68,9 +68,13 @@ function renderMenu() {
   openNote.textContent = blocked ? t(blocked) : '';
 }
 
-function renderOwner() {
+function renderOwner(standby) {
   title.textContent = localFileMix.title ?? '';
-  source.textContent = t('localFile.label');
+  // Waiting here while the room uses another phone's (or tab's) file: say
+  // which one is on now, so this file reads as the next one.
+  source.textContent = standby && roomLocalFile
+    ? t('localFile.standbyNow', { title: roomLocalFile.title ?? t('localFile.untitled') })
+    : t('localFile.label');
   closeButton.hidden = false;
   transport.hidden = false;
   mixDetails.hidden = false;
@@ -88,7 +92,11 @@ function renderOwner() {
   if (!seeking) seek.value = String(localFileMix.currentTime);
   time.textContent = `${clock(localFileMix.currentTime)} / ${clock(duration)}`;
   // What happened (transient) never hides what the singer can do now.
-  const nextStep = !ready ? t('localFile.needsMic') : heldByRoom ? t('localFile.blockedSong') : '';
+  // Another tab of this identity holds the Mic: the Take Mic button is not
+  // offered here, so point at that tab instead.
+  const siblingHoldsMic = !micActive && roomMicOwnerId !== null && roomMicOwnerId === window.relayParticipantId;
+  const needsMic = siblingHoldsMic ? t('localFile.micInOtherTab') : t('localFile.needsMic');
+  const nextStep = !ready ? needsMic : heldByRoom ? t('localFile.blockedSong') : '';
   note.textContent = [transientNote && t(transientNote), nextStep].filter(Boolean).join(' ');
 
   music.value = String(Math.round(localFileMix.musicLevel * 100));
@@ -145,7 +153,7 @@ function render() {
   // Standby keeps the room's own song visible: someone else is singing.
   songStage.dataset.localFile = surface === 'owner' || surface === 'observer' ? 'on' : 'off';
   document.body.dataset.localFile = localFileMix.active ? 'on' : 'off';
-  if (surface === 'owner' || surface === 'standby') renderOwner();
+  if (surface === 'owner' || surface === 'standby') renderOwner(surface === 'standby');
   else if (surface === 'observer') renderObserver();
   else if (noticeOnly) renderDuetNotice();
 }
@@ -214,7 +222,7 @@ localFileMix.addEventListener('change', (event) => {
     transientNote = null;
     // A file opened while this page does not hold the Mic belongs to no
     // earlier singing here: the next singer taking the Mic leaves it ready.
-    if (localFileMix.active && roomMicOwnerId !== window.relayParticipantId) lastMicOwnerId = null;
+    if (localFileMix.active && (roomMicOwnerId !== window.relayParticipantId || !micActive)) lastMicOwnerId = null;
   }
   render();
 });
@@ -236,7 +244,9 @@ window.addEventListener('relay-product-status', (event) => {
     if (localFileMix.active && lostMicToAnother({
       previousOwnerId: lastMicOwnerId, nextOwnerId: roomMicOwnerId, myId: window.relayParticipantId,
     })) localFileMix.close();
-    lastMicOwnerId = roomMicOwnerId;
+    // This identity's Mic in a sibling tab is not this page singing: a later
+    // handoff from that tab leaves the file waiting here open.
+    lastMicOwnerId = roomMicOwnerId === window.relayParticipantId && !micActive ? null : roomMicOwnerId;
   }
   roomHasDuet = Boolean(room?.duet);
   // A join the room admitted just before this phone's file took effect: keep

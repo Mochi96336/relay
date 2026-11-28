@@ -9,6 +9,9 @@ export function listenOpusDecodingSupported(options?: {
   EncodedAudioChunkClass?: unknown;
 }): Promise<boolean>;
 
+export const LISTEN_OPUS_QUERY_DEADLINE_MS: number;
+export function opusCapabilityWithin(capability: Promise<boolean>, deadlineMs?: number): Promise<boolean>;
+
 export type ListenOpusFrame = {
   firstSampleIndex: number;
   sampleCount: number;

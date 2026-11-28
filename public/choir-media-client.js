@@ -280,6 +280,7 @@ window.addEventListener('relay-choir-song-anchor', (event) => {
     detail: {
       type: 'choir-secondary-song-anchor', videoId: detail.videoId, state: detail.state,
       currentTime: detail.currentTime, playbackRate: detail.playbackRate, captureAnchor,
+      leadMs: detail.leadMs,
     },
   }));
 });

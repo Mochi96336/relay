@@ -84,19 +84,19 @@ export class ChoirSecondaryCapture {
     const epoch = this.epoch;
     // As the main Mic does: iOS enters play-and-record before the input
     // opens, rather than switching while B's local song plays.
-    claimMicrophoneAudio(true);
+    claimMicrophoneAudio(true, this);
     this.claimedAudio = true;
     // Establish the AudioContext during the actual click gesture on iOS.
     // Opus takes 20 ms frames at 48 kHz, so ask for that rate, as app.js does.
     const wantOpus = micCodec.opus;
-    const context = new AudioContext({ latencyHint: 'interactive', ...(wantOpus ? { sampleRate: 48_000 } : {}) });
-    this.context = context;
-    // Invoke resume() in the SAME user gesture, before the asynchronous
-    // permission dialog consumes transient activation (notably on iOS).
-    // Full graph readiness is checked again after the worklet is installed.
-    void context.resume().catch(() => {});
     let stream;
     try {
+      const context = new AudioContext({ latencyHint: 'interactive', ...(wantOpus ? { sampleRate: 48_000 } : {}) });
+      this.context = context;
+      // Invoke resume() in the SAME user gesture, before the asynchronous
+      // permission dialog consumes transient activation (notably on iOS).
+      // Full graph readiness is checked again after the worklet is installed.
+      void context.resume().catch(() => {});
       stream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: false,
           noiseSuppression: false, autoGainControl: false },
@@ -302,7 +302,7 @@ export class ChoirSecondaryCapture {
     if (ctx) void ctx.close().catch(() => {});
     if (this.claimedAudio) {
       this.claimedAudio = false;
-      claimMicrophoneAudio(false);
+      claimMicrophoneAudio(false, this);
     }
     this.rate = null;
     this.generation = null;

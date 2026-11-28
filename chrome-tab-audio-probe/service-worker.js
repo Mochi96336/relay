@@ -1,6 +1,7 @@
 const OFFSCREEN_URL = 'offscreen.html';
 
 let activeTabId = null;
+let actionEpoch = 0;
 let creatingOffscreen = null;
 let droppedChunks = 0;
 let captureBacklogDroppedChunks = 0;
@@ -45,11 +46,14 @@ function supportedRelayPage(tab) {
 
 async function clearBadge(tabId) {
   if (!Number.isInteger(tabId)) return;
-  await chrome.action.setBadgeText({ tabId, text: '' });
-  await chrome.action.setTitle({ tabId, title: 'Start Relay tab audio source' });
+  await Promise.all([
+    chrome.action.setBadgeText({ tabId, text: '' }),
+    chrome.action.setTitle({ tabId, title: 'Start Relay tab audio source' }),
+  ]);
 }
 
 async function stopCapture() {
+  ++actionEpoch;
   const tabId = activeTabId;
   activeTabId = null;
   droppedChunks = 0;
@@ -61,6 +65,7 @@ async function stopCapture() {
 
 chrome.action.onClicked.addListener(async (tab) => {
   if (!Number.isInteger(tab.id)) return;
+  const epoch = ++actionEpoch;
 
   try {
     if (activeTabId !== null) {
@@ -77,14 +82,18 @@ chrome.action.onClicked.addListener(async (tab) => {
       return;
     }
 
-    await ensureOffscreenDocument();
-    const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
     activeTabId = tab.id;
+    await ensureOffscreenDocument();
+    if (epoch !== actionEpoch) return;
+    const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
+    if (epoch !== actionEpoch) return;
 
     await chrome.action.setBadgeText({ tabId: tab.id, text: '…' });
+    if (epoch !== actionEpoch) return;
     await chrome.action.setTitle({ tabId: tab.id, title: 'Relay tab source · starting…' });
+    if (epoch !== actionEpoch) return;
 
-    chrome.runtime.sendMessage({
+    await chrome.runtime.sendMessage({
       target: 'offscreen',
       type: 'start-capture',
       streamId,
@@ -92,9 +101,10 @@ chrome.action.onClicked.addListener(async (tab) => {
       pageUrl: tab.url,
     });
   } catch (error) {
+    if (epoch !== actionEpoch) return;
     console.error('Could not start Relay tab source', error);
-    await clearBadge(tab.id);
     activeTabId = null;
+    await clearBadge(tab.id);
   }
 });
 
@@ -127,7 +137,7 @@ chrome.runtime.onMessage.addListener((message) => {
     return;
   }
 
-  if (message.type === 'audio-level' && message.tabId === activeTabId) {
+  if (message.type === 'audio-level' && message.tabId === activeTabId && message.sending === true) {
     const db = Number(message.dbfs);
     const text = Number.isFinite(db) && db > -80 ? String(Math.round(db)) : '--';
     const warnings = [];

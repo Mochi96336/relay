@@ -248,6 +248,49 @@ test('a Mic session that ends does not start the song again on the next Mic', as
   assert.equal(h.elements[1].paused, true, 'but the singer presses Play');
 });
 
+test('a pause made while the device resumes withdraws that play', async () => {
+  const h = harness();
+  h.mix.open(h.file('a.wav'));
+  const context = fakeContext();
+  context.state = 'suspended';
+  let release = () => {};
+  context.resume = () => new Promise<void>(ok => { release = () => { context.state = 'running'; ok(); }; });
+  h.mix.connectInput(h.capture(context));
+  const pending = h.mix.play();
+  h.mix.pause();
+  release();
+  assert.equal(await pending, false);
+  assert.equal(h.elements[0].paused, true);
+  assert.equal(h.mix.playing, false);
+  assert.ok(!h.events.includes('play-failed'));
+
+  // A play pressed again after the pause still starts once the device is up.
+  context.state = 'suspended';
+  const again = h.mix.play();
+  release();
+  assert.equal(await again, true);
+  assert.equal(h.mix.playing, true);
+  h.mix.pause();
+});
+
+test('a play that outlives its graph neither starts the new one nor reports failure', async () => {
+  const h = harness();
+  h.mix.open(h.file('a.wav'));
+  const context = fakeContext();
+  context.state = 'suspended';
+  let release = () => {};
+  context.resume = () => new Promise<void>(ok => { release = () => { context.state = 'running'; ok(); }; });
+  h.mix.connectInput(h.capture(context));
+  const pending = h.mix.play();
+  h.mix.open(h.file('b.wav'));
+  release();
+  assert.equal(await pending, false);
+  assert.equal(h.elements[0].paused, true);
+  assert.equal(h.elements[1].paused, true);
+  assert.equal(h.mix.playing, false);
+  assert.ok(!h.events.includes('play-failed'));
+});
+
 test('the song area follows who holds the Mic', () => {
   const surface = (fileOpen: boolean, micOwnerId: string | null, roomLocalFile: unknown = null) =>
     localFileSurface({ fileOpen, myId: 'me', micOwnerId, roomLocalFile });

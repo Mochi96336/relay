@@ -18,3 +18,10 @@ test('every room playing view pauses the local file, including a play still pend
   assert.doesNotMatch(handler, /if \(next && !roomSongPlaying && localFileMix\.playing\) \{\s*localFileMix\.pause\(\)/,
     'not only on the transition into playing');
 });
+
+test('the note always ends with what the singer can do now', () => {
+  assert.match(ui, /const nextStep = !ready \? t\('localFile\.needsMic'\) : heldByRoom \? t\('localFile\.blockedSong'\) : '';/);
+  assert.match(ui, /note\.textContent = \[transientNote, nextStep\]\.filter\(Boolean\)\.join\(' '\);/);
+  const micState = ui.slice(ui.indexOf("window.addEventListener('relay-microphone-local-state'"));
+  assert.match(micState, /if \(!micActive\) transientNote = null;/, 'a released Mic drops the last session note');
+});

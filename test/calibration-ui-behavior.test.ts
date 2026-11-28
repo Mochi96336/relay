@@ -454,6 +454,8 @@ test("the second Mic's Realign shows B's own value and replays only B's test ton
   // The main Mic's own value must not be shown as B's.
   ui.emit('relay-timing-authority', { authorityFresh: true, valueMs: 240 });
   status({ lagMs: 85, realigning: false });
+  assert.equal(ui.button.hidden, true, 'a sibling tab shares the ID but cannot realign');
+  ui.emit('relay-choir-guest-state', { enabled: true });
   assert.equal(ui.button.hidden, false);
   assert.equal(ui.button.disabled, false);
   assert.equal(ui.value.textContent, '+85 ms');
@@ -486,4 +488,9 @@ test("the second Mic's Realign shows B's own value and replays only B's test ton
 
   status({ lagMs: null, realigning: false });
   assert.equal(ui.value.textContent, '—', 'not placed yet');
+  ui.button.click();
+  ui.emit('relay-choir-guest-state', { enabled: false });
+  assert.equal(ui.button.hidden, true, 'leaving hides Realign before a room update');
+  ui.emit('relay-choir-guest-state', { enabled: true });
+  assert.equal(ui.button.disabled, false, 'the previous seat has no pending request here');
 });

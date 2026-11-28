@@ -84,7 +84,10 @@ function resetJoin() {
 
 function expireJoin() {
   if (joinScope?.waitingForCapture) noticeKey = 'choir.captureTimedOut';
-  else publishCommand('choir-secondary-withdraw', { reason: 'join-timeout' });
+  else {
+    noticeKey = 'choir.joinTimedOut';
+    publishCommand('choir-secondary-withdraw', { reason: 'join-timeout' });
+  }
   resetJoin();
 }
 
@@ -150,7 +153,7 @@ window.addEventListener('relay-choir-message', (event) => {
   if (joinScope?.waitingForCapture) return;
   const message = event.detail;
   if (message?.type === 'choir-consent-rejected') {
-    if (joinScope && message.reason === 'seat-changed') noticeKey = 'choir.seatChanged';
+    if (joinScope) noticeKey = message.reason === 'seat-changed' ? 'choir.seatChanged' : 'choir.joinRefused';
     resetJoin();
     return;
   }

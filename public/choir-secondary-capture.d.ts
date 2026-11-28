@@ -23,6 +23,13 @@ export class ChoirSecondaryCapture {
   opus: any;
   readonly packetVersion: 2 | 3;
   prepare(): Promise<number | null>;
+  anchorFor(sampledAtPerformanceMs: number): {
+    generation: number | null;
+    sampleRate: number;
+    sampleIndex: number;
+    mediaDeltaSeconds: number;
+    uncertaintyMs: number;
+  } | null;
   attach(socket: any, sampleRate: number): boolean;
   onCapture(event: { data: unknown }, graph: any, epoch: number): void;
   sendPacket(packet: ArrayBuffer): boolean;

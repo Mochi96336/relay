@@ -33,6 +33,20 @@ export async function listenOpusDecodingSupported({
   }
 }
 
+/** How long one Listen connect waits for the browser's Opus answer. */
+export const LISTEN_OPUS_QUERY_DEADLINE_MS = 1_500;
+
+/**
+ * The capability answer if it arrives in time, else false: an optional codec
+ * query that never answers must not hold the room's PCM sound. The query
+ * itself is kept, so a later connect can still use Opus once it has answered.
+ */
+export function opusCapabilityWithin(capability, deadlineMs = LISTEN_OPUS_QUERY_DEADLINE_MS) {
+  let timer;
+  const deadline = new Promise((resolve) => { timer = setTimeout(() => resolve(false), deadlineMs); });
+  return Promise.race([capability, deadline]).finally(() => clearTimeout(timer));
+}
+
 function copyChannel(audioData) {
   const pcm = new Float32Array(audioData.numberOfFrames);
   try {

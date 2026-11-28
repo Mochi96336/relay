@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import {
@@ -229,4 +230,19 @@ test('Opus is offered only where WebCodecs can decode it', async () => {
     AudioDecoderClass: Throws,
     EncodedAudioChunkClass: FakeEncodedAudioChunk,
   }), false);
+});
+
+test('an unanswered Opus capability query lets this connect use PCM without losing a later answer', async () => {
+  const { opusCapabilityWithin } = await import('../public/listen-opus-decoder.js');
+  let answer!: (supported: boolean) => void;
+  const capability = new Promise<boolean>((resolve) => { answer = resolve; });
+  assert.equal(await opusCapabilityWithin(capability, 20), false, 'no answer in time: PCM');
+  answer(true);
+  assert.equal(await opusCapabilityWithin(capability, 20), true, 'the next connect uses the real answer');
+  assert.equal(await opusCapabilityWithin(Promise.resolve(false), 20), false);
+});
+
+test('Listen registers through the bounded capability query', async () => {
+  const listen = await readFile(new URL('../public/listen.js', import.meta.url), 'utf8');
+  assert.match(listen, /function offerOpus\(\) \{[\s\S]*?return opusCapabilityWithin\(opusOffer\);/);
 });

@@ -1,5 +1,5 @@
 import type { TakeQualityAssessment } from './take-quality.js';
-import type { TakeSongSnapshot, TakeStopReason } from './take-session.js';
+import { cloneSong, type TakeSongSnapshot, type TakeStopReason } from './take-session.js';
 
 const TAKE_STOP_REASONS = new Set<TakeStopReason>([
   'user',
@@ -146,7 +146,12 @@ function isTakeSongSnapshot(value: unknown): value is TakeSongSnapshot {
   if (!nullableFinite(song.revision)) return false;
   if (!nullableFinite(song.state)) return false;
   if (!nullableFinite(song.serverTime)) return false;
-  return nullableFinite(song.playbackRate);
+  if (!nullableFinite(song.playbackRate)) return false;
+  if (song.localFile === undefined || song.localFile === null) return true;
+  const localFile = recordValue(song.localFile);
+  return Boolean(localFile)
+    && (localFile!.title === null || typeof localFile!.title === 'string')
+    && typeof localFile!.heard === 'boolean';
 }
 
 function isTakeQualityEvidence(value: unknown, policyVersion: string) {
@@ -304,7 +309,7 @@ export function normalizePersistedTakeRichFields(
   let song: TakeSongSnapshot | null = null;
   if (take.song !== undefined && take.song !== null) {
     if (!isTakeSongSnapshot(take.song)) return null;
-    song = { ...take.song };
+    song = cloneSong(take.song);
   }
 
   let quality: TakeQualityAssessment | null = null;

@@ -590,6 +590,7 @@ function clearMicMediaAuthority() {
   // Premixed belongs to the capture that declared it.
   session.setMicPremixed(false);
   localFileTitle = null;
+  localFilePlaying = false;
   // An audibility or level verdict belongs to one capture, never to the next singer.
   resetMicAudibility();
   micLevel.reset();
@@ -1280,9 +1281,14 @@ function cancelPendingRoomSongCommand(reason: string, nowMs = performance.now())
 }
 
 function takeSongSnapshot(nowMs = performance.now()): TakeSongSnapshot {
-  return takeSongSnapshotFromRoom(
+  const song = takeSongSnapshotFromRoom(
     youtubeTimeline.roomStatusPayload(nowMs) as Record<string, unknown>,
   );
+  // Local file mode: the song is in the Mic itself; say which, and whether
+  // it is playing (a loaded file can sit silent under the whole Take).
+  return session.micPremixed
+    ? { ...song, localFile: { title: localFileTitle, heard: localFilePlaying } }
+    : song;
 }
 
 function takeFrameBoundary(nowMs = performance.now()) {
@@ -2485,6 +2491,8 @@ function reportMicDevice(health: AudioUplinkHealth) {
 
 /** What the Mic owner's local file is called, as shown to the room; null when unnamed. */
 let localFileTitle: string | null = null;
+/** The Mic owner's phone reports its local file playing (set-local-file). */
+let localFilePlaying = false;
 
 function sanitizeLocalFileTitle(value: unknown) {
   if (typeof value !== 'string') return null;
@@ -3151,6 +3159,8 @@ const commandProtocol = createRelayCommandProtocol<RelaySocket>({
     // only with a new capture registration.
     if (!session.micPremixed) return;
     localFileTitle = sanitizeLocalFileTitle(payload.title);
+    if (typeof payload.playing === 'boolean') localFilePlaying = payload.playing;
+    if (localFilePlaying) takeController.noteLocalFileHeard(localFileTitle);
     broadcastProductStatus();
     return;
   },
@@ -3517,6 +3527,7 @@ function publisherActivated(request: {
   /** The phone mixed a local song into this capture (local file mode). */
   premixed: boolean;
   localFileTitle: string | null;
+  localFilePlaying: boolean;
 }) {
   // The ownership change's timing invalidation and handoff preparation wait
   // until the new publisher is bound.
@@ -3581,6 +3592,9 @@ function publisherActivated(request: {
   }
   session.setMicPremixed(request.premixed);
   localFileTitle = request.premixed ? request.localFileTitle : null;
+  // A rebuilt capture can carry a song already playing (clock-loss recovery).
+  localFilePlaying = request.premixed && request.localFilePlaying;
+  if (localFilePlaying) takeController.noteLocalFileHeard(localFileTitle);
   if (!previousPublisher && session.active) {
     takeController.noteQualityEvent('mic-transport-connected');
   }
@@ -3760,6 +3774,7 @@ const registrationProtocol = createRelayRegistrationProtocol<RelaySocket>({
       requestedMicGainDb: requestedMicGainDb(payload.micGainDb),
       premixed: payload.premixed === true,
       localFileTitle: sanitizeLocalFileTitle(payload.localFileTitle),
+      localFilePlaying: payload.localFilePlaying === true,
     });
     return;
   },

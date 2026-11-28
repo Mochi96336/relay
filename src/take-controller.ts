@@ -43,6 +43,8 @@ export type TakeHistoryItem = {
   takeId: string;
   endedAtMs: number;
   songVideoId: string | null;
+  /** The local file heard in this Take (local file mode); null otherwise. */
+  localFileTitle: string | null;
   artifact: {
     url: string;
     durationMs: number;
@@ -79,6 +81,7 @@ function historyItem(entry: TakeLibraryEntry): TakeHistoryItem {
     takeId: entry.takeId,
     endedAtMs: entry.endedAtMs,
     songVideoId: entry.song?.videoId ?? null,
+    localFileTitle: entry.song?.localFile?.heard === true ? entry.song.localFile.title ?? '' : null,
     artifact: {
       url: entry.artifact.url,
       durationMs: entry.artifact.durationMs,
@@ -94,6 +97,7 @@ function sameHistoryItem(a: TakeHistoryItem | undefined, b: TakeHistoryItem) {
     && a.takeId === b.takeId
     && a.endedAtMs === b.endedAtMs
     && a.songVideoId === b.songVideoId
+    && a.localFileTitle === b.localFileTitle
     && a.artifact.url === b.artifact.url
     && a.artifact.durationMs === b.artifact.durationMs
     && a.qualityVerdict === b.qualityVerdict
@@ -408,6 +412,15 @@ export class TakeController {
   noteTimingAtStart(timing: TakeTimingAtStart) {
     if (!this.session.recordingTakeId) return false;
     this.quality?.noteTimingAtStart(timing);
+    return true;
+  }
+
+  /** The singer's local file started playing; a recording Take now carries it. */
+  noteLocalFileHeard(title: string | null) {
+    const takeId = this.session.recordingTakeId;
+    if (!takeId || this.pendingStop?.takeId === takeId) return false;
+    if (!this.session.noteLocalFileHeard(title)) return false;
+    this.emitChange();
     return true;
   }
 

@@ -77,7 +77,8 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.history = new Float32Array(this.historySamples);
     this.historyWrite = 0;
     this.historyFilled = 0;
-    this.concealCycle = null;
+    this.concealCycle = new Float32Array(this.historySamples);
+    this.periodSearchHistory = new Float32Array(this.historySamples);
     this.concealPeriod = null;
     this.concealEmittedSamples = 0;
     // How far the period's first sample is from continuing its last one, and
@@ -438,17 +439,6 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.historyFilled = Math.min(this.historySamples, this.historyFilled + count);
   }
 
-  /** Recent real output, oldest first. */
-  unrolledHistory() {
-    const length = this.historyFilled;
-    const recent = new Float32Array(length);
-    const start = (this.historyWrite - length + this.historySamples) % this.historySamples;
-    for (let index = 0; index < length; index += 1) {
-      recent[index] = this.history[(start + index) % this.historySamples];
-    }
-    return recent;
-  }
-
   /**
    * The period of the last real output, or null when it has none worth
    * repeating: too little history, no energy, or no lag that correlates.
@@ -456,9 +446,12 @@ class PlaybackProcessor extends AudioWorkletProcessor {
    */
   estimateConcealmentPeriod() {
     if (this.historyFilled < this.historySamples) return null;
-    const recent = this.unrolledHistory();
+    const recent = this.periodSearchHistory;
+    const split = this.historyWrite;
+    recent.set(this.history.subarray(split));
+    recent.set(this.history.subarray(0, split), this.historySamples - split);
     let mean = 0;
-    for (const sample of recent) mean += sample;
+    for (let i = 0; i < recent.length; i++) mean += recent[i];
     mean /= recent.length;
     for (let index = 0; index < recent.length; index += 1) recent[index] -= mean;
 
@@ -472,47 +465,56 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     // Below about -80 dBFS RMS there is nothing to continue.
     if (segmentEnergy / window < 1e-8) return null;
 
-    const correlationAt = (lag) => {
+    // Bound the coarse search cost at high hardware sample rates. Validate the
+    // winning native period against every sample before repeating audio.
+    const stride = Math.max(1, Math.ceil(sampleRate / 16000));
+    const correlationAt = (lag, step, referenceEnergy) => {
       let cross = 0;
       let energy = 0;
-      for (let index = end - window; index < end; index += 1) {
+      for (let index = end - window; index < end; index += step) {
         const lagged = recent[index - lag];
         cross += recent[index] * lagged;
         energy += lagged * lagged;
       }
-      return energy > 0 ? cross / Math.sqrt(segmentEnergy * energy) : -1;
+      return energy > 0 ? cross / Math.sqrt(referenceEnergy * energy) : -1;
     };
+    let coarseEnergy = 0;
+    for (let i = end - window; i < end; i += stride) coarseEnergy += recent[i] ** 2;
     let bestLag = minLag;
     let bestScore = -Infinity;
-    for (let lag = minLag; lag <= maxLag; lag += 2) {
-      const score = correlationAt(lag);
+    for (let lag = minLag; lag <= maxLag; lag += stride) {
+      const score = correlationAt(lag, stride, coarseEnergy);
       if (score > bestScore) {
         bestScore = score;
         bestLag = lag;
       }
     }
-    for (let lag = Math.max(minLag, bestLag - 1); lag <= Math.min(maxLag, bestLag + 1); lag += 1) {
-      const score = correlationAt(lag);
+    const coarseLag = bestLag;
+    bestScore = -Infinity;
+    for (let lag = Math.max(minLag, coarseLag - stride); lag <= Math.min(maxLag, coarseLag + stride); lag += 1) {
+      const score = correlationAt(lag, stride, coarseEnergy);
       if (score > bestScore) {
         bestScore = score;
         bestLag = lag;
       }
     }
-    return bestScore >= CONCEAL_MIN_CORRELATION ? bestLag : null;
+    return bestScore >= CONCEAL_MIN_CORRELATION && correlationAt(bestLag, 1, segmentEnergy) >= CONCEAL_MIN_CORRELATION
+      ? bestLag : null;
   }
 
   /** Starts concealing an underrun; false leaves the edge to the silence fade. */
   beginConcealment() {
     const period = this.estimateConcealmentPeriod();
     if (period === null) return false;
-    const recent = this.unrolledHistory();
-    this.concealCycle = recent.slice(recent.length - period);
+    const start = (this.historyWrite + this.historySamples - period) % this.historySamples;
+    for (let i = 0; i < period; i++) this.concealCycle[i] = this.history[(start + i) % this.historySamples];
     this.concealPeriod = period;
     // In the real audio the period's first sample followed the one before
     // it. The last real sample stands in that one's place now, at the
     // underrun and at every repeat alike, so the step is the same each time.
-    const beforeCycle = recent.length - period - 1;
-    this.concealStep = beforeCycle >= 0 ? recent[recent.length - 1] - recent[beforeCycle] : 0;
+    const last = (this.historyWrite + this.historySamples - 1) % this.historySamples;
+    const beforeCycle = (start + this.historySamples - 1) % this.historySamples;
+    this.concealStep = this.history[last] - this.history[beforeCycle];
     this.concealSpliceSamples = Math.max(1, Math.min(
       Math.floor(period / 2),
       Math.round((sampleRate * CONCEAL_SPLICE_MS) / 1000),

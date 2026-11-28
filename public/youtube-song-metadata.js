@@ -1,5 +1,13 @@
 let player = null;
 
+// Only the room's song player (youtube.js, on #youtube-player). The second
+// singer's follower player (choir-follower.js) is built through the same
+// YT.Player and destroyed on leaving: it must never replace this reference.
+const ROOM_PLAYER_MOUNT = 'youtube-player';
+function isRoomPlayerTarget(target) {
+  return target === ROOM_PLAYER_MOUNT || target?.id === ROOM_PLAYER_MOUNT;
+}
+
 function cleanText(value, maxLength) {
   if (typeof value !== 'string') return null;
   const normalized = value.replace(/\s+/g, ' ').trim();
@@ -18,7 +26,7 @@ function wrapPlayerConstructor() {
 
   function RelayMetadataPlayer(target, options = {}) {
     const created = new OriginalPlayer(target, options);
-    attachPlayer(created);
+    if (isRoomPlayerTarget(target)) attachPlayer(created);
     return created;
   }
 

@@ -56,6 +56,12 @@ test('the heading names the second singer for the owner, the second singer and e
     const socket = FakeWebSocket.latest!;
     const duet = (state: string, secondaryId = 'viewer') => ({ secondaryId, secondaryNickname: '小明', state });
 
+    socket.emit(productStatus('owner', duet('singing')));
+    assert.equal(title.textContent, 'voice.duetPair{"owner":"Singer A","partner":"小明"}',
+      'the singer’s other tab hears the pair as a listener');
+    fakeWindow.dispatchEvent(new FakeCustomEvent('relay-choir-guest-state', { detail: { enabled: true } }));
+    assert.equal(title.textContent, 'voice.duetYours{"name":"Singer A"}');
+
     // The second singer sees who they are singing with and how far along they are.
     for (const state of ['joined', 'aligning', 'singing']) {
       socket.emit(productStatus('owner', duet(state)));
@@ -63,6 +69,8 @@ test('the heading names the second singer for the owner, the second singer and e
       assert.equal(detail.textContent, `voice.duet.self.${state}`);
     }
 
+    fakeWindow.dispatchEvent(new FakeCustomEvent('relay-choir-guest-state', { detail: { enabled: false } }));
+    assert.equal(title.textContent, 'voice.duetPair{"owner":"Singer A","partner":"小明"}');
     // The Mic owner keeps "you are singing" and sees who joined.
     fakeWindow.relayParticipantId = 'owner';
     for (const state of ['joined', 'aligning', 'singing']) {

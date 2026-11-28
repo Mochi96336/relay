@@ -140,6 +140,30 @@ test('an open file routes Mic and the delayed song into one mono capture input',
   assert.equal(context.nodes.filter(n => n.edges.has(input.capture)).length, 0);
 });
 
+test('the song passes as many compressors as the voice before the sum', () => {
+  const h = harness();
+  h.mix.open(h.file('a.wav'));
+  const context = fakeContext();
+  const input = h.capture(context);
+  h.mix.connectInput(input);
+  const sum = context.nodes.find(n => n.channelCount === 1 && n.kind === 'gain')!;
+  const compressorsTo = (start: FakeNode) => {
+    let count = 0;
+    for (let node: any = start; node && node !== sum;
+      node = [...node.edges].find((next: any) => next !== context.destination)) {
+      if (node.kind === 'compressor') count += 1;
+    }
+    return count;
+  };
+  const [song] = nodeOf(context, 'song');
+  const vocal = [...input.source.edges][0] as FakeNode;
+  // Each compressor holds its input back by the same lookahead.
+  assert.equal(compressorsTo(song), 1);
+  assert.equal(compressorsTo(vocal), 1);
+  const match = nodeOf(context, 'compressor').find(n => n.ratio.value === 1);
+  assert.ok(match, 'the song leg never compresses');
+});
+
 test('the singer offset moves the song delay and is clamped', () => {
   const h = harness();
   h.mix.open(h.file('a.wav'));

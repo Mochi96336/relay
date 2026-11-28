@@ -233,6 +233,7 @@ describe('AudioSession second singer', () => {
     assert.equal(session.secondaryMic!.blend, 1);
 
     session.detachSecondaryMic();
+    assert.equal(session.secondaryMicGeneration, null, 'the new seat cannot probe the fading capture');
     assert.equal(session.attachSecondaryMic(), false, 'the fading voice is not taken over');
     assert.equal(session.ingestSecondaryMic(frame(square(1_000, 16_000, 96), 2), RATE, 0), null,
       "the next singer's PCM never lands on the old track");

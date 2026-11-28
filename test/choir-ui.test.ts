@@ -50,7 +50,7 @@ test('a joined B sets its own Mic gain, as the Mic owner does', async () => {
 
 test('the second Mic copy exists in both locales and the old invitation copy is gone', async () => {
   const i18n = await file('../public/i18n.js');
-  for (const key of ['choir.invite', 'choir.takeOver', 'choir.withdraw']) {
+  for (const key of ['choir.invite', 'choir.takeOver', 'choir.withdraw', 'choir.replaced']) {
     assert.equal(i18n.match(new RegExp(`'${key.replace('.', '\\.')}':`, 'g'))?.length, 2, key);
   }
   assert.doesNotMatch(i18n, /'choir\.(previewOnly|invitationFrom|panelTitle|beginRoom|connectMedia|dismiss)':/);
@@ -86,11 +86,11 @@ test('B starts its Mic only on its own tap and connects when the server asks for
   assert.doesNotMatch(media, /navigator\.mediaDevices\.getUserMedia|new AudioWorkletNode|localStorage|sessionStorage|console\.log/);
 });
 
-test('second Mic permission feedback survives a delayed withdraw reply and clears on retry', async () => {
+test('second Mic reports capture failure and takeover, then clears the notice on retry', async () => {
   const { runInNewContext } = await import('node:vm');
   const listeners = new Map<string, (event: { detail?: any }) => void>();
   let join = () => {};
-  const button = { dataset: {}, addEventListener: (_: string, cb: () => void) => { join = cb; } };
+  const button = { dataset: {} as Record<string, string>, addEventListener: (_: string, cb: () => void) => { join = cb; } };
   const notice = { hidden: true, textContent: '' };
   const window = { relayParticipantId: 'b', addEventListener: (type: string, fn: (e: any) => void) => listeners.set(type, fn),
     dispatchEvent() {}, relayI18n: { t: (key: string) => key } };
@@ -108,6 +108,13 @@ test('second Mic permission feedback survives a delayed withdraw reply and clear
   emit('relay-choir-message', { type: 'choir-secondary-consent-status', status: 'withdrawn', secondaryId: 'b' });
   assert.equal(notice.hidden, false);
   assert.equal(notice.textContent, 'voice.permissionRequired');
+  join();
+  assert.equal(notice.hidden, true);
+  emit('relay-choir-message', { type: 'choir-secondary-consent-status', status: 'accepted', secondaryId: 'b' });
+  emit('relay-product-status', { room: { duet: { secondaryId: 'b' } } });
+  emit('relay-choir-message', { type: 'choir-secondary-consent-status', status: 'revoked', secondaryId: 'b', reason: 'replaced' });
+  assert.equal(notice.textContent, 'choir.replaced');
+  assert.equal(button.dataset.i18n, 'choir.takeOver');
   join();
   assert.equal(notice.hidden, true);
 });

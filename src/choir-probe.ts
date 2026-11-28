@@ -178,6 +178,18 @@ export class ChoirProbe {
     this.state = 'idle';
   }
 
+  /** Closing only the control socket can preserve the same physical capture
+   * through a resume. An explicit handoff ends even a completed measurement. */
+  endCapture(mayResume: boolean) {
+    this.cancelPending();
+    if (mayResume) return;
+    this.captureKey = null;
+    this.state = 'idle';
+    this.micLatencyMs = null;
+    this.failureReason = null;
+    this.correlation = null;
+  }
+
   /** Any part of the probe is running, the Robot's leg included. */
   get running() {
     return this.state === 'robot' || this.silencing;

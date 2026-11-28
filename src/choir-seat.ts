@@ -36,6 +36,7 @@ export class ChoirSeat {
     holdsMic: (id: string) => boolean;
     participantConnected: (id: string) => boolean;
     socketOpen: (socket: AuthenticatedSocket) => boolean;
+    ended?: (join: ChoirSeatHolder, reason: string) => void;
     notifySocket: (socket: AuthenticatedSocket, payload: Record<string, unknown>) => void;
   }) {}
 
@@ -57,14 +58,15 @@ export class ChoirSeat {
       || !this.policy.primaryStillOwnsMic(primaryId)
       || !this.policy.participantConnected(secondaryId)) return false;
     const previous = this.current;
-    if (previous && previous.primaryId === primaryId && previous.secondaryId === secondaryId
-      && previous.socket === socket && commandId === undefined) return true;
+    const sameSeat = previous?.primaryId === primaryId && previous.secondaryId === secondaryId
+      && previous.socket === socket;
+    if (sameSeat && commandId === undefined) return true;
     // Reconnection is not a user request to take over another singer's seat.
     if (resume && previous && previous.primaryId === primaryId
       && previous.secondaryId !== secondaryId) return false;
+    if (previous && !sameSeat) this.end(previous, 'replaced');
     const command = commandId === undefined ? {} : { commandId };
     this.current = { primaryId, secondaryId, socket, ...command };
-    if (previous && previous.secondaryId !== secondaryId) this.notifyRevoked(previous, 'replaced');
     this.policy.notifySocket(socket, {
       type: 'choir-secondary-consent-status', status: 'accepted',
       secondaryId, primaryId, joined: true, ...command,
@@ -91,30 +93,28 @@ export class ChoirSeat {
   /** B leaves, from the socket it joined on. */
   withdraw(socket: AuthenticatedSocket): boolean {
     if (!this.current || this.current.socket !== socket || !this.policy.socketOpen(socket)) return false;
-    this.current = null;
+    this.end(this.current, 'withdrawn');
     return true;
   }
 
   /** Closing B's join socket ends the join. */
   disconnected(socket: AuthenticatedSocket): boolean {
     if (this.current?.socket !== socket) return false;
-    const join = this.current;
-    this.current = null;
-    this.notifyRevoked(join, 'connection-closed');
+    this.end(this.current, 'connection-closed');
     return true;
   }
 
   /** Ends a join whose Mic owner, B or socket is gone. */
   sweep(): boolean {
     if (!this.current || this.valid(this.current)) return false;
-    const join = this.current;
-    this.current = null;
-    this.notifyRevoked(join, 'scope-or-authority-changed');
+    this.end(this.current, this.policy.socketOpen(this.current.socket) ? 'scope-or-authority-changed' : 'connection-closed');
     return true;
   }
 
-  private notifyRevoked(join: ChoirSeatHolder, reason: string) {
-    if (!this.policy.socketOpen(join.socket)) return;
+  private end(join: ChoirSeatHolder, reason: string) {
+    this.current = null;
+    this.policy.ended?.(join, reason);
+    if (reason === 'withdrawn' || !this.policy.socketOpen(join.socket)) return;
     this.policy.notifySocket(join.socket, {
       type: 'choir-secondary-consent-status', status: 'revoked',
       reason, secondaryId: join.secondaryId,

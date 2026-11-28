@@ -582,7 +582,7 @@ test('background lifecycle fences media recovery before timers can freeze', () =
   assert.match(lifecycle, /notePublisherBackgrounded\(\)/);
   assert.match(
     lifecycle,
-    /window\.addEventListener\('pagehide', notePublisherBackgrounded\)/,
+    /window\.addEventListener\('pagehide', \(\) => \{[\s\S]*?notePublisherBackgrounded\(\);\s*\}\)/,
     'pagehide/BFCache suspension must share the same synchronous source fence',
   );
 });

@@ -11,18 +11,26 @@ const PROBE_NOTES = [
 ];
 const PROBE_NOTE_SECONDS = 0.105;
 
+/**
+ * How long a request may wait for its AudioContext before it is no longer this
+ * page's to play. The server gives up on an acknowledgement after 3 s and sends
+ * the next attempt; a tone that sounded after that would land in the next
+ * attempt's capture window and could be measured as its match. A running
+ * context resumes at once, so only a suspended page (iOS) ever reaches this.
+ */
+export const PROBE_RESUME_DEADLINE_MS = 1_000;
+
 /** Owns pending preparation and scheduled nodes; capture and socket authority stay with the publisher. */
 export class CalibrationProbePlayback {
   #pending = null;
   #playback = null;
 
   constructor({ getCapture, isCurrentCapture, isControlOpen, sendControl, onDisconnected,
-    isHidden = () => document.visibilityState === 'hidden',
     nowMs = () => performance.now(), timingDiagnostics = probeTimingDiagnostics,
     warn = (...args) => console.warn(...args),
   }) {
     Object.assign(this, { getCapture, isCurrentCapture, isControlOpen, sendControl,
-      onDisconnected, isHidden, nowMs, timingDiagnostics, warn });
+      onDisconnected, nowMs, timingDiagnostics, warn });
   }
 
   // Server advancement or control disconnect retires preparation only. A probe
@@ -35,7 +43,9 @@ export class CalibrationProbePlayback {
     if (this.#pending?.requestId === requestId || this.#playback?.requestId === requestId) this.retire();
   }
 
-  // Capture/session/background boundaries also silence future-scheduled nodes.
+  // Capture/session/pagehide boundaries also silence future-scheduled nodes.
+  // A hidden page is not one: its context keeps running and its capture keeps
+  // sending, so the measurement it takes is as good as a visible page's.
   retire() {
     this.cancelPending();
     this.#retirePlayback();
@@ -45,6 +55,7 @@ export class CalibrationProbePlayback {
     const playback = this.#playback;
     this.#playback = null;
     if (!playback) return;
+    playback.context?.removeEventListener?.('statechange', playback.onStateChange);
     for (const { oscillator, gain } of playback.nodes) {
       try { oscillator?.disconnect(); } catch {}
       try { gain?.disconnect(); } catch {}
@@ -67,9 +78,6 @@ export class CalibrationProbePlayback {
 
     let playback;
     try {
-      if (this.isHidden()) {
-        throw new Error('Phone probe cannot play while the page is hidden.');
-      }
       // Mobile Safari may leave resume() pending while a page is suspended. The
       // server can retire this request meanwhile, so every continuation has to
       // re-prove request and capture ownership before it may create audible nodes.
@@ -79,18 +87,25 @@ export class CalibrationProbePlayback {
         || !this.isCurrentCapture(sessionEpoch, expectedGeneration)
         || !this.isControlOpen()
       ) return;
-      if (this.getCapture().context !== context) throw new Error('Phone probe AudioContext was replaced.');
-      if (this.isHidden()) {
-        throw new Error('Phone probe cannot play while the page is hidden.');
-      }
+      if (this.getCapture().context !== context) throw new Error('Mic probe AudioContext was replaced.');
       if (context.state !== 'running') {
-        throw new Error(`Phone probe AudioContext is ${context.state}.`);
+        throw new Error(`Mic probe AudioContext is ${context.state}.`);
+      }
+      const resumeMs = this.nowMs() - receivedAtMs;
+      if (resumeMs > PROBE_RESUME_DEADLINE_MS) {
+        throw new Error(`Mic probe AudioContext took ${Math.round(resumeMs)} ms to resume.`);
       }
 
       this.#retirePlayback();
       const scheduledAtMs = this.nowMs();
       const startTime = context.currentTime + leadMs / 1000;
-      playback = { requestId, nodes: [] };
+      playback = { requestId, nodes: [], context, onStateChange: null };
+      // A context that stops (iOS suspends a backgrounded page's) would play
+      // the remaining notes when it resumes, at a time nothing measures.
+      playback.onStateChange = () => {
+        if (context.state !== 'running' && this.#playback === playback) this.#retirePlayback();
+      };
+      context.addEventListener?.('statechange', playback.onStateChange);
       this.#playback = playback;
       let remainingNotes = PROBE_NOTES.length;
       for (const note of PROBE_NOTES) {
@@ -111,6 +126,7 @@ export class CalibrationProbePlayback {
         oscillator.addEventListener('ended', () => {
           remainingNotes -= 1;
           if (remainingNotes === 0 && this.#playback === playback) {
+            context.removeEventListener?.('statechange', playback.onStateChange);
             this.#playback = null;
           }
         }, { once: true });

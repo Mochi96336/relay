@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { deferred } from './support/deferred.js';
-const { CalibrationProbePlayback } = await import(new URL('../public/calibration-probe-playback.js', import.meta.url).href);
+const { CalibrationProbePlayback, PROBE_RESUME_DEADLINE_MS } = await import(new URL('../public/calibration-probe-playback.js', import.meta.url).href);
 
 function fixture() {
   const messages: any[] = [];
@@ -10,8 +10,12 @@ function fixture() {
   const gains: any[] = [];
   const send = { sent: true, reason: null as string | null };
   let staleCalls = 0;
+  let nowMs = 100;
+  const stateListeners = new Set<() => void>();
   const context = {
     currentTime: 10, state: 'running',
+    addEventListener(type: string, fn: () => void) { if (type === 'statechange') stateListeners.add(fn); },
+    removeEventListener(type: string, fn: () => void) { if (type === 'statechange') stateListeners.delete(fn); },
     resume() { const wait = deferred<void>(); resumes.push(wait); return wait.promise; },
     createOscillator() {
       const node = {
@@ -41,9 +45,9 @@ function fixture() {
     destination: {},
   };
   const env = {
-    performance: { now: () => 100 }, publisherSessionEpoch: 1, captureGeneration: 2,
+    performance: { now: () => nowMs }, publisherSessionEpoch: 1, captureGeneration: 2,
     isCurrentPublisherCapture: (epoch: number, generation: number) => epoch === env.publisherSessionEpoch && generation === env.captureGeneration,
-    document: { visibilityState: 'visible' }, socket: { readyState: 1 }, WebSocket: { OPEN: 1 },
+    socket: { readyState: 1 }, WebSocket: { OPEN: 1 },
     audioContext: context, audioTransport: { sendControlJson: (message: any) => { messages.push(message); return send; } },
     markPublisherAuthorityStale: () => { staleCalls++; },
     probeTimingDiagnostics: () => ({ processingMs: 0 }), console: { warn() {} },
@@ -54,7 +58,6 @@ function fixture() {
     isControlOpen: () => env.socket.readyState === 1,
     sendControl: env.audioTransport.sendControlJson,
     onDisconnected: env.markPublisherAuthorityStale,
-    isHidden: () => env.document.visibilityState === 'hidden',
     nowMs: env.performance.now,
     timingDiagnostics: env.probeTimingDiagnostics,
     warn: env.console.warn,
@@ -62,6 +65,9 @@ function fixture() {
   return {
     env, context, messages, resumes, oscillators, gains, send,
     staleCalls: () => staleCalls,
+    advance: (ms: number) => { nowMs += ms; },
+    stateListeners,
+    setState: (state: string) => { context.state = state; for (const fn of [...stateListeners]) fn(); },
     play: (requestId = 3) => player.play(requestId, 200),
     cancelPending: () => player.cancelPending(),
     retire: () => player.retire(),
@@ -170,30 +176,68 @@ test('server advancement cancels only preparation, not an acknowledged playback'
   assert.deepEqual(f.oscillators.map(n => n.disconnects), [1, 1, 1]);
 });
 
-for (const afterResume of [false, true]) {
-  test(`hidden ${afterResume ? 'during resume' : 'before preparation'} fails with no audible nodes`, async () => {
-    const f = fixture();
-    if (!afterResume) f.env.document.visibilityState = 'hidden';
-    const playing = f.play();
-    if (afterResume) {
-      f.env.document.visibilityState = 'hidden';
-      f.resumes[0].resolve();
-    }
-    await playing;
-    assert.equal(f.resumes.length, afterResume ? 1 : 0);
-    assert.equal(f.oscillators.length, 0);
-    assert.equal(f.messages.length, 1);
-    assert.equal(f.messages[0].type, 'calibration-probe-failed');
-    assert.equal(f.messages[0].reason, 'Phone probe cannot play while the page is hidden.');
-    assert.equal(f.messages[0].generation, 2);
-  });
-}
+test('a hidden page plays and acknowledges its probe like a visible one', async () => {
+  // 2026-11-28: five singers whose page was behind another window had all three
+  // attempts rejected within a second and sang the whole song uncalibrated,
+  // while their capture kept running at full rate.
+  const f = fixture();
+  await scheduled(f);
+  assert.equal(f.oscillators.length, 3);
+  assert.deepEqual(f.messages.map(m => m.type), ['calibration-probe-played']);
+});
 
-test('retired session cannot fail a probe when the page hides during resume', async () => {
+test('a context that takes longer than the deadline to resume fails instead of playing late', async () => {
+  const f = fixture();
+  const playing = f.play();
+  f.advance(PROBE_RESUME_DEADLINE_MS + 1);
+  f.resumes[0].resolve();
+  await playing;
+  assert.equal(f.oscillators.length, 0);
+  assert.equal(f.messages.length, 1);
+  assert.equal(f.messages[0].type, 'calibration-probe-failed');
+  assert.match(f.messages[0].reason, /took 1001 ms to resume/);
+  assert.equal(f.messages[0].generation, 2);
+});
+
+test('a context resumed within the deadline still plays', async () => {
+  const f = fixture();
+  const playing = f.play();
+  f.advance(PROBE_RESUME_DEADLINE_MS);
+  f.resumes[0].resolve();
+  await playing;
+  assert.equal(f.oscillators.length, 3);
+  assert.deepEqual(f.messages.map(m => m.type), ['calibration-probe-played']);
+});
+
+test('a context that stops after scheduling silences the notes it would play on resume', async () => {
+  const f = fixture();
+  await scheduled(f);
+  f.setState('running');
+  assert.deepEqual(f.oscillators.map(n => n.disconnects), [0, 0, 0], 'a running edge retires nothing');
+  f.setState('interrupted');
+  assert.deepEqual(f.oscillators.map(n => n.disconnects), [1, 1, 1]);
+  assert.equal(f.stateListeners.size, 0);
+});
+
+test('a probe that ends or is retired leaves no state listener on the context', async () => {
+  const ended = fixture();
+  await scheduled(ended);
+  ended.oscillators.forEach(n => n.ended());
+  assert.equal(ended.stateListeners.size, 0);
+
+  const retired = fixture();
+  await scheduled(retired, 3);
+  await scheduled(retired, 4);
+  assert.equal(retired.stateListeners.size, 1, 'the newer probe replaces the older listener');
+  retired.retire();
+  assert.equal(retired.stateListeners.size, 0);
+});
+
+test('retired session cannot fail a probe that resumes past the deadline', async () => {
   const f = fixture();
   const playing = f.play();
   f.env.publisherSessionEpoch++;
-  f.env.document.visibilityState = 'hidden';
+  f.advance(PROBE_RESUME_DEADLINE_MS + 1);
   f.resumes[0].resolve();
   await playing;
   assertSilent(f);

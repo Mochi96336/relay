@@ -59,10 +59,16 @@ test('capture generation retires all probe resources before changing the capture
   assert.deepEqual(f.calls, [['retire', 2]]);
 });
 
-test('background boundary retires probe playback even if the publisher has already stopped', () => {
+test('a hidden page keeps its probe; pagehide retires it even after the publisher stopped', () => {
   const f = publisher();
-  Object.assign(f.env, { publisherActive: false });
   vm.runInContext(functionCode(source, 'notePublisherBackgrounded'), f.scope);
   vm.runInContext('notePublisherBackgrounded()', f.scope);
-  assert.deepEqual(f.calls, [['retire', 2]]);
+  assert.deepEqual(f.calls, [], 'hiding the page is not a probe boundary');
+
+  const pagehideAt = source.text.indexOf("window.addEventListener('pagehide'");
+  const pageshowAt = source.text.indexOf("window.addEventListener('pageshow'", pagehideAt);
+  assert.ok(pagehideAt >= 0 && pageshowAt > pagehideAt);
+  const pagehide = source.text.slice(pagehideAt, pageshowAt);
+  assert.match(pagehide, /calibrationProbePlayback\.retire\(\);\s*notePublisherBackgrounded\(\);/,
+    'pagehide retires the probe before, and regardless of, the publisher check');
 });

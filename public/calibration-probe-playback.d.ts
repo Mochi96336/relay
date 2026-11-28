@@ -1,4 +1,6 @@
 type Capture = { context: AudioContext | null; sessionEpoch: number; generation: number };
+/** Longest wait for the AudioContext before a request is failed instead of played. */
+export const PROBE_RESUME_DEADLINE_MS: number;
 type ControlResult = { sent: boolean; reason?: string | null };
 
 /** Owns probe preparation and nodes, never publisher/capture authority. */
@@ -9,7 +11,6 @@ export class CalibrationProbePlayback {
     isControlOpen: () => boolean;
     sendControl: (message: Record<string, unknown>) => ControlResult;
     onDisconnected: () => void;
-    isHidden?: () => boolean;
     nowMs?: () => number;
     timingDiagnostics?: (context: AudioContext, receivedAtMs: number, scheduledContextSeconds: number, scheduledAtMs: number) => unknown;
     warn?: (...args: unknown[]) => void;

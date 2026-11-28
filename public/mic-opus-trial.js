@@ -4,6 +4,10 @@ export async function createMicOpusTrial({ bitrate = 32000, onPacket, onDrop, on
   let generation = null, nextId = 0, closed = false, delaySamples = 0;
   let actualBitrate = bitrate, requestedBitrate = bitrate;
   let timeout;
+  // A failure before the encoder is ready only rejects startup: the caller
+  // decides there (a working microphone falls back to PCM). onError is for
+  // an encoder that fails after it has been handed out.
+  let started = false;
   function close() {
     if (closed) return;
     closed = true;
@@ -16,14 +20,14 @@ export async function createMicOpusTrial({ bitrate = 32000, onPacket, onDrop, on
       if (closed) return;
       close();
       reject(error);
-      onError?.(error);
+      if (started) onError?.(error);
     };
     timeout = setTimeout(() => fail(new Error('Opus startup timed out')), 8000);
     worker.onerror = () => fail(new Error('Opus worker failed'));
     worker.onmessage = ({ data }) => {
       if (closed) return;
       if (data.type === 'ready') {
-        clearTimeout(timeout); delaySamples = data.delaySamples; resolve(); return;
+        clearTimeout(timeout); delaySamples = data.delaySamples; started = true; resolve(); return;
       }
       if (data.type === 'error') {
         fail(new Error(data.message)); return;

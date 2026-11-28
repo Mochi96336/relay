@@ -28,8 +28,11 @@ test('Listen follows server playback health and activity instead of holder ident
   assert.match(listen, /let playbackForcedMuted = false;/);
   assert.match(
     listen,
-    /return userMuted[\s\S]*\|\| micForcedMuted[\s\S]*\|\| roomMicForcedMuted[\s\S]*\|\| playbackForcedMuted[\s\S]*\|\| takeReviewForcedMuted;/,
+    /return userMuted \|\| forcedMuteReason\(\) !== null;/,
   );
+  assert.match(listen, /if \(micForcedMuted \|\| roomMicForcedMuted \|\| secondaryMicForcedMuted\) return 'mic';/);
+  assert.match(listen, /if \(playbackForcedMuted\) return 'playback';/);
+  assert.match(listen, /if \(takeReviewForcedMuted\) return 'review';/);
   assert.match(listen, /window\.addEventListener\('relay:playback-view'/);
   assert.match(listen, /roomPlaybackRoleForcedMute = shouldForceMuteListen\(\{[\s\S]*?setPlaybackForcedMute\(roomPlaybackRoleForcedMute\)/);
   assert.match(listen, /role: event\.detail\?\.role/);
@@ -53,7 +56,7 @@ test('healthy active local playback mutes Listen, but pause/end/staleness releas
 test('playback forced mute composes with Mic, review, and user mute without owning product copy', () => {
   assert.match(
     listen,
-    /if \(micForcedMuted \|\| roomMicForcedMuted \|\| playbackForcedMuted \|\| takeReviewForcedMuted\) return;/,
+    /if \(forcedMuteReason\(\) !== null\) return;/,
     'all forced local-audio overlays must make the Listen toggle non-actionable',
   );
   assert.match(
@@ -63,7 +66,7 @@ test('playback forced mute composes with Mic, review, and user mute without owni
   );
   assert.match(
     listen,
-    /function setPlaybackForcedMute[\s\S]*if \(micForcedMuted \|\| roomMicForcedMuted\)[\s\S]*reconcile\('mic-owned'\)/,
+    /function setPlaybackForcedMute[\s\S]*if \(micForcedMuted \|\| roomMicForcedMuted \|\| secondaryMicForcedMuted\)[\s\S]*reconcile\('mic-owned'\)/,
     'ending local playback must not resume Listen while this participant owns the Mic in any tab',
   );
   assert.match(

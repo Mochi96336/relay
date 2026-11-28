@@ -2,6 +2,7 @@ import { authorityState } from './authority-freshness.js';
 import { choirCommandMessage, ChoirSeatCommands } from './choir-commands.js';
 import { sendParticipantAuthentication } from './participant-auth.js';
 import { wsUrl } from './ws-url.js';
+import { waitForSocketOpen } from './socket-open.js';
 window.relayIdentityReady = (async () => {
   const identityButton = document.querySelector('#identity-name');
   const identityInput = document.querySelector('#identity-input');
@@ -356,11 +357,13 @@ window.relayIdentityReady = (async () => {
     const next = new WebSocket(wsUrl());
     socket = next;
     seatCommands = new ChoirSeatCommands();
-    await new Promise((resolve, reject) => {
-      next.addEventListener('open', resolve, { once: true });
-      next.addEventListener('error', reject, { once: true });
-      next.addEventListener('close', reject, { once: true });
-    });
+    try {
+      await waitForSocketOpen(next);
+    } catch (error) {
+      // A failed or timed-out handshake leaves no socket that blocks the retry.
+      if (socket === next) socket = null;
+      throw error;
+    }
 
     if (socket !== next) {
       next.close();

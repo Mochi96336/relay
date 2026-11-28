@@ -885,3 +885,17 @@ test('high-rate playback continues a periodic voice and rejects noise at an unde
     assert.equal(processor.beginConcealment(), false);
   }
 });
+
+test('startup and reset prebuffering are distinct from underrun recovery', async () => {
+  const processor = await makeProcessor();
+  processor.process([], outputBlock());
+  assert.equal(processor.starvedSamples, 0);
+  processor.push(new Float32Array(SAMPLE_RATE / 4));
+  runUntilUnderrun(processor);
+  assert.equal(processor.rebuffering, true);
+  processor.reset(true);
+  const before = processor.starvedSamples;
+  processor.process([], outputBlock());
+  assert.equal(processor.starvedSamples, before);
+  assert.equal(processor.rebuffering, false);
+});

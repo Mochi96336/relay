@@ -6,11 +6,13 @@ export type ListenerEvidence =
   | 'transport-stale'
   | 'render-unproven'
   | 'render-stale'
+  | 'playback-prebuffering'
   | 'playback-starved'
   | 'internally-healthy';
 
 export interface ListenerWorkletHealth {
   playing?: boolean;
+  rebuffering?: boolean;
   queuedMs?: number;
   targetPrebufferMs?: number;
   jitterTargetMs?: number;

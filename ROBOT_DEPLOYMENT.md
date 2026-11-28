@@ -504,6 +504,33 @@ omit it; a generation change alone cannot establish whether the user retried
 Mic or the browser rebuilt capture automatically. The field does not change
 calibration or trigger recovery.
 
+### Voice and song balance evidence
+
+Measurement only; nothing here changes the mix.
+
+`[mix-loudness]` journals, every 3 s while the Mic is live or the song plays,
+BS.1770 loudness (LUFS) of the voice and the song as they sit in the mix, of
+the song as the Robot delivered it (`songSourceShortTermLufs`, before the
+Relay's song gain) and of the mix, with `vocalToBackingDb` (voice minus song,
+short-term) and the Mic gain. `silent` is digital silence; `null` is less than
+3 s measured.
+
+Each Take also gets two stems in `<takeDir>/stems/`: `<takeId>-voice.wav` (both
+Mics after gain and limiter) and `<takeId>-backing.wav` (the song after its
+gain), both after the summing headroom, so together they are the Take except
+where a source was joining or the backstop clamp cut a sample. Beside them,
+`<takeId>.loudness.json` holds integrated loudness and the voice-minus-song
+spread over the seconds the voice sang (`[take-stems]` journals the same).
+`node scripts/take-balance.mjs` reports it from the stems and `--remix` renders
+a Take again with other gains. A stem that cannot be written never fails its
+Take.
+
+Stems leave with their Take, and on their own after
+`RELAY_TAKE_STEM_RETENTION_DAYS` (default 7) or past `RELAY_TAKE_STEM_MAX_GIB`
+(default 4), oldest first. None are started with less than
+`RELAY_TAKE_STEM_MIN_FREE_GIB` (default 2) free. `RELAY_TAKE_STEMS=0` turns them
+off.
+
 
 ### Bounded recovery for late microphone audio
 

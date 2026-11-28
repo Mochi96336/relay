@@ -51,7 +51,10 @@ function publishCommand(type, fields = {}) {
 function render() {
   if (!joinButton || !leaveButton) return;
   if (captureNotice) {
-    const notice = noticeKey && canJoin() ? t(noticeKey) : '';
+    const offlineTimeout = available && !authorityFresh && noticeKey === 'choir.recoveryTimedOut';
+    let notice = '';
+    if (recoveryTimer !== null) notice = t('choir.reconnectingMic');
+    else if (noticeKey && (canJoin() || offlineTimeout)) notice = t(noticeKey);
     captureNotice.hidden = !notice;
     if (captureNotice.textContent !== notice) captureNotice.textContent = notice;
   }
@@ -85,7 +88,7 @@ function resetJoin() {
 function expireJoin() {
   if (joinScope?.waitingForCapture) noticeKey = 'choir.captureTimedOut';
   else {
-    noticeKey = 'choir.joinTimedOut';
+    noticeKey = joined ? 'choir.recoveryTimedOut' : 'choir.joinTimedOut';
     publishCommand('choir-secondary-withdraw', { reason: 'join-timeout' });
   }
   resetJoin();
@@ -135,7 +138,10 @@ window.addEventListener('relay-presence-state', (event) => {
 });
 window.addEventListener('relay-choir-availability', (event) => {
   available = event.detail?.available === true;
-  if (!available) resetJoin();
+  if (!available) {
+    noticeKey = null;
+    resetJoin();
+  }
   resumeIfReady();
   render();
 });

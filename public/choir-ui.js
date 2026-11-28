@@ -69,7 +69,11 @@ function render() {
   if (joined) document.body.dataset.choirGuest = 'joined';
   else delete document.body.dataset.choirGuest;
   window.dispatchEvent(new CustomEvent('relay-choir-guest-state', {
-    detail: { enabled: available && joined, captureRequested: joinScope !== null },
+    detail: {
+      enabled: available && joined,
+      captureRequested: joinScope !== null,
+      reconnecting: recoveryTimer !== null,
+    },
   }));
 }
 function resetJoin() {

@@ -1,6 +1,7 @@
 type AuthenticatedSocket = object & { participantId?: string };
 
 export type ChoirSeatHolder = Readonly<{
+  commandId?: number;
   primaryId: string;
   secondaryId: string;
   /** The socket B joined from: the only one that speaks for B. */
@@ -48,7 +49,7 @@ export class ChoirSeat {
    * B joins the current Mic owner. Returns false when nobody else holds the
    * Mic, or when a reconnecting B finds its seat taken.
    */
-  join(socket: AuthenticatedSocket, primaryId: string | null, { resume = false } = {}): boolean {
+  join(socket: AuthenticatedSocket, primaryId: string | null, { resume = false, commandId }: { resume?: boolean; commandId?: number } = {}): boolean {
     this.sweep();
     const secondaryId = socket.participantId;
     if (!secondaryId || !primaryId || secondaryId === primaryId
@@ -57,15 +58,16 @@ export class ChoirSeat {
       || !this.policy.participantConnected(secondaryId)) return false;
     const previous = this.current;
     if (previous && previous.primaryId === primaryId && previous.secondaryId === secondaryId
-      && previous.socket === socket) return true;
+      && previous.socket === socket && commandId === undefined) return true;
     // Reconnection is not a user request to take over another singer's seat.
     if (resume && previous && previous.primaryId === primaryId
       && previous.secondaryId !== secondaryId) return false;
-    this.current = { primaryId, secondaryId, socket };
+    const command = commandId === undefined ? {} : { commandId };
+    this.current = { primaryId, secondaryId, socket, ...command };
     if (previous && previous.secondaryId !== secondaryId) this.notifyRevoked(previous, 'replaced');
     this.policy.notifySocket(socket, {
       type: 'choir-secondary-consent-status', status: 'accepted',
-      secondaryId, primaryId, joined: true,
+      secondaryId, primaryId, joined: true, ...command,
     });
     return true;
   }
@@ -116,6 +118,7 @@ export class ChoirSeat {
     this.policy.notifySocket(join.socket, {
       type: 'choir-secondary-consent-status', status: 'revoked',
       reason, secondaryId: join.secondaryId,
+      ...(join.commandId === undefined ? {} : { commandId: join.commandId }),
     });
   }
 }

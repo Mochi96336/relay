@@ -123,6 +123,7 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
   let historyEntries = [];
   let selectedTakeId = null;
   let currentArtifactHref = null;
+  let lastReadyTakeId = null;
   let takeBusy = false;
   let localMicActive = false;
   let roomMicActive = false;
@@ -353,7 +354,12 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
       if (panel.open) closeHistory({ restoreFocus: false });
     }
     historyEntries = historyFromStatus(status, historyEntries);
-    if (status?.lifecycle === 'ready' && typeof status.take?.takeId === 'string') {
+    // Only a Take this page has not seen finish becomes the selection. The
+    // recorder replays its latest snapshot on every reconnect; that replay
+    // must not move a singer off the older Take they are reviewing.
+    if (status?.lifecycle === 'ready' && typeof status.take?.takeId === 'string'
+      && status.take.takeId !== lastReadyTakeId) {
+      lastReadyTakeId = status.take.takeId;
       selectedTakeId = status.take.takeId;
     }
     renderHistory();

@@ -202,12 +202,19 @@ export class TakeSession {
    * sample identity. Forward holes are preserved; overlap, reordering or a
    * generation change would make one Take ambiguous and is rejected.
    */
-  /** The local file started playing while this Take records. */
+  /**
+   * The local file `title` started playing while this Take records.
+   *
+   * The first file actually heard names the Take. The file loaded at Start
+   * is only what was waiting then: one swapped in before anything played is
+   * the song in this recording, and a later file after the first one played
+   * does not rename it.
+   */
   noteLocalFileHeard(title: string | null) {
     const take = this.current;
     if (!take || take.lifecycle !== 'recording') return false;
     if (take.song.localFile?.heard === true) return false;
-    take.song.localFile = { title: take.song.localFile?.title ?? title, heard: true };
+    take.song.localFile = { title, heard: true };
     return true;
   }
 

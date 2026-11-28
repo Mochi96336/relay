@@ -3,6 +3,7 @@ export type MicVisualAnalysis = {
   f0Hz: number | null;
   pitchConfidence: number;
 };
+export const CAPTURE_OUTPUT_KEEPALIVE_LEVEL: number;
 export function parseMicVisualAnalysis(payload: unknown): MicVisualAnalysis | null;
 
 /** Resources belong to one graph; disposing never stops its track or context. */
@@ -14,6 +15,8 @@ export type MicCaptureGraph = {
   readonly source: MediaStreamAudioSourceNode;
   readonly capture: AudioWorkletNode;
   readonly silent: GainNode;
+  /** Keeps the context's output from being all zeros; null where unsupported. */
+  readonly keepalive: ConstantSourceNode | null;
   readonly captureClockOriginContextTime: number;
   readonly visualAnalysis: MicVisualAnalysis | null;
   /** A local file's mix feeds this capture instead of the Mic alone. */

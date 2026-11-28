@@ -146,3 +146,59 @@ test('the server aligns against the tracker and only then requests a backing bou
   assert.doesNotMatch(serverCode, /let robotPlayerOffset(Ms|At)\b/);
   assert.doesNotMatch(serverCode, /robotPlayerOffset(Ms|At) =/);
 });
+
+function settling() {
+  return new RobotPlayerOffsetTracker({ freshForMs: 2_000, windowMs: 2_000, maxAbsOffsetMs: 450, settleMs: 3_000 });
+}
+
+test('a converging player is not settled; one that holds still is, after the settle time', () => {
+  // 2026-11-14 17:14: -402 a second into the song, converging about 20 ms/s.
+  const offset = settling();
+  for (let atMs = 0; atMs <= 6_000; atMs += 250) {
+    offset.record(-402 + atMs * 0.02, atMs);
+    assert.equal(offset.settled, false, `converging at ${atMs} ms`);
+  }
+  // Holding at -306 with the deployed player's ~19 ms of report noise.
+  const noise = [9, -7, 3, -10, 6, -2, 8, -9];
+  let settledAtMs: number | null = null;
+  for (let atMs = 6_250, i = 0; atMs <= 12_000; atMs += 250, i++) {
+    offset.record(-306 + noise[i % noise.length], atMs);
+    if (offset.settled && settledAtMs === null) settledAtMs = atMs;
+  }
+  assert.ok(settledAtMs !== null && settledAtMs <= 9_250, `settled at ${settledAtMs}`);
+});
+
+test('no run settles before the settle time, however still', () => {
+  const offset = settling();
+  for (let atMs = 0; atMs < 3_000; atMs += 250) offset.record(-150, atMs);
+  assert.equal(offset.settled, false);
+  offset.record(-150, 3_000);
+  assert.equal(offset.settled, true);
+});
+
+test('settling is latched until a reset, and a catch-up report resets it', () => {
+  const offset = settling();
+  for (let atMs = 0; atMs <= 3_000; atMs += 250) offset.record(-150, atMs);
+  assert.equal(offset.settled, true);
+  // Noise that would fail the trend check does not take it away.
+  offset.record(-100, 3_250);
+  offset.record(-100, 3_500);
+  assert.equal(offset.settled, true);
+  // A report past the residual range is convergence: the run starts over.
+  assert.equal(offset.record(-500, 3_750), false);
+  assert.equal(offset.settled, false);
+  offset.record(-150, 4_000);
+  assert.equal(offset.settled, false);
+});
+
+test('without a settle time the first report settles, as before', () => {
+  const offset = tracker();
+  offset.record(-150, 0);
+  assert.equal(offset.settled, true);
+});
+
+test('the server aligns only against a settled run, and holds only what a settled run granted', () => {
+  assert.match(functionCode(server, 'robotDeltaIsFresh'), /robotPlayerOffset\.settled/);
+  assert.match(functionCode(server, 'robotDeltaEverEstablished'), /robotPlayerOffset\.settled/);
+  assert.match(variableInitializerCode(server, 'robotPlayerOffset'), /settleMs: relayConfig\.robotOffsetSettleMs/);
+});

@@ -226,12 +226,13 @@ export class LocalFileMix extends EventTarget {
 
     const graph = { context, url: this.#file.url, element, song, musicGain, delay, vocalGain,
       vocalLimiter, sum, output, stream: null, onState: null };
-    const resume = this.#position;
-    const playAfterLoad = this.#wantPlaying;
+    // Read the intent when the file has loaded, not when the graph was built:
+    // a pause or seek made while it loaded is the newer request.
     element.addEventListener('loadedmetadata', () => {
       if (this.#graph !== graph) return;
+      const resume = this.#position;
       if (resume > 0) element.currentTime = Math.min(resume, element.duration || resume);
-      if (playAfterLoad) void this.play();
+      if (this.#wantPlaying) void this.play();
       this.#changed('metadata');
     }, { once: true });
     for (const type of ['play', 'pause', 'ended', 'seeked']) {

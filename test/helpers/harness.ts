@@ -85,6 +85,9 @@ export function startRelay(env: Record<string, string> = {}): Promise<RelayServe
         RELAY_HEARTBEAT_MS: '60000',
         // A Robot that settles on its first report, as every test's fake does.
         RELAY_ROBOT_OFFSET_SETTLE_MS: '0',
+        // Fake singer pages report a few times at most; a test that is about
+        // the page clock wait sets its own.
+        RELAY_CALIBRATION_PROBE_PAGE_CLOCK_WAIT_MS: '0',
         ...env,
         RELAY_TAKE_DIR: takeDirectory,
       },

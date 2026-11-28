@@ -28,6 +28,7 @@ export function startRelay(env = {}) {
     RELAY_CALIBRATION_PROBE: '0',
     RELAY_HEARTBEAT_MS: '60000',
     RELAY_ROBOT_OFFSET_SETTLE_MS: '0',
+    RELAY_CALIBRATION_PROBE_PAGE_CLOCK_WAIT_MS: '0',
     ...env,
   });
   const ownTakeDirectory = env.RELAY_TAKE_DIR === undefined

@@ -163,7 +163,10 @@ window.addEventListener('relay-choir-message', (event) => {
   if (joinScope?.waitingForCapture) return;
   const message = event.detail;
   if (message?.type === 'choir-consent-rejected') {
-    if (joinScope) noticeKey = message.reason === 'seat-changed' ? 'choir.seatChanged' : 'choir.joinRefused';
+    if (joinScope) {
+      noticeKey = message.reason === 'seat-changed' ? 'choir.seatChanged'
+        : message.reason === 'replaced' ? 'choir.replaced' : 'choir.joinRefused';
+    }
     resetJoin();
     return;
   }

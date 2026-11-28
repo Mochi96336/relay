@@ -197,6 +197,18 @@ test('successive control drops share a grace deadline until a resume is confirme
   assert.equal(f.leave.hidden, true, 'the next outage gets its own deadline');
 });
 
+test("a resume refused because this singer's newer tab holds the seat explains the takeover", async () => {
+  const f = await choirPage();
+  f.join();
+  f.accept();
+  f.presence(false);
+  f.presence(true);
+  assert.equal(f.events.at(-1)?.detail?.resume, true);
+  f.emit('relay-choir-message', { type: 'choir-consent-rejected', reason: 'replaced' });
+  assert.equal(f.leave.hidden, true);
+  assert.equal(f.notice.textContent, 'choir.replaced');
+});
+
 test('an unconfirmed join stops capture if the room changes before admission', async () => {
   const f = await choirPage();
   f.join();

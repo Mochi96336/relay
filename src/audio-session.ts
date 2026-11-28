@@ -881,9 +881,10 @@ export class AudioSession {
     return this.secondary?.track.timeline.totalSamples ?? 0;
   }
 
-  /** The capture generation of B's PCM on the timeline; null with no B. */
+  /** The active B capture available for calibration. A fading track belongs to the previous seat. */
   get secondaryMicGeneration() {
-    return this.secondary?.track.timeline.generation ?? null;
+    const secondary = this.secondary;
+    return secondary && !secondary.detaching ? secondary.track.timeline.generation : null;
   }
 
   /** The same window into the captured song, for locating a probe in it. */

@@ -31,6 +31,39 @@ let productCanStartTake = false;
 let productStatusFresh = false;
 let takeStatusFresh = false;
 let startCommandPending = false;
+// The newest ready Take when Record was pressed: a ready snapshot naming a
+// different Take proves this press recorded, even if this page missed the
+// recording/finalizing notices in between.
+let startBaselineTakeId = null;
+let startConfirmTimer = null;
+let startConfirmQueries = 0;
+const START_CONFIRM_QUERY_MS = 5_000;
+const START_CONFIRM_MAX_QUERIES = 3;
+
+function settleStart() {
+  startCommandPending = false;
+  clearTimeout(startConfirmTimer);
+  startConfirmTimer = null;
+}
+
+// Bounded: ask for the Take status again, never re-send start-take (that
+// could record a second Take). Unconfirmed after that, stop waiting.
+function scheduleStartConfirmation() {
+  clearTimeout(startConfirmTimer);
+  startConfirmTimer = setTimeout(() => {
+    startConfirmTimer = null;
+    if (!startCommandPending) return;
+    if (startConfirmQueries >= START_CONFIRM_MAX_QUERIES) {
+      settleStart();
+      commandError = { command: 'start', reason: 'unconfirmed' };
+      publishRecordingState();
+      return;
+    }
+    startConfirmQueries += 1;
+    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'take-status-request' }));
+    scheduleStartConfirmation();
+  }, START_CONFIRM_QUERY_MS);
+}
 let startTakeBlockedReason = null;
 let startTakeBlockingIssue = null;
 
@@ -161,7 +194,7 @@ function clearReconnect() {
 function resetSocketAuthority() {
   productStatusFresh = false;
   takeStatusFresh = false;
-  startCommandPending = false;
+  settleStart();
 }
 
 function scheduleReconnect() {
@@ -246,8 +279,10 @@ async function connect() {
         message.lifecycle === 'recording'
         || message.lifecycle === 'finalizing'
         || message.lifecycle === 'failed'
+        || (message.lifecycle === 'ready' && typeof message.take?.takeId === 'string'
+          && message.take.takeId !== startBaselineTakeId)
       ) {
-        startCommandPending = false;
+        settleStart();
       }
       commandError = null;
       publishTakeStatus(message);
@@ -256,7 +291,7 @@ async function connect() {
     }
 
     if (message.type === 'take-command-rejected') {
-      if (message.command === 'start') startCommandPending = false;
+      if (message.command === 'start') settleStart();
       commandError = {
         command: message.command === 'stop' ? 'stop' : 'start',
         reason: typeof message.reason === 'string' ? message.reason : 'unknown',
@@ -292,10 +327,14 @@ async function connect() {
 recordButton?.addEventListener('click', () => {
   if (startCommandPending || !recordingState().canStart) return;
   startCommandPending = true;
+  startBaselineTakeId = latestStatus?.lifecycle === 'ready' ? latestStatus.take?.takeId ?? null : null;
+  startConfirmQueries = 0;
   if (!send({ type: 'start-take' })) {
-    startCommandPending = false;
+    settleStart();
     publishRecordingState();
+    return;
   }
+  scheduleStartConfirmation();
 });
 
 stopButton?.addEventListener('click', () => {

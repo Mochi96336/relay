@@ -54,6 +54,8 @@ test('the heading names the second singer for the owner, the second singer and e
     await import(statusModule.href);
     await flush();
     const socket = FakeWebSocket.latest!;
+    const seats: unknown[] = [];
+    fakeWindow.addEventListener('relay-room-second-mic', (event: any) => seats.push(event.detail.secondaryId));
     const duet = (state: string, secondaryId = 'viewer') => ({ secondaryId, secondaryNickname: '小明', state });
 
     socket.emit(productStatus('owner', duet('singing')));
@@ -92,6 +94,12 @@ test('the heading names the second singer for the owner, the second singer and e
     socket.emit(productStatus('owner', null));
     assert.equal(title.textContent, 'Singer A');
     assert.equal(detail.textContent, 'voice.singing');
+
+    // Take history learns only who holds the second Mic, once per change,
+    // and a late listener can ask for the current seat.
+    assert.deepEqual(seats, ['viewer', 'friend', null]);
+    fakeWindow.dispatchEvent(new FakeEvent('relay-request-room-second-mic'));
+    assert.deepEqual(seats, ['viewer', 'friend', null, null]);
   } finally {
     Object.assign(globals, previous);
     FakeWebSocket.latest = null;

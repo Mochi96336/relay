@@ -74,6 +74,7 @@ function resetJoin() {
   clearTimeout(recoveryTimer);
   recoveryTimer = null;
   joinScope = null;
+  if (noticeKey === 'choir.preparingMic') noticeKey = null;
   recovering = false;
   window.dispatchEvent(new Event('relay-choir-stop-secondary-capture'));
   joined = false;
@@ -82,7 +83,8 @@ function resetJoin() {
 }
 
 function expireJoin() {
-  publishCommand('choir-secondary-withdraw', { reason: 'join-timeout' });
+  if (joinScope?.waitingForCapture) noticeKey = 'choir.captureTimedOut';
+  else publishCommand('choir-secondary-withdraw', { reason: 'join-timeout' });
   resetJoin();
 }
 
@@ -117,7 +119,10 @@ function recoverControl() {
 window.addEventListener('relay-presence-state', (event) => {
   session = event.detail?.session ?? null;
   authorityFresh = event.detail?.authorityFresh === true;
-  if (!authorityFresh) recoverControl();
+  if (!authorityFresh) {
+    if (pending && !joined) resetJoin();
+    else recoverControl();
+  }
   // A join still waiting for admission belongs to the Mic owner it was
   // pressed for, exactly as an admitted one does.
   else if ((joined || pending) && joinScope && (session?.micOwnerId !== joinScope.primaryId
@@ -141,6 +146,8 @@ window.addEventListener('relay-product-status', (event) => {
 });
 window.addEventListener('relay-choir-message', (event) => {
   if (!available || !authorityFresh) return;
+  // During local preparation this attempt has not sent a join yet.
+  if (joinScope?.waitingForCapture) return;
   const message = event.detail;
   if (message?.type === 'choir-consent-rejected') {
     resetJoin();
@@ -180,11 +187,22 @@ window.addEventListener('relay-choir-message', (event) => {
 });
 window.addEventListener('relay-choir-media-connection', (event) => {
   if (!available || !joinScope || (!joined && !pending)) return;
+  if (event.detail?.state === 'capture-ready') {
+    if (!joinScope.waitingForCapture) return;
+    if (!canJoin()) { resetJoin(); return; }
+    joinScope.waitingForCapture = false;
+    noticeKey = null;
+    publishCommand('choir-secondary-join', { expectedPrimaryId: joinScope.primaryId });
+    clearTimeout(pendingTimer);
+    pendingTimer = setTimeout(expireJoin, 8_000);
+    render();
+    return;
+  }
   // Media reconnects on its own for each room; only a microphone that will
   // not open needs the singer. Leave rather than sit joined but silent.
   if (event.detail?.state !== 'capture-failed') return;
   noticeKey = event.detail.reason === 'permission-denied' ? 'voice.permissionRequired' : 'choir.captureFailed';
-  publishCommand('choir-secondary-withdraw', { reason: `capture-failed:${event.detail?.reason ?? 'unknown'}` });
+  if (!joinScope.waitingForCapture) publishCommand('choir-secondary-withdraw', { reason: `capture-failed:${event.detail?.reason ?? 'unknown'}` });
   resetJoin();
 });
 // What B's page shows and plays, for the server log: on change (at most once
@@ -203,15 +221,14 @@ window.addEventListener('relay-request-choir-guest-state', render);
 
 joinButton?.addEventListener('click', () => {
   if (!canJoin() || pending) return;
-  noticeKey = null;
-  // Inside the click: iOS and other browsers require a user gesture for the
-  // microphone. Capture starts now and connects once the server has a room.
-  joinScope = { primaryId: session.micOwnerId, serverIncarnation: session.serverIncarnation };
-  window.dispatchEvent(new Event('relay-choir-start-secondary-capture'));
-  pending = publishCommand('choir-secondary-join', { expectedPrimaryId: joinScope.primaryId });
+  noticeKey = 'choir.preparingMic';
+  // Start capture in the tap gesture. Keep the current singer in place
+  // until this page has a working capture to offer.
+  pending = true;
+  joinScope = { primaryId: session.micOwnerId, serverIncarnation: session.serverIncarnation, waitingForCapture: true };
   clearTimeout(pendingTimer);
-  // An unanswered join must not leave the button disabled.
-  pendingTimer = setTimeout(() => { if (pending && !joined) expireJoin(); }, 8_000);
+  pendingTimer = setTimeout(expireJoin, 20_000);
+  window.dispatchEvent(new Event('relay-choir-start-secondary-capture'));
   render();
 });
 leaveButton?.addEventListener('click', () => {

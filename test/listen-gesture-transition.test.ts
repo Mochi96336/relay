@@ -5,8 +5,8 @@ import test from 'node:test';
 test('Listen gesture gate stays retryable until browser audio is actually running', async () => {
   const source = await readFile(new URL('../public/listen.js', import.meta.url), 'utf8');
 
-  assert.match(source, /async function activateFromGesture\(\)/);
-  const start = source.indexOf('async function activateFromGesture()');
+  assert.match(source, /async function activateFromGesture\(event\)/);
+  const start = source.indexOf('async function activateFromGesture(event)');
   const end = source.indexOf("toggle.addEventListener('click'", start);
   assert.ok(start >= 0 && end > start);
   const gestureSection = source.slice(start, end);
@@ -61,7 +61,7 @@ test('Listen gates first transport start on a running AudioContext while preserv
   );
 
   const stateChangeStart = source.indexOf("context.addEventListener('statechange'");
-  const stateChangeEnd = source.indexOf("      // Consume the user's first interaction", stateChangeStart);
+  const stateChangeEnd = source.indexOf("    // Consume the user's first interaction", stateChangeStart);
   assert.ok(stateChangeStart >= 0 && stateChangeEnd > stateChangeStart);
   const stateChangeSection = source.slice(stateChangeStart, stateChangeEnd);
   const finishEvidenceAt = stateChangeSection.indexOf('finishAudioInterruptionEvidence()');

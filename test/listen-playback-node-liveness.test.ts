@@ -9,11 +9,13 @@ test('a stopped Listen worklet is replaced on the same context and restarts at t
     'a processorerror retires only the current node');
   assert.match(listen, /if \(node === playbackNode\) lastPlaybackNodeMessageAt = performance\.now\(\);\s*if \(node !== playbackNode \|\| !transportEnabled/,
     'liveness counts every message from the node, before the display gating');
-  const replace = listen.slice(listen.indexOf('function replacePlaybackNode'), listen.indexOf('async function ensureAudioGraph'));
-  assert.match(replace, /installPlaybackNode\(context\)[\s\S]*restartMonitorAtLiveEdge\(\)/);
+  const replace = listen.slice(listen.indexOf('/** One node install at a time'), listen.indexOf('async function ensureAudioGraph'));
+  assert.match(replace, /function installReplacementNode\(context\) \{\s*installNodeOnce\(context\)[\s\S]*restartMonitorAtLiveEdge\(\)/);
   assert.doesNotMatch(replace, /new AudioContext/, 'a phone may need a gesture for a new context');
-  assert.match(replace, /playbackNodeReplacements\.length >= 3[\s\S]*render\('start-failed'\)/,
+  assert.match(replace, /playbackNodeReplacements\.length >= 3\) return false;/);
+  assert.match(replace, /if \(!takePlaybackNodeReplacement\(\)\) \{\s*offerPlaybackRetry\(\);/,
     'bounded: after three replacements the next press retries');
+  assert.match(replace, /function offerPlaybackRetry\(\) \{[\s\S]*render\('start-failed'\)/);
 });
 
 test('the liveness watchdog only judges a running context that is being fed', () => {
@@ -26,5 +28,7 @@ test('the liveness watchdog only judges a running context that is being fed', ()
 
 test('a surviving context gets a new node without loading the worklet module twice', () => {
   assert.match(listen, /if \(playbackModuleContext !== context\) \{\s*await context\.audioWorklet\.addModule\('\/playback-worklet\.js'\);\s*playbackModuleContext = context;/);
-  assert.match(listen, /if \(audioContext && !playbackNode\) \{\s*audioSetupPromise = installPlaybackNode\(audioContext\);/);
+  assert.match(listen, /if \(audioContext && !playbackNode\) \{\s*const context = audioContext;\s*await installNodeOnce\(context\);/);
+  assert.match(listen, /function installNodeOnce\(context\) \{\s*if \(audioSetupPromise\) return audioSetupPromise;/,
+    'a replacement and a press share one install, never two nodes');
 });

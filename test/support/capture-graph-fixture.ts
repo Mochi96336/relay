@@ -30,11 +30,14 @@ export function captureFixture(failure: string | null = null, encoder: Publisher
     const listeners = new Map<string, Set<(...args: any[]) => void>>();
     const n = { kind, disconnects: 0, connected: false, listeners,
       gain: { value: 1 },
+      offset: { value: 1 }, starts: 0, stops: 0, target: null as unknown,
+      start() { this.starts++; },
+      stop() { this.stops++; },
       port: { onmessage: null as any, posted: [] as any[],
         postMessage(message: any, transfer: Transferable[] = []) {
           check('protocol'); this.posted.push(structuredClone(message, { transfer }));
         } },
-      connect(target: unknown) { env.beforeConnect?.(); check(`connect-${kind}`); this.connected = true; return target; },
+      connect(target: unknown) { env.beforeConnect?.(); check(`connect-${kind}`); this.connected = true; this.target = target; return target; },
       disconnect() { this.disconnects++; this.connected = false; },
       addEventListener(type: string, listener: (...args: any[]) => void) {
         const set = listeners.get(type) ?? new Set(); set.add(listener); listeners.set(type, set);
@@ -47,6 +50,7 @@ export function captureFixture(failure: string | null = null, encoder: Publisher
   }
   const context = { sampleRate: 48000, currentTime: 3, closes: 0, destination: {},
     createMediaStreamSource: () => node('source'), createGain: () => node('gain'),
+    createConstantSource: (() => node('constant')) as undefined | (() => ReturnType<typeof node>),
     close() { this.closes++; } };
   const publisherSession = new PublisherSession({ closeMedia() {} });
   publisherSession.activate(publisherSession.beginStartup(), {

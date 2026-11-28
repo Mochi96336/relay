@@ -80,7 +80,7 @@ test('secondary capture advances native cursor through WebSocket backlog without
     const graph = { returnBuffer: () => { returned++; }, dispose: () => {} };
     let returned = 0;
     c.graph = graph;
-    c.context = { currentTime: 1, close: async () => {} };
+    c.context = { state: 'running', currentTime: 1, close: async () => {} };
     c.socket = socket;
     c.transport.bind(socket, { sampleRate: 48_000 });
     c.rate = 48_000;
@@ -90,6 +90,7 @@ test('secondary capture advances native cursor through WebSocket backlog without
     c.onCapture({ data: { type: 'pcm', buffer: pcm, capturedAtContextTime: 0.98 } }, graph, epoch);
     socket.bufferedAmount = 300_000;
     c.onCapture({ data: { type: 'pcm', buffer: pcm, capturedAtContextTime: 0.98 } }, graph, epoch);
+    assert.equal(c.anchorFor(performance.now())?.sampleIndex, 0, 'a chunk skipped under backlog supplies no song anchor');
     socket.bufferedAmount = 0;
     c.onCapture({ data: { type: 'pcm', buffer: pcm, capturedAtContextTime: 0.98 } }, graph, epoch);
     assert.equal(c.cursor, 2_880);

@@ -138,7 +138,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
 
   reportInputGap(recovered) {
     const unreported = this.activeGapQuanta - this.reportedActiveGapQuanta;
-    if (unreported <= 0) return;
+    if (unreported <= 0 && !recovered) return;
     this.reportedActiveGapQuanta = this.activeGapQuanta;
     this.port.postMessage({
       type: 'input-gap',

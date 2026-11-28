@@ -8,7 +8,7 @@ export class AudioSessionPolicy {
   constructor(navigatorProvider = () => globalThis.navigator) {
     this.navigatorProvider = navigatorProvider;
     this.playbackClaim = false;
-    this.microphoneClaim = false;
+    this.microphoneOwners = new Set();
   }
 
   claimPlayback(active) {
@@ -16,8 +16,13 @@ export class AudioSessionPolicy {
     return this.apply();
   }
 
-  claimMicrophone(active) {
-    this.microphoneClaim = Boolean(active);
+  get microphoneClaim() {
+    return this.microphoneOwners.size > 0;
+  }
+
+  claimMicrophone(active, owner = 'primary') {
+    if (active) this.microphoneOwners.add(owner);
+    else this.microphoneOwners.delete(owner);
     return this.apply();
   }
 
@@ -53,6 +58,6 @@ export function claimPlaybackAudio(active) {
   return pageAudioSessionPolicy.claimPlayback(active);
 }
 
-export function claimMicrophoneAudio(active) {
-  return pageAudioSessionPolicy.claimMicrophone(active);
+export function claimMicrophoneAudio(active, owner) {
+  return pageAudioSessionPolicy.claimMicrophone(active, owner);
 }

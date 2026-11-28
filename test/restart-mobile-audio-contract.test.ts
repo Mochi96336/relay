@@ -269,3 +269,20 @@ test('the capture context is restarted from every state Safari reports', () => {
   // And nothing waits on it: that promise can be accepted and never settle.
   assert.doesNotMatch(appSource, /await publisherSession\.context\.resume\(\)/);
 });
+
+test('an overlapping second Mic and primary Mic release only their own audio session claims', () => {
+  const session = { type: 'auto' };
+  const policy = new AudioSessionPolicy(() => ({ audioSession: session }));
+  const second = {};
+  policy.claimPlayback(true);
+  policy.claimMicrophone(true, second);
+  policy.claimMicrophone(true);
+  policy.claimMicrophone(true);
+  policy.claimMicrophone(false, second);
+  assert.equal(session.type, 'play-and-record');
+  policy.claimMicrophone(true, second);
+  policy.claimMicrophone(false);
+  assert.equal(session.type, 'play-and-record');
+  policy.claimMicrophone(false, second);
+  assert.equal(session.type, 'playback');
+});

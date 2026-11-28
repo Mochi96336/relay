@@ -45,6 +45,14 @@ function sliderIsBusy(element) {
   return touchedAt !== undefined && performance.now() - touchedAt < SLIDER_HOLD_MS;
 }
 
+// The slider set from a confirmed or restored value rather than by the hand:
+// no input event fires, so say so for anything applying the gain itself
+// (local file mode mixes the voice on this phone).
+function showMicGain(value) {
+  micGain.value = String(value);
+  window.dispatchEvent(new Event('relay-mic-gain-shown'));
+}
+
 export function updateMixLabels() {
   micGainValue.value = signed(micGain.value, ' dB');
 }
@@ -55,7 +63,7 @@ export function micGainDb() {
 
 export function restoreLastKnownControl(command = null) {
   if (!secondaryActive && (command === null || command === 'set-mix')) {
-    micGain.value = String(lastKnownControlSnapshot.micGainDb);
+    showMicGain(lastKnownControlSnapshot.micGainDb);
     updateMixLabels();
   }
 }
@@ -69,7 +77,7 @@ export function acceptMixSettings(message) {
       ...lastKnownControlSnapshot,
       micGainDb: nextGain,
     };
-    if (!secondaryActive && !sliderIsBusy(micGain)) micGain.value = String(nextGain);
+    if (!secondaryActive && !sliderIsBusy(micGain)) showMicGain(nextGain);
   }
   updateMixLabels();
   return accepted;
@@ -127,7 +135,7 @@ window.addEventListener('relay-choir-guest-state', (event) => {
   secondaryActive = enabled;
   clearTimeout(secondaryGainTimer);
   secondaryGainTimer = null;
-  micGain.value = String(enabled
+  showMicGain(enabled
     ? storedNumber(MIC_GAIN_KEY, 0, 40) ?? 24
     : lastKnownControlSnapshot.micGainDb);
   updateMixLabels();

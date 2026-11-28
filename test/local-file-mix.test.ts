@@ -347,8 +347,12 @@ test('a play that outlives its graph neither starts the new one nor reports fail
 test('the song area follows who holds the Mic', () => {
   const surface = (fileOpen: boolean, micOwnerId: string | null, roomLocalFile: unknown = null, capturing = false) =>
     localFileSurface({ fileOpen, myId: 'me', micOwnerId, roomLocalFile, capturing });
-  assert.equal(surface(true, 'me'), 'owner');
+  assert.equal(surface(true, 'me', null, true), 'owner');
   assert.equal(surface(true, null), 'owner');
+  // This identity's Mic captured in another tab: a file opened here waits,
+  // with or without a room file from that tab.
+  assert.equal(surface(true, 'me'), 'standby');
+  assert.equal(surface(true, 'me', { title: 'x' }), 'standby');
   // A file opened before taking over: the current singer's song stays visible.
   assert.equal(surface(true, 'other'), 'standby');
   assert.equal(surface(false, 'other', { title: 'x' }), 'observer');

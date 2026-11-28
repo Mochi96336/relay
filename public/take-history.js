@@ -1,5 +1,6 @@
 import './live-i18n.js';
 import { groupHistory, historyFromStatus } from './take-history-model.js';
+import { takeTimeLabels } from './take-history-labels.js';
 import { formatDuration } from './time-format.js';
 
 const root = document.querySelector('#last-take');
@@ -21,10 +22,12 @@ function formatRecordedAt(endedAtMs) {
   const sameDay = date.getFullYear() === now.getFullYear()
     && date.getMonth() === now.getMonth()
     && date.getDate() === now.getDate();
+  // To the second: two short Takes in one minute must not read the same.
   return new Intl.DateTimeFormat(intlLocale(), sameDay
-    ? { hour: '2-digit', minute: '2-digit' }
-    : { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date);
+    ? { hour: '2-digit', minute: '2-digit', second: '2-digit' }
+    : { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(date);
 }
+
 
 function takeCount(count) {
   return t(count === 1 ? 'takeHistory.count.one' : 'takeHistory.count.many', { count });
@@ -121,6 +124,9 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
   review.replaceChildren(selectedSummary, recordingPlayer, reviewFooter);
 
   let historyEntries = [];
+  // Each shown Take's distinct label, rebuilt with the list (locale, day).
+  let recordedAtLabels = new Map();
+  const recordedAtLabel = (takeId) => recordedAtLabels.get(takeId) ?? t('takeHistory.unknownTime');
   let selectedTakeId = null;
   let currentArtifactHref = null;
   let lastReadyTakeId = null;
@@ -223,7 +229,7 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
       button.setAttribute('aria-pressed', String(entry.takeId === selectedTakeId));
 
       const when = document.createElement('strong');
-      when.textContent = formatRecordedAt(entry.endedAtMs);
+      when.textContent = recordedAtLabel(entry.takeId);
       const meta = document.createElement('span');
       meta.textContent = formatDuration(entry.artifact.durationMs);
       button.append(when, meta);
@@ -262,7 +268,7 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
     }
 
     review.hidden = false;
-    selectedWhen.textContent = formatRecordedAt(selected.endedAtMs);
+    selectedWhen.textContent = recordedAtLabel(selected.takeId);
     selectedMeta.textContent = formatDuration(selected.artifact.durationMs);
 
     const href = artifactUrl(selected.artifact.url);
@@ -307,6 +313,7 @@ if (root && recentButton && review && recordingPlayer && recordingDownload) {
     const focusedTakeId = focused instanceof HTMLElement && groupsNode.contains(focused)
       ? focused.dataset.takeId ?? null
       : null;
+    recordedAtLabels = takeTimeLabels(historyEntries, formatRecordedAt);
     groupsNode.replaceChildren(...groupHistory(historyEntries).map(createGroup));
     if (focusedTakeId !== null) {
       const replacement = [...groupsNode.querySelectorAll('[data-take-id]')]

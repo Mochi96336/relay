@@ -11,6 +11,8 @@ const COMMANDS = new Map([
   ['choir-secondary-join', (p) => ({
     ...(p.resume === true ? { resume: true } : {}),
     ...(typeof p.expectedPrimaryId === 'string' ? { expectedPrimaryId: p.expectedPrimaryId } : {}),
+    ...(p.expectedSecondaryId === null || typeof p.expectedSecondaryId === 'string'
+      ? { expectedSecondaryId: p.expectedSecondaryId } : {}),
   })],
   ['choir-secondary-withdraw', (p) => ({ reason: reason(p.reason, 80) })],
   ['choir-secondary-media-claim-request', () => ({})],

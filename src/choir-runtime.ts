@@ -451,6 +451,7 @@ export class ChoirRuntime {
     const nowMs = performance.now();
     const ownerId = deps.mic.ownerId();
     const joining = payload.type === 'choir-secondary-join';
+    let seatChanged = false;
     let accepted: boolean;
     if (!joining) {
       accepted = this.seat.withdraw(socket);
@@ -459,12 +460,17 @@ export class ChoirRuntime {
       // owner it displayed, so an in-flight tap cannot replace the next duet.
       const ownerMatches = payload.expectedPrimaryId === undefined
         ? payload.resume !== true : payload.expectedPrimaryId === ownerId;
+      const current = this.seat.active();
+      // Microphone permission may take seconds. A Join pressed on an empty
+      // seat is not consent to take it from someone who joined meanwhile.
+      seatChanged = ownerMatches && payload.expectedSecondaryId !== undefined && current !== null
+        && current.socket !== socket && current.secondaryId !== payload.expectedSecondaryId;
       accepted = ownerId !== null
         // A local file song exists only on the Mic owner's phone: a second
         // singer could neither hear it nor be aligned to it.
         && !deps.session.micPremixed
         && deps.mic.mediaOwnerId() === ownerId
-        && ownerMatches
+        && ownerMatches && !seatChanged
         && this.seat.join(socket, ownerId, { resume: payload.resume === true, ...seatCommandId(payload) });
       if (accepted) {
         // Ask for B's media now rather than on the next mix frame.
@@ -480,7 +486,9 @@ export class ChoirRuntime {
       }),
       ...(accepted ? {} : { mediaOwnerMatches: deps.mic.mediaOwnerId() === ownerId }),
     });
-    if (!accepted) deps.send(socket, { type: 'choir-consent-rejected', reason: 'invalid-or-stale', ...seatCommandId(payload) });
+    if (!accepted) deps.send(socket, {
+      type: 'choir-consent-rejected', reason: seatChanged ? 'seat-changed' : 'invalid-or-stale', ...seatCommandId(payload),
+    });
     else if (!joining) deps.send(socket, {
       type: 'choir-secondary-consent-status', status: 'withdrawn', secondaryId: socket.participantId, ...seatCommandId(payload),
     });

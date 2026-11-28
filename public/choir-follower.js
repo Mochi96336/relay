@@ -382,10 +382,10 @@ function tick() {
         setLocalPlayback(false);
         // A new video starts with a fresh grace for Listen to yield.
         localNotPlayingSinceMs = null;
+        player.cueVideoById({ videoId: action.videoId, startSeconds: action.positionSeconds });
         localVideoId = action.videoId;
         lastSeekAtMs = nowMs;
         appliedLeadMs = leadMs;
-        player.cueVideoById({ videoId: action.videoId, startSeconds: action.positionSeconds });
         note();
         break;
       case 'pause':
@@ -400,8 +400,8 @@ function tick() {
         break;
       case 'seek':
         lastSeekAtMs = nowMs;
-        appliedLeadMs = leadMs;
         player.seekTo(action.positionSeconds, true);
+        appliedLeadMs = leadMs;
         note();
         break;
       case 'play':

@@ -45,6 +45,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.offset = 0;
     this.queuedSamples = 0;
     this.playing = false;
+    this.rebuffering = false;
 
     this.underruns = 0;
     this.droppedSamples = 0;
@@ -231,6 +232,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.offset = 0;
     this.queuedSamples = 0;
     this.playing = false;
+    this.rebuffering = false;
     this.stablePlaybackSamples = 0;
     this.pendingRecovery = false;
     this.recoveryWaitSamples = 0;
@@ -612,10 +614,11 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         if (this.concealPeriod !== null) this.writeConcealment(output, 0);
         else if (this.silenceFadeRemainingSamples > 0) this.writeSilenceFade(output, 0);
         else this.lastOutputSample = 0;
-        this.report(output.length);
+        this.report(this.rebuffering ? output.length : 0);
         return true;
       }
       this.playing = true;
+      this.rebuffering = false;
       this.concealPeriod = null;
       // Playback always starts from whatever was last put out: the tail of a
       // fade after an underrun, or silence at the very start and after a
@@ -654,6 +657,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
       }
 
       this.playing = false;
+      this.rebuffering = true;
       this.underruns += 1;
       this.starvedSamples += output.length - written;
       this.stablePlaybackSamples = 0;
@@ -687,6 +691,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
       jitterTargetMs: (this.jitterTargetSamples() / sampleRate) * 1000,
       arrivalJitterMs: (this.arrivalJitterSamples / sampleRate) * 1000,
       arrivalDeviationMs: (this.lastArrivalDeviationSamples / sampleRate) * 1000,
+      rebuffering: this.rebuffering,
       underruns: this.underruns,
       droppedMs: (this.droppedSamples / sampleRate) * 1000,
       trimmedMs: (this.trimmedSamples / sampleRate) * 1000,

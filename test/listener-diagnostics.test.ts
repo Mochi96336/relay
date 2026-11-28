@@ -117,3 +117,11 @@ test('flight recorder normalizes non-finite evidence so dumps stay JSON-safe', (
   assert.equal(serialized.includes('Infinity'), false);
   assert.equal(serialized.includes('NaN'), false);
 });
+
+test('fresh worklet state distinguishes startup, recovery and legacy starvation evidence', () => {
+  const status = { contextState: 'running', lastWorkletHealthAgeMs: 0 };
+  const health = { playing: false, starvedMs: 200 };
+  assert.equal(classifyListenerEvidence({ ...status, workletHealth: { ...health, rebuffering: false } }), 'playback-prebuffering');
+  assert.equal(classifyListenerEvidence({ ...status, workletHealth: { ...health, rebuffering: true } }), 'playback-starved');
+  assert.equal(classifyListenerEvidence({ ...status, workletHealth: health }), 'playback-starved');
+});

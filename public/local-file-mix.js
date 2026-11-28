@@ -16,6 +16,8 @@ import { storeNumber, storedNumber } from './device-preferences.js';
 export const LOCAL_FILE_OFFSET_KEY = 'relay.localFileOffsetMs.v1';
 export const LOCAL_FILE_MUSIC_LEVEL_KEY = 'relay.localFileMusicLevel.v1';
 export const MAX_OFFSET_MS = 500;
+// The offset slider's step; its lower end stays on this grid so 0 is reachable.
+export const OFFSET_STEP_MS = 5;
 const MAX_DELAY_SECONDS = 2;
 // The server's song level at the voice + song sum (backingGain), so a local
 // song sits against the voice as a room song does.
@@ -131,7 +133,20 @@ export class LocalFileMix extends EventTarget {
     return Number.isFinite(value) ? value : null;
   }
   get roundTripMs() { return Math.round(this.#roundTripSeconds * 1000); }
+  /** The singer's requested offset, as stored. */
   get offsetMs() { return this.#offsetMs; }
+  /**
+   * The furthest "voice later" this capture can apply: the song cannot be
+   * delayed by less than nothing, so a negative offset takes back at most
+   * the measured round trip (on the slider's grid).
+   */
+  get minOffsetMs() {
+    if (!this.attached) return -MAX_OFFSET_MS;
+    const roundTripSteps = Math.floor((this.#roundTripSeconds * 1000) / OFFSET_STEP_MS);
+    return Math.max(-MAX_OFFSET_MS, 0 - roundTripSteps * OFFSET_STEP_MS);
+  }
+  /** The offset the song delay carries now: the request within what this capture can apply. */
+  get appliedOffsetMs() { return Math.max(this.#offsetMs, this.minOffsetMs); }
   get musicLevel() { return this.#musicLevel; }
 
   #changed(kind) {
@@ -316,7 +331,7 @@ export class LocalFileMix extends EventTarget {
   #applyDelay() {
     const graph = this.#graph;
     if (!graph) return;
-    const target = songDelaySeconds(this.#roundTripSeconds, this.#offsetMs);
+    const target = songDelaySeconds(this.#roundTripSeconds, this.appliedOffsetMs);
     const param = graph.delay.delayTime;
     if (graph.element.paused) param.value = target;
     else param.setTargetAtTime(target, graph.context.currentTime, 0.05);

@@ -89,8 +89,11 @@ function renderOwner() {
 
   music.value = String(Math.round(localFileMix.musicLevel * 100));
   musicValue.value = `${music.value}%`;
-  offset.value = String(localFileMix.offsetMs);
-  offsetValue.value = offsetLabel(localFileMix.offsetMs);
+  // The slider and its label show what the mix applies now, which a short
+  // round trip can hold above the stored request (see minOffsetMs).
+  offset.min = String(localFileMix.minOffsetMs);
+  offset.value = String(localFileMix.appliedOffsetMs);
+  offsetValue.value = offsetLabel(localFileMix.appliedOffsetMs);
   mixSummary.value = `${musicValue.value} · ${offsetValue.value}`;
   latency.textContent = localFileMix.attached ? t('localFile.latency', { ms: localFileMix.roundTripMs }) : '';
 }

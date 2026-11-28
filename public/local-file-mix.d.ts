@@ -1,6 +1,7 @@
 export const LOCAL_FILE_OFFSET_KEY: string;
 export const LOCAL_FILE_MUSIC_LEVEL_KEY: string;
 export const MAX_OFFSET_MS: number;
+export const OFFSET_STEP_MS: number;
 
 export function roundTripLatencySeconds(input: {
   baseLatency?: number;
@@ -41,6 +42,8 @@ export class LocalFileMix extends EventTarget {
   readonly duration: number | null;
   readonly roundTripMs: number;
   readonly offsetMs: number;
+  readonly minOffsetMs: number;
+  readonly appliedOffsetMs: number;
   readonly musicLevel: number;
   open(file: Blob & { name: string }): void;
   close(): void;

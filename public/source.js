@@ -68,6 +68,8 @@ let robotDeltaSuppressedUntil = 0;
 // between corrections.
 let offsetReportedSinceSeek = true;
 let activeBackingProbeRequestId = null;
+let backingProbeOwner = 'primary';
+let scheduledBackingProbeId = null;
 
 function signed(value, suffix = '') {
   const number = Math.round(Number(value) || 0);
@@ -160,6 +162,7 @@ function parkSupersededRobot() {
   if (!ROBOT_MODE || robotSuperseded) return;
   robotSuperseded = true;
   activeBackingProbeRequestId = null;
+  closeProbeContext();
   armed = false;
   clearTimeout(reconnectTimer);
   reconnectTimer = null;
@@ -207,6 +210,15 @@ const PROBE_NOTES = [
 const PROBE_NOTE_SECONDS = 0.105;
 
 let probeAudioContext = null;
+let probeSoundUntil = 0;
+
+function closeProbeContext() {
+  const context = probeAudioContext;
+  probeAudioContext = null;
+  probeSoundUntil = 0;
+  scheduledBackingProbeId = null;
+  if (context) void context.close().catch(() => {});
+}
 
 /**
  * Opens the probe's audio context and keeps its output stream from being
@@ -247,6 +259,7 @@ function probeContext() {
  */
 async function playBackingProbe(requestId, leadMs) {
   const receivedAtMs = performance.now();
+  const ownerSocket = socket;
   if (robotSuperseded || activeBackingProbeRequestId !== requestId) return;
   try {
     const context = probeContext();
@@ -255,13 +268,15 @@ async function playBackingProbe(requestId, leadMs) {
     // fail silently. The resume may still settle late, so request identity must
     // be re-proved before any oscillator is scheduled into the backing path.
     await context.resume();
-    if (robotSuperseded || activeBackingProbeRequestId !== requestId) return;
+    if (socket !== ownerSocket || context !== probeAudioContext
+      || robotSuperseded || activeBackingProbeRequestId !== requestId) return;
     if (context.state !== 'running') {
       throw new Error(`Robot probe AudioContext is ${context.state}.`);
     }
 
     const scheduledAtMs = performance.now();
     const startTime = context.currentTime + leadMs / 1000;
+    scheduledBackingProbeId = requestId;
     for (const note of PROBE_NOTES) {
       const at = startTime + note.offsetMs / 1000;
       const oscillator = context.createOscillator();
@@ -273,6 +288,7 @@ async function playBackingProbe(requestId, leadMs) {
       oscillator.connect(gain).connect(context.destination);
       oscillator.start(at);
       oscillator.stop(at + PROBE_NOTE_SECONDS);
+      probeSoundUntil = at + PROBE_NOTE_SECONDS;
     }
 
     // No generation: the capture this lands in belongs to `backing:stdin`,
@@ -280,12 +296,13 @@ async function playBackingProbe(requestId, leadMs) {
     // to report. Request identity still belongs here: a timeout/retry can retire
     // this browser side effect even while the old resume promise is unresolved.
     if (activeBackingProbeRequestId !== requestId) return;
+    if (!send({ type: 'calibration-probe-played', target: 'backing', requestId,
+      timingDiagnostics: probeTimingDiagnostics(context, receivedAtMs, startTime, scheduledAtMs) })) closeProbeContext();
     activeBackingProbeRequestId = null;
-    send({ type: 'calibration-probe-played', target: 'backing', requestId,
-      timingDiagnostics: probeTimingDiagnostics(context, receivedAtMs, startTime, scheduledAtMs) });
   } catch (error) {
     console.warn('backing probe failed', error);
-    if (activeBackingProbeRequestId !== requestId) return;
+    if (socket !== ownerSocket || activeBackingProbeRequestId !== requestId) return;
+    closeProbeContext();
     activeBackingProbeRequestId = null;
     send({
       type: 'calibration-probe-failed',
@@ -628,7 +645,7 @@ function connect() {
   });
 
   next.addEventListener('message', (event) => {
-    if (typeof event.data !== 'string') return;
+    if (socket !== next || robotSuperseded || typeof event.data !== 'string') return;
 
     let message;
     try {
@@ -688,10 +705,17 @@ function connect() {
       return;
     }
 
+    if (message.type === 'choir-probe-retired') {
+      if (backingProbeOwner === 'choir' && activeBackingProbeRequestId === message.requestId) activeBackingProbeRequestId = null;
+      if (scheduledBackingProbeId === message.requestId && probeAudioContext
+        && probeAudioContext.currentTime < probeSoundUntil) closeProbeContext();
+      return;
+    }
+
     if (message.type === 'timing-calibration-status') {
       latestCalibration = message;
       if (
-        activeBackingProbeRequestId !== null
+        activeBackingProbeRequestId !== null && backingProbeOwner === 'primary'
         && (message.probeActive !== true || message.probePhase !== 'backing-requested')
       ) {
         activeBackingProbeRequestId = null;
@@ -711,6 +735,7 @@ function connect() {
       if (ROBOT_MODE && !robotSuperseded && message.target === 'backing') {
         const requestId = Number(message.requestId);
         if (!Number.isSafeInteger(requestId) || requestId < 0) return;
+        backingProbeOwner = message.owner === 'choir' ? 'choir' : 'primary';
         activeBackingProbeRequestId = requestId;
         void playBackingProbe(requestId, Number(message.leadMs) || 200);
       }
@@ -732,6 +757,7 @@ function connect() {
   next.addEventListener('close', () => {
     if (socket !== next) return;
     activeBackingProbeRequestId = null;
+    closeProbeContext();
     socket = null;
     latestTimeline = null;
     latestSourceStatus = null;

@@ -143,6 +143,10 @@ window.addEventListener('relay-choir-start-secondary-capture', async () => {
 
 window.addEventListener('relay-choir-media-message', (event) => {
   if (!enabled) return;
+  if (event.detail?.type === 'choir-probe-retired') {
+    probePlayback.retireRequest(event.detail.requestId);
+    return;
+  }
   if (event.detail?.type === 'choir-probe') {
     void probePlayback.play(event.detail.requestId, Number(event.detail.leadMs) || 300);
     return;

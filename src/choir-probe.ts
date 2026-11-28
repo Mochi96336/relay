@@ -139,6 +139,7 @@ export type ChoirProbeOptions = ProbeLegConfig & {
   /** Whether the Robot can be asked now (connected, and not mid boot probe). */
   robotAvailable: () => boolean;
   sendSecondary: (request: { requestId: number; leadMs: number }) => boolean;
+  retireLeg?: (side: 'backing' | 'mic', requestId: number) => void;
   sendRobot: (request: { requestId: number; leadMs: number }) => boolean;
 };
 
@@ -162,6 +163,21 @@ export class ChoirProbe {
     return this.state === 'requested' || this.state === 'analyzing';
   }
 
+  private retireLeg() {
+    if (this.running && this.leg) {
+      this.options.retireLeg?.(this.state === 'robot' ? 'backing' : 'mic', this.leg.requestId);
+      this.leg = null;
+    }
+  }
+
+  /** Retire a live exchange when its singer's media disappears. */
+  cancelPending() {
+    if (!this.running) return;
+    this.retireLeg();
+    this.captureKey = null;
+    this.state = 'idle';
+  }
+
   /** Any part of the probe is running, the Robot's leg included. */
   get running() {
     return this.state === 'robot' || this.silencing;
@@ -171,8 +187,20 @@ export class ChoirProbe {
    * The automatic probe: once per B capture. A capture already probed (or
    * failed) is not probed again; `realign` does that on request.
    */
-  begin(captureKey: string, nowMs: number) {
+  begin(captureKey: string, nowMs: number, audibleAllowed = true) {
     if (captureKey === this.captureKey) return false;
+    this.retireLeg();
+    if (!audibleAllowed) {
+      // A replacement capture must never inherit the previous singer's
+      // measurement while a Take prevents us from measuring the new one.
+      this.captureKey = null;
+      this.leg = null;
+      this.micLatencyMs = null;
+      this.correlation = null;
+      this.failureReason = null;
+      this.state = 'idle';
+      return false;
+    }
     this.captureKey = captureKey;
     this.start(nowMs);
     return true;
@@ -270,7 +298,7 @@ export class ChoirProbe {
   }
 
   private finishFailed(reason: string) {
-    this.leg = null;
+    this.retireLeg();
     this.state = 'failed';
     this.failureReason = reason;
   }

@@ -29,7 +29,15 @@ function initialize() {
   let commandAuthority = window.relayCommandAuthority ?? authorityState();
   let commandError = null;
   // B pressed Realign and the room has not yet said the test tone started.
-  let secondMicRequestPending = false;
+  let secondMicRequestPending = null;
+  let nextSecondMicCommandId = 1;
+  let secondMicTimer = null;
+  let secondMicError = null;
+  function settleSecondMic(reason = null) {
+    clearTimeout(secondMicTimer);
+    secondMicRequestPending = null;
+    secondMicError = reason;
+  }
   let preflightCommandPending = false;
 
   function setText(element, value) {
@@ -69,11 +77,15 @@ function initialize() {
    */
   function renderSecondMic() {
     const duet = latestProductStatus.room.duet;
-    setText(activeTimingValue, formatTimingValueMs(duet.lagMs) ?? '—');
+    const fresh = productAuthority?.authorityFresh === true;
+    setText(activeTimingValue, fresh ? formatTimingValueMs(duet.lagMs) ?? '—' : '—');
     setHidden(false);
-    const busy = duet.realigning === true || secondMicRequestPending;
-    setDisabled(busy || productAuthority?.authorityFresh !== true);
-    setText(calibrateStatus, busy ? t('timing.aligning') : '');
+    const busy = duet.realigning === true || secondMicRequestPending !== null;
+    setDisabled(busy || !fresh || Boolean(duet.realignBlockedReason));
+    const reason = duet.realignBlockedReason ?? secondMicError;
+    const status = !fresh || reason === 'reconnecting' ? t('timing.reconnecting') : busy ? t('timing.aligning')
+      : reason ? blockedText(reason) : '';
+    setText(calibrateStatus, status);
   }
 
   function selfOwnsServerMic(status = latestProductStatus) {
@@ -201,8 +213,7 @@ function initialize() {
       lastKnownSnapshot: latestProductStatus,
     });
     commandError = null;
-    // The room has answered B's press, one way or the other.
-    if (latestProductStatus?.room?.duet?.realigning !== undefined) secondMicRequestPending = false;
+    if (!selfIsSecondMic() || latestProductStatus.room.duet.realigning === true) settleSecondMic();
     if (latestAction?.startCalibrationBlockedReason === 'calibration-active') {
       preflightCommandPending = false;
     }
@@ -234,14 +245,27 @@ function initialize() {
     render();
   });
 
+  window.addEventListener('relay-choir-probe-response', ({ detail }) => {
+    if (secondMicRequestPending === null || detail?.commandId !== secondMicRequestPending) return;
+    settleSecondMic(detail.reason);
+    render();
+  });
+
   window.addEventListener('relay-locale-changed', render);
 
   calibrateButton?.addEventListener?.('click', () => {
     if (selfIsSecondMic()) {
       if (calibrateButton.disabled) return;
-      secondMicRequestPending = true;
+      const commandId = nextSecondMicCommandId++;
+      secondMicRequestPending = commandId;
+      secondMicError = null;
+      secondMicTimer = setTimeout(() => {
+        if (secondMicRequestPending !== commandId) return;
+        settleSecondMic('unavailable');
+        render();
+      }, 4000);
       window.dispatchEvent(new CustomEvent('relay-choir-command', {
-        detail: { type: 'choir-probe-request' },
+        detail: { type: 'choir-probe-request', commandId },
       }));
       render();
       return;

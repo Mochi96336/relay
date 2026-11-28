@@ -55,6 +55,7 @@ export type ProductDuet = {
   lagMs?: number | null;
   /** B's test tone is running (B asked, or B just joined). */
   realigning?: boolean;
+  realignBlockedReason?: 'take-active' | 'calibration-active' | 'sources-not-streaming' | null;
 };
 
 /**
@@ -349,7 +350,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
 
   const startTake = decideTakeStart({
     sessionActive: input.readiness.components.session.active,
-    bootProbeCalibrationActive: preparingCalibrationActive(input),
+    bootProbeCalibrationActive: preparingCalibrationActive(input) || input.duet?.realigning === true,
     songLoaded: input.roomSong.videoId !== null,
     voiceOnlyMicState: mic,
     micMediaRecoveryDegraded,
@@ -361,7 +362,7 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
     : null;
   const startCalibration = decideCalibrationStart({
     takeLifecycle: input.take.lifecycle,
-    bootProbeCalibrationActive: preparingCalibrationActive(input),
+    bootProbeCalibrationActive: preparingCalibrationActive(input) || input.duet?.realigning === true,
     sessionActive: input.readiness.components.session.active,
     backingConnected: input.readiness.components.backing.connected,
     publisherControlConnected: input.publisherControlConnected === true,

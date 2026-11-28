@@ -174,3 +174,28 @@ test('a stale reply, a silent page and a changed capture all end the probe', () 
   waiting.probe.tick(7_000);
   assert.equal(waiting.probe.state, 'failed');
 });
+
+test('a departed singer’s Robot reply is retired and the same capture can resume', () => {
+  const f = fixture({ backingLatencyMs: null });
+  f.probe.begin('b:7', 0);
+  f.probe.cancelPending();
+  assert.equal(f.probe.robotPlayed({ requestId: f.sentRobot[0] }, 100), false);
+  assert.equal(f.probe.running, false);
+  assert.equal(f.probe.begin('b:7', 200), true);
+  assert.notEqual(f.sentRobot[0], f.sentRobot[1]);
+});
+
+test('a Take defers a new capture probe without lending it the old capture’s lag', () => {
+  const f = fixture({ bChimesAtMs: [470] });
+  f.probe.begin('b:7', 0);
+  f.probe.played({ requestId: f.sentB[0], generation: 7 }, 100);
+  f.probe.tick(200);
+  assert.notEqual(f.probe.advanceMs(0, 1), null);
+  f.b.state.generation = 8;
+  assert.equal(f.probe.begin('b:8', 300, false), false);
+  assert.equal(f.probe.advanceMs(0, 1), null);
+  assert.equal(f.sentB.length, 1);
+  assert.equal(f.probe.begin('b:8', 400, true), true);
+  assert.equal(f.probe.begin('b:8', 420, true), false);
+  assert.equal(f.sentB.length, 2);
+});

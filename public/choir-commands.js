@@ -18,7 +18,7 @@ const COMMANDS = new Map([
     videoId: p.videoId, state: p.state, currentTime: p.currentTime,
     playbackRate: p.playbackRate, captureAnchor: p.captureAnchor, leadMs: p.leadMs,
   })],
-  ['choir-probe-request', () => ({})],
+  ['choir-probe-request', (p) => Number.isSafeInteger(p.commandId) ? { commandId: p.commandId } : {}],
   ['choir-probe-played', (p) => ({
     requestId: p.requestId, generation: p.generation, timingDiagnostics: p.timingDiagnostics,
   })],

@@ -218,7 +218,7 @@ for (const reply of ['played', 'failed']) {
       };
       const scope = vm.createContext({
         CalibrationProbePlayback: class extends CalibrationProbePlayback {
-          constructor(ports: object) { super({ ...ports, isHidden: () => false, warn() {} }); }
+          constructor(ports: object) { super({ ...ports, warn() {} }); }
         },
         publisherSession: { context, epoch: 1, generation: 2, socket },
         isCurrentPublisherCapture: () => true, socket, WebSocket: { OPEN: 1 }, audioTransport,

@@ -224,7 +224,7 @@ test('song alignment anchors start only after the current media socket is regist
   assert.equal(anchors(), 1, 'a replacement socket must register on its own');
 });
 
-test("going to the background silences B's scheduled test tone but keeps B's capture and media", async () => {
+test("pagehide silences B's scheduled test tone; hiding the page does not, and B stays connected", async () => {
   const f = await fixture();
   await f.join();
   const socket = f.sockets.at(-1)!;
@@ -235,9 +235,9 @@ test("going to the background silences B's scheduled test tone but keeps B's cap
   f.show();
   assert.equal(f.probeRetires.count, before, 'coming back to the foreground retires nothing');
   f.hide();
-  assert.equal(f.probeRetires.count, before + 1);
+  assert.equal(f.probeRetires.count, before, 'a hidden page keeps measuring');
   f.emit('pagehide');
-  assert.equal(f.probeRetires.count, before + 2);
+  assert.equal(f.probeRetires.count, before + 1);
   assert.equal(socket.readyState, 1, 'B stays connected and singing');
   assert.equal(f.connection().some((c: any) => c.state === 'disconnected'), false);
 });

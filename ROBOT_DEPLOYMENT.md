@@ -475,8 +475,11 @@ satisfy `0 <= schedulingDelay <= processing <= RTT`; missing or inconsistent
 evidence uses the explicitly labeled `legacy-rtt-half` method. This still assumes
 symmetric network transit. Completed probe evidence is retained separately from
 the current attempt so probe IDs and capture generations do not label an older
-measurement. Hidden publisher pages explicitly reject a probe instead of silently
-waiting for an ACK timeout.
+measurement. A hidden publisher page plays its probe like a visible one: its
+context keeps running and its capture keeps sending. A page that cannot start
+the probe within 1 s (a suspended iOS context) fails it rather than letting the
+tone sound in the next attempt's window, a context that stops after scheduling
+silences the notes, and `pagehide` retires the probe outright.
 
 When the singer's own page is the one whose playback reports drive the room
 clock, the Mic probe is timed on that page's clock instead (`method:

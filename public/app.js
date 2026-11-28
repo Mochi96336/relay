@@ -1405,7 +1405,6 @@ window.addEventListener('relay-retry-microphone', () => {
 });
 
 function notePublisherBackgrounded() {
-  calibrationProbePlayback.retire();
   if (!publisherSession.active) return;
 
   // iOS may freeze timers immediately after the lifecycle edge, so do not
@@ -1421,7 +1420,14 @@ document.addEventListener('visibilitychange', () => {
   }
   recoverPublisherAudio();
 });
-window.addEventListener('pagehide', notePublisherBackgrounded);
+// Only a page being put away silences a scheduled probe. A hidden page's
+// context keeps running and its capture keeps sending, so its probe measures
+// what a visible page's would; a context that does stop retires the probe
+// itself (CalibrationProbePlayback, on statechange).
+window.addEventListener('pagehide', () => {
+  calibrationProbePlayback.retire();
+  notePublisherBackgrounded();
+});
 window.addEventListener('pageshow', recoverPublisherAudio);
 
 window.addEventListener('relay-release-microphone', () => {

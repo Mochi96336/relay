@@ -1374,7 +1374,7 @@ test('production DOM: retrying a damaged Mic keeps the Mic instead of releasing 
   expect(again.captureGeneration).not.toBe(first.captureGeneration);
 });
 
-test('production DOM: a backgrounded phone reports probe rejection without playing audio', async ({ page }) => {
+test('production DOM: a hidden page plays and acknowledges its probe', async ({ page }) => {
   await livePhone(page);
   await page.evaluate(() => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
@@ -1382,22 +1382,18 @@ test('production DOM: a backgrounded phone reports probe rejection without playi
     window.__relayInteractionHarness.broadcast({ type: 'play-calibration-probe', target: 'mic', requestId: 77, leadMs: 20 });
   });
   await expect.poll(() => probeReplies(page)).toEqual([{
-    type: 'calibration-probe-failed', requestId: 77, generation: expect.any(Number), target: 'mic',
+    type: 'calibration-probe-played', requestId: 77, generation: expect.any(Number), target: 'mic',
   }]);
-  expect(await page.evaluate(() => window.__relayInteractionHarness.commands.find(
-    command => command.type === 'calibration-probe-failed' && command.requestId === 77,
-  )?.reason)).toMatch(/page is hidden/);
-  expect(await page.evaluate(() => window.__oscillatorsCreated ?? 0)).toBe(0);
+  expect(await page.evaluate(() => window.__probeNodes.length)).toBe(3);
 });
 
-test('production DOM: going to the background drops a probe that had not played yet', async ({ page }) => {
+test('production DOM: pagehide drops a probe that had not played yet', async ({ page }) => {
   await livePhone(page);
-  // The request arrives, then the page is hidden before the AudioContext has
+  // The request arrives, then the page is put away before the AudioContext has
   // resumed: that probe is no longer this page's to answer at all.
   await page.evaluate(() => {
     window.__relayInteractionHarness.broadcast({ type: 'play-calibration-probe', target: 'mic', requestId: 78, leadMs: 20 });
-    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
-    document.dispatchEvent(new Event('visibilitychange'));
+    window.dispatchEvent(new Event('pagehide'));
   });
   await page.waitForTimeout(600);
   expect(await probeReplies(page)).toEqual([]);

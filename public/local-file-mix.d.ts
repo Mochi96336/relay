@@ -18,6 +18,8 @@ export function localFileSurface(input: {
   /** This page captures the Mic now. */
   capturing?: boolean;
 }): 'owner' | 'standby' | 'observer' | 'none';
+/** The room song is moving (YouTube state 1 or 3): the local file is held. */
+export function roomSongHoldsLocalFile(room: { state?: unknown } | null | undefined): boolean;
 export function lostMicToAnother(input: {
   previousOwnerId: string | null;
   nextOwnerId: string | null;

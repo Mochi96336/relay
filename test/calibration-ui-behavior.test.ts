@@ -112,6 +112,7 @@ function harness(options: { selfMic?: 'live' | 'off' } = {}) {
 
   runInNewContext(source, {
     window,
+    setTimeout, clearTimeout,
     document,
     Event,
     CustomEvent,
@@ -464,6 +465,18 @@ test("the second Mic's Realign shows B's own value and replays only B's test ton
   assert.equal(ui.dispatched.at(-1)?.detail?.type, 'choir-probe-request');
   assert.equal(ui.button.disabled, true, 'held until the room answers');
 
+  const commandId = ui.dispatched.at(-1)?.detail.commandId;
+  status({ lagMs: 85, realigning: false });
+  assert.equal(ui.button.disabled, true, 'an unrelated room snapshot cannot acknowledge the command');
+  ui.emit('relay-choir-probe-response', { commandId: commandId + 1, reason: 'unavailable' });
+  assert.equal(ui.button.disabled, true, 'a different command cannot settle this request');
+  ui.emit('relay-choir-probe-response', { commandId, reason: 'unavailable' });
+  assert.equal(ui.button.disabled, false, 'a rejected request can be retried');
+  assert.equal(ui.status.textContent, '目前無法重新對齊');
+  status({ lagMs: 85, realigning: false, realignBlockedReason: 'take-active' });
+  assert.equal(ui.button.disabled, true);
+  status({ lagMs: 85, realigning: false });
+  ui.button.click();
   status({ lagMs: 85, realigning: true });
   assert.equal(ui.button.disabled, true);
   assert.equal(ui.status.textContent, '對齊中…');

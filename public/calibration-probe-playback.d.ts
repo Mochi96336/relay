@@ -16,5 +16,6 @@ export class CalibrationProbePlayback {
   });
   play(requestId: number, leadMs: number): Promise<void>;
   cancelPending(): void;
+  retireRequest(requestId: number): void;
   retire(): void;
 }

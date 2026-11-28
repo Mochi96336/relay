@@ -240,6 +240,13 @@ describe('product lifecycle and health', () => {
     assert.equal(model.actions.startTakeBlockedReason, 'timing-calibration-active');
   });
 
+  test('Take admission waits for the second singer’s audible probe to finish', () => {
+    const duet = { secondaryId: 'b', secondaryNickname: 'B', state: 'singing' as const };
+    const running = buildProductViewModel(input({ duet: { ...duet, realigning: true } }));
+    assert.equal(running.actions.startTakeBlockedReason, 'timing-calibration-active');
+    assert.equal(buildProductViewModel(input({ duet })).actions.canStartTake, true);
+  });
+
   test('leaves the room live while a background content measurement runs', () => {
     // Content calibration only listens to audio the room is already making.
     // Presenting a singing room as getting ready - or refusing a Take - would

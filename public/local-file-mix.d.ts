@@ -14,6 +14,8 @@ export function localFileSurface(input: {
   myId: string | null | undefined;
   micOwnerId: string | null;
   roomLocalFile: unknown;
+  /** This page captures the Mic now. */
+  capturing?: boolean;
 }): 'owner' | 'standby' | 'observer' | 'none';
 export function lostMicToAnother(input: {
   previousOwnerId: string | null;

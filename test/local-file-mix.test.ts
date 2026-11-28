@@ -292,15 +292,19 @@ test('a play that outlives its graph neither starts the new one nor reports fail
 });
 
 test('the song area follows who holds the Mic', () => {
-  const surface = (fileOpen: boolean, micOwnerId: string | null, roomLocalFile: unknown = null) =>
-    localFileSurface({ fileOpen, myId: 'me', micOwnerId, roomLocalFile });
+  const surface = (fileOpen: boolean, micOwnerId: string | null, roomLocalFile: unknown = null, capturing = false) =>
+    localFileSurface({ fileOpen, myId: 'me', micOwnerId, roomLocalFile, capturing });
   assert.equal(surface(true, 'me'), 'owner');
   assert.equal(surface(true, null), 'owner');
   // A file opened before taking over: the current singer's song stays visible.
   assert.equal(surface(true, 'other'), 'standby');
   assert.equal(surface(false, 'other', { title: 'x' }), 'observer');
   assert.equal(surface(false, 'other'), 'none');
-  assert.equal(surface(false, 'me', { title: 'x' }), 'none');
+  // Another tab of the singer holding the file shows it read-only; the
+  // capturing tab that just closed its file does not.
+  assert.equal(surface(false, 'me', { title: 'x' }), 'observer');
+  assert.equal(surface(false, 'me', { title: 'x' }, true), 'none');
+  assert.equal(surface(false, null, { title: 'x' }), 'none');
 });
 
 test('only a handoff from this phone to another ends its local file', () => {

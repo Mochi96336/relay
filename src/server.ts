@@ -2291,8 +2291,9 @@ const mixerTimer = setInterval(() => {
     // The stems take exactly the frames the Take accepted, so they line up
     // with it sample for sample.
     const recordingTakeId = takeController.recordingTakeId;
+    const song = noteRoomSong(nowMs);
     if (takeController.append(frame, takeQualityFrameState(nowMs), evidence, position) && recordingTakeId !== null) {
-      takeStems.append(recordingTakeId, frame, stems);
+      takeStems.append(recordingTakeId, frame, stems, song);
     }
     takeStems.settle(takeController.recordingTakeId);
     noteMixLoudness(frame.byteLength / 2, nowMs);
@@ -2317,6 +2318,23 @@ const mixerTimer = setInterval(() => {
 
 const MIX_LOUDNESS_REPORT_SAMPLES = MIX_SAMPLE_RATE * 3;
 let mixLoudnessSamples = 0;
+let journaledRoomSong: string | null = null;
+
+/**
+ * The song a mixed frame carried: the room's video, or the singer's local
+ * file. A Take names only the song it started with, so a change is journaled
+ * as `[room-song]` and the stems split their summary by it.
+ */
+function noteRoomSong(nowMs: number) {
+  const snapshot = takeSongSnapshot(nowMs);
+  const title = snapshot.localFile?.title;
+  const song = snapshot.videoId ?? (title ? `local:${title}` : null);
+  if (song !== journaledRoomSong) {
+    console.log('[room-song]', JSON.stringify({ song, previous: journaledRoomSong }));
+    journaledRoomSong = song;
+  }
+  return song;
+}
 
 /**
  * Journals the room's balance every 3 s while anyone could hear it: the
@@ -2335,6 +2353,7 @@ function noteMixLoudness(frameSamples: number, nowMs: number) {
   const voice = loudness.voice.shortTermLufs;
   const backing = loudness.backing.shortTermLufs;
   console.log('[mix-loudness]', JSON.stringify({
+    song: journaledRoomSong,
     micLive,
     songPlaying,
     micGainDb: session.effectiveMicGainDb,

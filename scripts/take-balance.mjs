@@ -142,6 +142,15 @@ function main() {
     const result = analyse(stems(options.dir, takeId), options.timeline);
     const { p10, p50, p90 } = result.vocalToBacking;
     console.log(`${takeId.slice(0, 8)} ${fmt(result.seconds, 6)} ${fmt(result.singingSeconds, 7)} ${fmt(result.singingVoiceLufs, 11)} ${fmt(result.backingLufs)}   ${fmt(p10)} ${fmt(p50)} ${fmt(p90)}`);
+    // The Relay's summary knows which song each stretch carried; the stems do not.
+    let summary = null;
+    try {
+      summary = JSON.parse(readFileSync(path.join(stemDir, `${takeId}.loudness.json`), 'utf8'));
+    } catch {}
+    for (const part of summary?.songs ?? []) {
+      const spread = part.vocalToBackingDb;
+      console.log(`  ${String(part.song ?? '(no song)').padEnd(16)} @${fmt(part.startSecond, 5)}s ${fmt(part.seconds, 5)}s  singing ${fmt(part.singingSeconds, 5)}s  voice ${fmt(part.singingVoiceLufs)}  song ${fmt(part.backingLufs)}  voice−song ${fmt(spread?.p10)} ${fmt(spread?.p50)} ${fmt(spread?.p90)}`);
+    }
     for (const [second, voice, backing] of result.rows) {
       console.log(`    ${fmt(second, 5)}s  voice ${fmt(voice)}  song ${fmt(backing)}`);
     }

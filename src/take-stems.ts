@@ -64,8 +64,38 @@ export type TakeLoudnessSummary = {
   /** Seconds the voice was singing while the song played. */
   singingSeconds: number;
   /** Voice minus song short-term loudness, sampled each second the voice sang over the song. */
-  vocalToBackingDb: { p10: number; p50: number; p90: number } | null;
+  vocalToBackingDb: Spread | null;
+  /**
+   * The same, per song in the order they played: a Take can run across a song
+   * change, and its own metadata names only the song it started with.
+   */
+  songs: TakeSongLoudness[];
 };
+
+export type Spread = { p10: number; p50: number; p90: number };
+
+export type TakeSongLoudness = {
+  /** YouTube video ID, `local:<title>`, or null for no song. */
+  song: string | null;
+  startSecond: number;
+  seconds: number;
+  backingLufs: number | null;
+  singingVoiceLufs: number | null;
+  singingSeconds: number;
+  vocalToBackingDb: Spread | null;
+};
+
+type Segment = {
+  song: string | null;
+  startBlock: number;
+  backing: IntegratedLoudness;
+  singingVoice: IntegratedLoudness;
+  differences: number[];
+};
+
+function segment(song: string | null, startBlock: number): Segment {
+  return { song, startBlock, backing: new IntegratedLoudness(), singingVoice: new IntegratedLoudness(), differences: [] };
+}
 
 type Active = {
   takeId: string;
@@ -76,6 +106,8 @@ type Active = {
   singingVoice: IntegratedLoudness;
   blocks: number;
   differences: number[];
+  segments: Segment[];
+  song: string | null;
   failed: boolean;
 };
 
@@ -118,13 +150,14 @@ export class TakeStemRecorder {
   }
 
   /** The same frame the Take just wrote, with each source's share of it. */
-  append(takeId: string, frame: Buffer, stems: MixFrameStems) {
+  append(takeId: string, frame: Buffer, stems: MixFrameStems, song: string | null = null) {
     if (this.active && this.active.takeId !== takeId) this.finish();
     if (!this.active) {
       if (!this.start(takeId)) return;
     }
     const active = this.active!;
     if (active.failed) return;
+    active.song = song;
     try {
       active.voice.append(stems.voice);
       active.backing.append(stems.backing);
@@ -179,6 +212,8 @@ export class TakeStemRecorder {
         singingVoice: new IntegratedLoudness(),
         blocks: 0,
         differences: [],
+        segments: [],
+        song: null,
         failed: false,
       };
       return true;
@@ -200,11 +235,20 @@ export class TakeStemRecorder {
       integrated.voice.add(meters.voice.momentaryMeanSquare);
       integrated.backing.add(meters.backing.momentaryMeanSquare);
       integrated.mix.add(meters.mix.momentaryMeanSquare);
+      let current = active.segments.at(-1);
+      if (!current || current.song !== active.song) {
+        current = segment(active.song, active.blocks);
+        active.segments.push(current);
+      }
       active.blocks += 1;
+      current.backing.add(meters.backing.momentaryMeanSquare);
 
       const voiceMomentary = meters.voice.momentaryLufs;
       const singing = voiceMomentary !== null && voiceMomentary > VOCAL_ACTIVE_MOMENTARY_LUFS;
-      if (singing) active.singingVoice.add(meters.voice.momentaryMeanSquare);
+      if (singing) {
+        active.singingVoice.add(meters.voice.momentaryMeanSquare);
+        current.singingVoice.add(meters.voice.momentaryMeanSquare);
+      }
       if (active.blocks % 10 !== 0 || !singing) continue;
       const voiceShortTerm = meters.voice.shortTermLufs;
       const backingShortTerm = meters.backing.shortTermLufs;
@@ -213,6 +257,7 @@ export class TakeStemRecorder {
         && Number.isFinite(voiceShortTerm) && backingShortTerm > BACKING_PRESENT_SHORT_TERM_LUFS
       ) {
         active.differences.push(voiceShortTerm - backingShortTerm);
+        current.differences.push(voiceShortTerm - backingShortTerm);
       }
     }
   }
@@ -292,10 +337,16 @@ export class TakeStemRecorder {
   }
 }
 
-function summarize(active: Active, sampleCount: number): TakeLoudnessSummary {
-  const round = (value: number | null) => (value === null || !Number.isFinite(value) ? null : Math.round(value * 10) / 10);
-  const sorted = [...active.differences].sort((a, b) => a - b);
+const round = (value: number | null) => (value === null || !Number.isFinite(value) ? null : Math.round(value * 10) / 10);
+
+function spread(values: number[]): Spread | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
   const at = (fraction: number) => Math.round(sorted[Math.min(sorted.length - 1, Math.floor(fraction * sorted.length))] * 10) / 10;
+  return { p10: at(0.1), p50: at(0.5), p90: at(0.9) };
+}
+
+function summarize(active: Active, sampleCount: number): TakeLoudnessSummary {
   return {
     version: 1,
     takeId: active.takeId,
@@ -307,7 +358,19 @@ function summarize(active: Active, sampleCount: number): TakeLoudnessSummary {
     },
     singingVoiceLufs: round(active.singingVoice.lufs),
     singingSeconds: Math.round(active.singingVoice.blockCount / 10),
-    vocalToBackingDb: sorted.length === 0 ? null : { p10: at(0.1), p50: at(0.5), p90: at(0.9) },
+    vocalToBackingDb: spread(active.differences),
+    songs: active.segments.map((part, index) => {
+      const endBlock = active.segments[index + 1]?.startBlock ?? active.blocks;
+      return {
+        song: part.song,
+        startSecond: Math.round(part.startBlock / 10),
+        seconds: Math.round((endBlock - part.startBlock) / 10),
+        backingLufs: round(part.backing.lufs),
+        singingVoiceLufs: round(part.singingVoice.lufs),
+        singingSeconds: Math.round(part.singingVoice.blockCount / 10),
+        vocalToBackingDb: spread(part.differences),
+      };
+    }),
   };
 }
 

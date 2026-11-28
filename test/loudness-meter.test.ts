@@ -82,6 +82,10 @@ test('silence reads -Infinity, never NaN, and reset forgets history', () => {
   assert.equal(meter.momentaryLufs, -Infinity);
   assert.equal(lufsFromMeanSquare(0), -Infinity);
   tone(meter, 997, -20, 0.5);
+  // The filters' decaying tail never reaches exactly zero; it is still silence.
+  silence(meter, 3.5);
+  assert.equal(meter.shortTermLufs, -Infinity);
+  assert.equal(meter.momentaryLufs, -Infinity);
   meter.reset();
   assert.equal(meter.momentaryLufs, null);
 });

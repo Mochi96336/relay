@@ -54,9 +54,16 @@ export function kWeightingCoefficients(sampleRate) {
   return Object.freeze({ shelf, highPass });
 }
 
+/**
+ * Below this a mean square is the K-weighting filters' decaying tail, not
+ * audio: they never reach exactly zero after a source stops, and read as
+ * thousands of dB down. -150 LUFS is far below anything 16-bit PCM can carry.
+ */
+const SILENT_MEAN_SQUARE = 10 ** ((-150 + 0.691) / 10);
+
 /** Mean square to LUFS for one channel; silence is -Infinity, never NaN. */
 export function lufsFromMeanSquare(meanSquare) {
-  return meanSquare > 0 ? -0.691 + 10 * Math.log10(meanSquare) : LUFS_SILENCE;
+  return meanSquare > SILENT_MEAN_SQUARE ? -0.691 + 10 * Math.log10(meanSquare) : LUFS_SILENCE;
 }
 
 export class LoudnessMeter {

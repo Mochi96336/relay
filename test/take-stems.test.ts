@@ -37,13 +37,13 @@ function sum(a: Buffer, b: Buffer) {
   return out;
 }
 
-function record(recorder: TakeStemRecorder, takeId: string, seconds: number) {
+function record(recorder: TakeStemRecorder, takeId: string, seconds: number, song: string | null = null, backingDbfs = -30) {
   const voices: Buffer[] = [];
   for (let first = 0; first < RATE * seconds; first += FRAME) {
     const voice = tone(first, 440, -20);
-    const backing = tone(first, 997, -30);
+    const backing = tone(first, 997, backingDbfs);
     voices.push(voice);
-    recorder.append(takeId, sum(voice, backing), { voice, backing });
+    recorder.append(takeId, sum(voice, backing), { voice, backing }, song);
   }
   return Buffer.concat(voices);
 }
@@ -155,5 +155,27 @@ test('no stems when turned off or when the disk is below the reserve; the Take i
     } finally {
       f.cleanup();
     }
+  }
+});
+
+test('the loudness summary splits a Take by the song each stretch carried', async () => {
+  const f = fixture();
+  try {
+    writeFileSync(path.join(f.takeDir, `${TAKE}.wav`), '');
+    const recorder = f.recorder();
+    record(recorder, TAKE, 6, 'songA', -30);
+    record(recorder, TAKE, 6, 'songB', -20);
+    recorder.settle(null);
+    await recorder.shutdown();
+    const summary = JSON.parse(readFileSync(path.join(f.stems, `${TAKE}.loudness.json`), 'utf8'));
+    assert.deepEqual(summary.songs.map((part: { song: string }) => part.song), ['songA', 'songB']);
+    const [a, b] = summary.songs;
+    assert.equal(a.startSecond, 0);
+    assert.equal(b.startSecond, 6);
+    assert.equal(a.seconds + b.seconds, 12);
+    assert.ok(Math.abs(a.backingLufs - -33) < 0.3 && Math.abs(b.backingLufs - -23) < 0.3, JSON.stringify(summary.songs));
+    assert.ok(a.vocalToBackingDb.p50 - b.vocalToBackingDb.p50 > 8, 'the louder song leaves the voice 10 dB less ahead');
+  } finally {
+    f.cleanup();
   }
 });

@@ -118,7 +118,9 @@ window.addEventListener('relay-presence-state', (event) => {
   session = event.detail?.session ?? null;
   authorityFresh = event.detail?.authorityFresh === true;
   if (!authorityFresh) recoverControl();
-  else if (joined && joinScope && (session?.micOwnerId !== joinScope.primaryId
+  // A join still waiting for admission belongs to the Mic owner it was
+  // pressed for, exactly as an admitted one does.
+  else if ((joined || pending) && joinScope && (session?.micOwnerId !== joinScope.primaryId
     || session?.serverIncarnation !== joinScope.serverIncarnation)) resetJoin();
   resumeIfReady();
   render();
@@ -150,6 +152,13 @@ window.addEventListener('relay-choir-message', (event) => {
     // Only a still-active user intent may revive the second microphone.
     if (!joinScope) {
       publishCommand('choir-secondary-withdraw', { reason: 'join-cancelled' });
+      return;
+    }
+    // Admitted to someone else's Mic (the owner changed in flight): this
+    // singer asked to join the owner they saw, so do not sing under another.
+    if (typeof message.primaryId === 'string' && message.primaryId !== joinScope.primaryId) {
+      publishCommand('choir-secondary-withdraw', { reason: 'join-cancelled' });
+      resetJoin();
       return;
     }
     clearTimeout(pendingTimer);

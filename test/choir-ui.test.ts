@@ -191,3 +191,25 @@ test('successive control drops share a grace deadline until a resume is confirme
   f.advance(15_000);
   assert.equal(f.leave.hidden, true, 'the next outage gets its own deadline');
 });
+
+test('an unconfirmed join stops capture if the room changes before admission', async () => {
+  const f = await choirPage();
+  f.join();
+  f.emit('relay-presence-state', {
+    authorityFresh: true, session: { micOwnerId: 'next', micConnected: true, serverIncarnation: 'server' },
+  });
+  assert.equal(f.events.filter(e => e.type === 'relay-choir-stop-secondary-capture').length, 1);
+  f.accept();
+  assert.equal(f.leave.hidden, true);
+  assert.equal(f.events.at(-1)?.detail?.type, 'choir-secondary-withdraw');
+});
+
+test('a join acknowledged for another Mic owner never activates the guest controls', async () => {
+  const f = await choirPage();
+  f.join();
+  f.emit('relay-choir-message', {
+    type: 'choir-secondary-consent-status', status: 'accepted', secondaryId: 'b', primaryId: 'next',
+  });
+  assert.equal(f.leave.hidden, true);
+  assert.ok(f.events.some(e => e.detail?.type === 'choir-secondary-withdraw'));
+});

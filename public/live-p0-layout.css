@@ -219,6 +219,19 @@ html body .performance-stage > #mic-takeover {
   margin-bottom: auto !important;
 }
 
+/* The lyrics slot takes the same free space, including when its reader is closed. */
+html body .performance-stage:has(> #song-lyrics-slot) > :is(.mic-actions, #mic-takeover) {
+  margin-bottom: 0 !important;
+}
+
+html body .performance-stage > #song-lyrics-slot {
+  order: 4;
+  flex: 1 1 0;
+  min-block-size: 0;
+  contain: size;
+  overflow: hidden;
+}
+
 /* Idle/ready: Record lives on the left and the existing Take-history entry on
    the right. When #65 hides Record because server readiness is false, a real
    history entry may still keep this row alive; history must never disappear

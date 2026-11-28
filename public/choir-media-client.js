@@ -129,6 +129,15 @@ window.addEventListener('relay-choir-start-secondary-capture', async () => {
   }
 });
 
+// As the main Mic does on the same edges (app.js notePublisherBackgrounded):
+// a page going to the background silences this measurement's notes, whether
+// it still waits for its context or is already scheduled. Capture and the
+// seat stay as they are; B can Realign once back.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') probePlayback.retire();
+});
+window.addEventListener('pagehide', () => probePlayback.retire());
+
 window.addEventListener('relay-choir-media-message', (event) => {
   if (!enabled) return;
   if (event.detail?.type === 'choir-probe-retired') {

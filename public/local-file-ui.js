@@ -1,4 +1,6 @@
-import { localFileMix, localFileSurface, lostMicToAnother } from './local-file-mix.js';
+import {
+  localFileMix, localFileSurface, lostMicToAnother, roomSongHoldsLocalFile,
+} from './local-file-mix.js';
 
 // Copy lives in i18n.js: the menu item is static markup that i18n.js
 // translates before this module loads.
@@ -162,6 +164,11 @@ fileInput.addEventListener('change', () => {
     showDuetNotice('localFile.blockedDuet');
     return;
   }
+  // Likewise the room's song may have started while the picker was open.
+  if (roomSongPlaying) {
+    showDuetNotice('localFile.blockedSong');
+    return;
+  }
   transientNote = null;
   localFileMix.open(file);
 });
@@ -243,7 +250,7 @@ window.addEventListener('relay-product-status', (event) => {
 // One song at a time: the room's YouTube song would reach Listen through the
 // Robot on top of the one mixed here.
 window.addEventListener('relay:playback-view', (event) => {
-  const next = event.detail?.room?.state === 'playing';
+  const next = roomSongHoldsLocalFile(event.detail?.room);
   if (next && !roomSongPlaying && localFileMix.playing) transientNote = t('localFile.roomSongPaused');
   // Every view while the room song plays, not only its first: this also
   // withdraws a local play still waiting to start.

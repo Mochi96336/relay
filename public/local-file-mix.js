@@ -91,6 +91,16 @@ export function localFileSurface({ fileOpen, myId, micOwnerId, roomLocalFile, ca
   return othersMic || !capturing ? 'observer' : 'none';
 }
 
+/**
+ * The room's song (relay:playback-view `room`) is moving: YouTube PLAYING (1)
+ * or BUFFERING (3). The room reports YouTube's numeric player state, never a
+ * word, so a cued (5) or paused (2) song leaves the local file free.
+ */
+export function roomSongHoldsLocalFile(room) {
+  const state = Number(room?.state);
+  return state === 1 || state === 3;
+}
+
 /** This page held the Mic and someone else holds it now: its local file is over. */
 export function lostMicToAnother({ previousOwnerId, nextOwnerId, myId }) {
   return typeof myId === 'string' && previousOwnerId === myId

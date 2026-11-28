@@ -102,6 +102,9 @@ export class LocalFileMix extends EventTarget {
   #musicLevel;
   #roundTripSeconds = 0;
   #retuneTimer = null;
+  // Each play() request, pause and teardown takes a new number; a play still
+  // waiting on the device or the element acts only while its number is current.
+  #playRequest = 0;
   #createElement;
 
   constructor({ createElement = () => new Audio() } = {}) {
@@ -264,6 +267,7 @@ export class LocalFileMix extends EventTarget {
     if (!graph) return;
     if (this.#links?.graph === graph) this.#unlink();
     this.#graph = null;
+    this.#playRequest += 1;
     clearInterval(this.#retuneTimer);
     this.#retuneTimer = null;
     this.#position = graph.element.currentTime || this.#position;
@@ -310,14 +314,27 @@ export class LocalFileMix extends EventTarget {
       this.#changed('needs-mic');
       return false;
     }
+    const request = ++this.#playRequest;
+    // A pause, another play, a new file or the end of the capture while this
+    // request awaited the device or the element is the newer intent.
+    const current = () => request === this.#playRequest && this.#graph === graph && this.#wantPlaying;
     try {
       if (graph.context.state !== 'running') await graph.context.resume();
+      if (!current()) return false;
       this.#retune(true);
       await graph.element.play();
     } catch (error) {
+      if (!current()) return false;
       console.warn('Local file playback failed', error);
       this.#wantPlaying = false;
       this.#changed('play-failed');
+      return false;
+    }
+    if (!current()) {
+      // The element started after the request was withdrawn.
+      if (this.#graph === graph && !this.#wantPlaying) {
+        try { graph.element.pause(); } catch {}
+      }
       return false;
     }
     clearInterval(this.#retuneTimer);
@@ -332,6 +349,7 @@ export class LocalFileMix extends EventTarget {
 
   pause() {
     this.#wantPlaying = false;
+    this.#playRequest += 1;
     clearInterval(this.#retuneTimer);
     this.#retuneTimer = null;
     try { this.#graph?.element.pause(); } catch {}

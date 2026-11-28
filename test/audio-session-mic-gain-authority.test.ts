@@ -61,10 +61,10 @@ test('server owns Mic gain command authorization, clamping and publication', () 
   assert.doesNotMatch(serverCode, /let\s+micGainDb\s*=/);
   assert.doesNotMatch(serverCode, /session\.setMicGainDb\(micGainDb\)/);
   // Read through, never copied: mix health, mix settings and diagnostics
-  // status report the room setting; the Mic level monitor judges the samples
-  // at the gain they are actually mixed at.
+  // status report the room setting; the Mic level monitor and the
+  // [mix-loudness] journal report the gain the samples are actually mixed at.
   assert.equal((serverCode.match(/micGainDb:\s*session\.micGainDb/g) ?? []).length, 3);
-  assert.equal((serverCode.match(/micGainDb:\s*session\.effectiveMicGainDb/g) ?? []).length, 1);
+  assert.equal((serverCode.match(/micGainDb:\s*session\.effectiveMicGainDb/g) ?? []).length, 2);
 
   const commands = variableInitializerCode(server, 'commandProtocol');
   const setMix = commands.indexOf('setMix: (socket, payload) => {');

@@ -95,6 +95,7 @@ import {
 } from './song-session.js';
 import { takeFrameBoundaryAtOrAfter } from './take-boundary.js';
 import { TakeController, type TakeSongSnapshot } from './take-controller.js';
+import { TakeStemRecorder } from './take-stems.js';
 import { createTakeCommandHandlers } from './take-command-handlers.js';
 import { takeSongSnapshotForMic } from './take-song-snapshot.js';
 import { SERVER_INCARNATION } from './server-incarnation.js';
@@ -303,6 +304,8 @@ const takeController = new TakeController({
   timingDivergenceToleranceMs: BOOT_DELTA_REAPPLY_MS,
   onChange: (status) => broadcastJson(status),
 });
+/** Voice and song stems beside each Take, for balance analysis; `RELAY_TAKE_STEMS=0` turns them off. */
+const takeStems = new TakeStemRecorder({ takeDir, sampleRate: MIX_SAMPLE_RATE });
 
 const sourceRuntime = new SourceRuntime<RelaySocket>({
   isConnected: (socket) => socket.readyState === WebSocket.OPEN,
@@ -2283,9 +2286,17 @@ const mixerTimer = setInterval(() => {
   }
   noteMicTransit(performance.now());
 
-  session.drain((frame, evidence, position) => {
+  session.drain((frame, evidence, position, stems) => {
     const nowMs = performance.now();
-    takeController.append(frame, takeQualityFrameState(nowMs), evidence, position);
+    // The stems take exactly the frames the Take accepted, so they line up
+    // with it sample for sample.
+    const recordingTakeId = takeController.recordingTakeId;
+    const song = noteRoomSong(nowMs);
+    if (takeController.append(frame, takeQualityFrameState(nowMs), evidence, position) && recordingTakeId !== null) {
+      takeStems.append(recordingTakeId, frame, stems, song);
+    }
+    takeStems.settle(takeController.recordingTakeId);
+    noteMixLoudness(frame.byteLength / 2, nowMs);
     monitorTransport.broadcast(frame, true, position);
     const audibility = micAudibility.observeFrame({
       micLive: micPlayable(nowMs),
@@ -2304,6 +2315,58 @@ const mixerTimer = setInterval(() => {
   reportMicTimelineFolds();
   choir?.afterMixFrame(performance.now());
 }, 5);
+
+const MIX_LOUDNESS_REPORT_SAMPLES = MIX_SAMPLE_RATE * 3;
+let mixLoudnessSamples = 0;
+let journaledRoomSong: string | null = null;
+
+/**
+ * The song a mixed frame carried: the room's video, or the singer's local
+ * file. A Take names only the song it started with, so a change is journaled
+ * as `[room-song]` and the stems split their summary by it.
+ */
+function noteRoomSong(nowMs: number) {
+  const snapshot = takeSongSnapshot(nowMs);
+  const title = snapshot.localFile?.title;
+  const song = snapshot.videoId ?? (title ? `local:${title}` : null);
+  if (song !== journaledRoomSong) {
+    console.log('[room-song]', JSON.stringify({ song, previous: journaledRoomSong }));
+    journaledRoomSong = song;
+  }
+  return song;
+}
+
+/**
+ * Journals the room's balance every 3 s while anyone could hear it: the
+ * voice and the song as they sit in the mix, the song as the Robot delivered
+ * it, and the mix. Measurement only (see AudioSession.mixLoudness).
+ */
+function noteMixLoudness(frameSamples: number, nowMs: number) {
+  mixLoudnessSamples += frameSamples;
+  if (mixLoudnessSamples < MIX_LOUDNESS_REPORT_SAMPLES) return;
+  mixLoudnessSamples = 0;
+  const micLive = micPlayable(nowMs);
+  const songPlaying = roomSongPlaying(nowMs);
+  if (!micLive && !songPlaying) return;
+  const loudness = session.mixLoudness();
+  const lufs = (value: number | null) => (value === null ? null : Number.isFinite(value) ? Math.round(value * 10) / 10 : 'silent');
+  const voice = loudness.voice.shortTermLufs;
+  const backing = loudness.backing.shortTermLufs;
+  console.log('[mix-loudness]', JSON.stringify({
+    song: journaledRoomSong,
+    micLive,
+    songPlaying,
+    micGainDb: session.effectiveMicGainDb,
+    voiceShortTermLufs: lufs(voice),
+    voiceMomentaryLufs: lufs(loudness.voice.momentaryLufs),
+    backingShortTermLufs: lufs(backing),
+    songSourceShortTermLufs: lufs(loudness.backingSource.shortTermLufs),
+    mixShortTermLufs: lufs(loudness.mix.shortTermLufs),
+    vocalToBackingDb: voice !== null && backing !== null && Number.isFinite(voice) && Number.isFinite(backing)
+      ? Math.round((voice - backing) * 10) / 10
+      : null,
+  }));
+}
 
 function reportMicLevel(reason: 'window' | 'gain') {
   console.warn('[mic-level]', JSON.stringify({ reason, ...micLevel.status() }));
@@ -4173,6 +4236,7 @@ async function gracefulShutdown(signal: NodeJS.Signals) {
     backingRuntime.cancelGrace();
 
     await takeController.shutdown(Date.now());
+    await takeStems.shutdown();
     await webTransportMedia.stop();
 
     for (const client of wss.clients) client.terminate();

@@ -24,6 +24,7 @@ import { MixBus } from './mix-bus.js';
 import { MicTrack, type AlignmentState, type MicReadPlan } from './mic-track.js';
 import { SourceOutputEdge } from './source-output-edge.js';
 import { declickSourceGap } from './pcm-source-edge-taper.js';
+import { LoudnessMeter } from '../shared/loudness-meter.js';
 
 /**
  * Owns the live mix: both PCM timelines, the session clock, the alignment the
@@ -73,6 +74,35 @@ export type MixFrameEvidence = {
 };
 
 /** Authoritative position of one emitted frame on the shared mix timeline. */
+/**
+ * Each source's share of one mixed frame, as 16-bit PCM: the voice (both Mics)
+ * after gain and limiter, and the song after its gain, both after the summing
+ * headroom. Their sum is the frame, except while a source joins (the
+ * join-safety crossfade) and where the backstop clamp cut a sample.
+ */
+export type MixFrameStems = {
+  voice: Buffer;
+  backing: Buffer;
+};
+
+/** BS.1770 loudness at one point of the mix; null until enough audio was measured. */
+export type MixLoudnessPoint = {
+  momentaryLufs: number | null;
+  shortTermLufs: number | null;
+};
+
+/**
+ * Loudness of what the room hears of each source, and of the song as the Robot
+ * delivered it (before the Relay's song gain): the one says the balance, the
+ * other how loud the song itself was.
+ */
+export type MixLoudness = {
+  voice: MixLoudnessPoint;
+  backing: MixLoudnessPoint;
+  backingSource: MixLoudnessPoint;
+  mix: MixLoudnessPoint;
+};
+
 export type MixFramePosition = {
   generation: number;
   firstSampleIndex: number;
@@ -200,6 +230,8 @@ export class AudioSession {
 
   /** Which sources own the summing bus, and how the mix moves between them. */
   private readonly bus: MixBus;
+  /** Measurement only: nothing reads these to change the audio. */
+  private readonly loudness: Record<keyof MixLoudness, LoudnessMeter>;
   private readonly retentionSamples: number;
   private readonly backingRetentionSamples: number;
 
@@ -304,6 +336,12 @@ export class AudioSession {
       backingGain: options.backingGain,
       voiceCeiling: this.micLimiter.ceiling,
     });
+    this.loudness = {
+      voice: new LoudnessMeter(options.sampleRate),
+      backing: new LoudnessMeter(options.sampleRate),
+      backingSource: new LoudnessMeter(options.sampleRate),
+      mix: new LoudnessMeter(options.sampleRate),
+    };
     this.backingEdge = new SourceOutputEdge(this.sourceEdgeFadeSamples);
     this.retentionMs = options.retentionMs;
     this.retentionSamples = Math.round((options.retentionMs * options.sampleRate) / 1000);
@@ -954,7 +992,12 @@ export class AudioSession {
 
   /** Emits every frame whose time has come. Returns how many were produced. */
   drain(
-    emit: (frame: Buffer, evidence: MixFrameEvidence, position: MixFramePosition) => void,
+    emit: (
+      frame: Buffer,
+      evidence: MixFrameEvidence,
+      position: MixFramePosition,
+      stems: MixFrameStems,
+    ) => void,
     nowMs = performance.now(),
     maxFrames = 5,
   ) {
@@ -972,13 +1015,27 @@ export class AudioSession {
       emit(mixed.frame, mixed.evidence, {
         generation: this.sessionGeneration,
         firstSampleIndex: this.frameIndex * this.frameSamples,
-      });
+      }, mixed.stems);
       this.frameIndex += 1;
       remaining -= 1;
       sent += 1;
     }
 
     return sent;
+  }
+
+  /** Current loudness at each measured point of the mix. */
+  mixLoudness(): MixLoudness {
+    const point = (meter: LoudnessMeter): MixLoudnessPoint => ({
+      momentaryLufs: meter.momentaryLufs,
+      shortTermLufs: meter.shortTermLufs,
+    });
+    return {
+      voice: point(this.loudness.voice),
+      backing: point(this.loudness.backing),
+      backingSource: point(this.loudness.backingSource),
+      mix: point(this.loudness.mix),
+    };
   }
 
   health(): MixHealth {
@@ -1127,7 +1184,7 @@ export class AudioSession {
     };
   }
 
-  private mixFrame(frameIndex: number): { frame: Buffer; evidence: MixFrameEvidence } {
+  private mixFrame(frameIndex: number): { frame: Buffer; evidence: MixFrameEvidence; stems: MixFrameStems } {
     const plan = this.planMicRead(frameIndex);
     const {
       startSample,
@@ -1171,6 +1228,9 @@ export class AudioSession {
     // retained tail finishes and releases its bus ownership within the frame.
     const duckTarget = this.bus.duckTarget();
     const output = Buffer.allocUnsafe(this.frameSamples * 2);
+    const voiceStem = Buffer.allocUnsafe(this.frameSamples * 2);
+    const backingStem = Buffer.allocUnsafe(this.frameSamples * 2);
+    const loudness = this.loudness;
     const micSlewFrameEndPosition = micSlew
       ? micSlew.firstPosition + this.frameSamples * micSlew.rate
       : 0;
@@ -1258,6 +1318,17 @@ export class AudioSession {
       if (value > 1 || value < -1) this.clippedSamples += 1;
       const clamped = Math.max(-1, Math.min(1, value));
       output.writeInt16LE(Math.round(clamped < 0 ? clamped * 32768 : clamped * 32767), i * 2);
+
+      // Measurement only. The same headroom mixSample just applied.
+      const headroomGain = this.bus.headroomGain;
+      const voiceShare = voice * headroomGain;
+      const backingShare = songContribution * headroomGain;
+      voiceStem.writeInt16LE(pcm16(voiceShare), i * 2);
+      backingStem.writeInt16LE(pcm16(backingShare), i * 2);
+      loudness.voice.push(voiceShare);
+      loudness.backing.push(backingShare);
+      loudness.backingSource.push(song[i] / 32768);
+      loudness.mix.push(clamped);
     }
 
     let micInputClippedSamples = 0;
@@ -1296,7 +1367,7 @@ export class AudioSession {
     this.trim(this.mic, startSample - this.retentionSamples);
     this.trim(this.backing, startSample - this.backingRetentionSamples);
     if (duet) this.finishSecondaryFrame(duet, startSample);
-    return { frame: output, evidence };
+    return { frame: output, evidence, stems: { voice: voiceStem, backing: backingStem } };
   }
 
   /** What B contributed to this frame's evidence; zeros while B is silent. */
@@ -1423,3 +1494,8 @@ type SecondaryFrame = {
   blendStep: number;
   sumReleaseStep: number;
 };
+
+function pcm16(value: number) {
+  const clamped = Math.max(-1, Math.min(1, value));
+  return Math.round(clamped < 0 ? clamped * 32768 : clamped * 32767);
+}

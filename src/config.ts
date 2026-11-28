@@ -150,6 +150,7 @@ export function loadRelayConfig(env: Env = process.env) {
     probeLeadMs: envNumber(env, 'RELAY_CALIBRATION_PROBE_LEAD_MS', 200, { min: 1 }),
     probeSearchMarginMs: envNumber(env, 'RELAY_CALIBRATION_PROBE_SEARCH_MARGIN_MS', 3_000, { min: 1 }),
     probeMinCorrelation: envNumber(env, 'RELAY_CALIBRATION_PROBE_MIN_CORRELATION', 0.5, { min: 0, max: 1 }),
+    probePageClockWaitMs: envNumber(env, 'RELAY_CALIBRATION_PROBE_PAGE_CLOCK_WAIT_MS', 4_000, { min: 0 }),
     probeDebug: envBoolean(env, 'RELAY_CALIBRATION_PROBE_DEBUG', false),
     probeAnalysisTimeoutMs: envNumber(env, 'RELAY_CALIBRATION_PROBE_ANALYSIS_TIMEOUT_MS', 8_000, { min: 1 }),
     calibrationDeltaReapplyMs: envNumber(env, 'RELAY_CALIBRATION_DELTA_REAPPLY_MS', 40, { min: 1 }),

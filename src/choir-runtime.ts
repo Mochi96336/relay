@@ -452,6 +452,7 @@ export class ChoirRuntime {
     const ownerId = deps.mic.ownerId();
     const joining = payload.type === 'choir-secondary-join';
     let seatChanged = false;
+    let resumeTaken = false;
     let accepted: boolean;
     if (!joining) {
       accepted = this.seat.withdraw(socket);
@@ -465,12 +466,15 @@ export class ChoirRuntime {
       // seat is not consent to take it from someone who joined meanwhile.
       seatChanged = ownerMatches && payload.expectedSecondaryId !== undefined && current !== null
         && current.socket !== socket && current.secondaryId !== payload.expectedSecondaryId;
+      // A resume only reclaims an empty seat. Another live join, even this
+      // singer's own newer tab, keeps it.
+      resumeTaken = payload.resume === true && current !== null && current.socket !== socket;
       accepted = ownerId !== null
         // A local file song exists only on the Mic owner's phone: a second
         // singer could neither hear it nor be aligned to it.
         && !deps.session.micPremixed
         && deps.mic.mediaOwnerId() === ownerId
-        && ownerMatches && !seatChanged
+        && ownerMatches && !seatChanged && !resumeTaken
         && this.seat.join(socket, ownerId, { resume: payload.resume === true, ...seatCommandId(payload) });
       if (accepted) {
         // Ask for B's media now rather than on the next mix frame.
@@ -487,7 +491,7 @@ export class ChoirRuntime {
       ...(accepted ? {} : { mediaOwnerMatches: deps.mic.mediaOwnerId() === ownerId }),
     });
     if (!accepted) deps.send(socket, {
-      type: 'choir-consent-rejected', reason: seatChanged ? 'seat-changed' : 'invalid-or-stale', ...seatCommandId(payload),
+      type: 'choir-consent-rejected', reason: seatChanged ? 'seat-changed' : resumeTaken ? 'replaced' : 'invalid-or-stale', ...seatCommandId(payload),
     });
     else if (!joining) deps.send(socket, {
       type: 'choir-secondary-consent-status', status: 'withdrawn', secondaryId: socket.participantId, ...seatCommandId(payload),

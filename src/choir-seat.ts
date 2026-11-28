@@ -61,9 +61,10 @@ export class ChoirSeat {
     const sameSeat = previous?.primaryId === primaryId && previous.secondaryId === secondaryId
       && previous.socket === socket;
     if (sameSeat && commandId === undefined) return true;
-    // Reconnection is not a user request to take over another singer's seat.
-    if (resume && previous && previous.primaryId === primaryId
-      && previous.secondaryId !== secondaryId) return false;
+    // Reconnection is not a user request to take over the seat. That holds for
+    // another singer and for this singer's own newer tab: an old tab's
+    // automatic resume must not revoke the page the singer just chose.
+    if (resume && previous && !sameSeat) return false;
     if (previous && !sameSeat) this.end(previous, 'replaced');
     const command = commandId === undefined ? {} : { commandId };
     this.current = { primaryId, secondaryId, socket, ...command };

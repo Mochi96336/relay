@@ -35,12 +35,34 @@ function initialize() {
   let nextSecondMicCommandId = 1;
   let secondMicTimer = null;
   let secondMicError = null;
+  // The room's own snapshot has shown secondMicError as its blocked reason:
+  // a later snapshot without it lifts the refusal.
+  let secondMicErrorSeenInRoom = false;
   function settleSecondMic(reason = null) {
     clearTimeout(secondMicTimer);
     secondMicRequestPending = null;
     secondMicError = reason;
+    secondMicErrorSeenInRoom = false;
+  }
+  /**
+   * Arms the bound on a pending B request. The room's answer and its
+   * realigning snapshot travel on different connections: an accepted answer
+   * keeps the request pending, bounded, until the snapshot arrives.
+   */
+  function boundSecondMicRequest(commandId) {
+    clearTimeout(secondMicTimer);
+    secondMicTimer = setTimeout(() => {
+      if (secondMicRequestPending !== commandId) return;
+      settleSecondMic('unavailable');
+      render();
+    }, 4000);
   }
   let preflightCommandPending = false;
+  // Each no-Song Realign press is one request; once the room has confirmed
+  // a request (calibration-active) or a newer one replaced it, its late
+  // timeout or socket close no longer speaks for the button.
+  let preflightRequest = 0;
+  let preflightConfirmed = 0;
 
   function setText(element, value) {
     if (element && element.textContent !== value) element.textContent = value;
@@ -216,7 +238,13 @@ function initialize() {
     });
     commandError = null;
     if (!selfIsSecondMic() || latestProductStatus.room.duet.realigning === true) settleSecondMic();
+    else if (secondMicError) {
+      const roomReason = latestProductStatus.room.duet.realignBlockedReason ?? null;
+      if (roomReason === secondMicError) secondMicErrorSeenInRoom = true;
+      else if (secondMicErrorSeenInRoom) settleSecondMic();
+    }
     if (latestAction?.startCalibrationBlockedReason === 'calibration-active') {
+      if (preflightCommandPending) preflightConfirmed = preflightRequest;
       preflightCommandPending = false;
     }
     render();
@@ -259,6 +287,12 @@ function initialize() {
 
   window.addEventListener('relay-choir-probe-response', ({ detail }) => {
     if (secondMicRequestPending === null || detail?.commandId !== secondMicRequestPending) return;
+    // Accepted: stay pending until the room's realigning snapshot (or the
+    // bound) so the same press cannot be sent twice in between.
+    if (!detail.reason) {
+      boundSecondMicRequest(secondMicRequestPending);
+      return;
+    }
     settleSecondMic(detail.reason);
     render();
   });
@@ -269,13 +303,9 @@ function initialize() {
     if (selfIsSecondMic()) {
       if (calibrateButton.disabled) return;
       const commandId = nextSecondMicCommandId++;
+      settleSecondMic();
       secondMicRequestPending = commandId;
-      secondMicError = null;
-      secondMicTimer = setTimeout(() => {
-        if (secondMicRequestPending !== commandId) return;
-        settleSecondMic('unavailable');
-        render();
-      }, 4000);
+      boundSecondMicRequest(commandId);
       window.dispatchEvent(new CustomEvent('relay-choir-command', {
         detail: { type: 'choir-probe-request', commandId },
       }));
@@ -289,11 +319,15 @@ function initialize() {
     // no-Song Robot preflight case; all normal commands keep flowing through
     // the established publisher transport.
     if (needsPreflightCommandPath()) {
+      const request = ++preflightRequest;
       preflightCommandPending = true;
       render();
       void sendPreflightCalibrationCommand().catch(() => {
-        commandError = true;
+        // Only the current request the room has not confirmed failed for the
+        // singer; the room's own progress stays on screen otherwise.
+        if (request === preflightRequest && preflightConfirmed !== request) commandError = true;
       }).finally(() => {
+        if (request !== preflightRequest) return;
         preflightCommandPending = false;
         render();
       });

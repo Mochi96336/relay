@@ -606,3 +606,40 @@ describe('product lifecycle and health', () => {
   });
 
 });
+
+describe('a premixed Mic (local file) and a YouTube song the room only has loaded', () => {
+  const noBacking = { backingConnected: false, backingStreaming: false, robotSourceConnected: false,
+    timelineConnected: false, timelineState: 5 } as const;
+  const cued = { videoId: 'abcdefghijk', connected: true, clockAgeMs: 0, state: 5, handoffState: 'idle' } as const;
+
+  test('a cued video with no external backing does not block a local file Take', () => {
+    const model = buildProductViewModel(input({
+      readiness: readiness(noBacking), roomSong: cued, localFile: { title: 'Piano' },
+    }));
+    assert.equal(model.actions.canStartTake, true, String(model.actions.startTakeBlockedReason));
+  });
+
+  test('the same room without a premixed Mic still needs its backing', () => {
+    const model = buildProductViewModel(input({ readiness: readiness(noBacking), roomSong: cued }));
+    assert.equal(model.actions.canStartTake, false);
+    assert.equal(model.actions.startTakeBlockedReason, 'room-blocked');
+  });
+
+  test('a room song actually playing over the local file is still the backing it needs', () => {
+    const model = buildProductViewModel(input({
+      readiness: readiness({ ...noBacking, timelineState: 1 }),
+      roomSong: { ...cued, state: 1 }, localFile: { title: 'Piano' },
+    }));
+    assert.equal(model.actions.canStartTake, false);
+    assert.equal(model.actions.startTakeBlockedReason, 'room-blocked');
+  });
+
+  test('the premixed Mic itself must still be live', () => {
+    const model = buildProductViewModel(input({
+      readiness: readiness({ ...noBacking, micConnected: false, micStreaming: false, sessionActive: false }),
+      roomSong: cued, localFile: { title: 'Piano' },
+    }));
+    assert.equal(model.actions.canStartTake, false);
+    assert.notEqual(model.actions.startTakeBlockedReason, 'room-blocked');
+  });
+});

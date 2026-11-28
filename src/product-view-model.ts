@@ -16,6 +16,7 @@ import {
 import type { TakeQualityVerdict } from './take-quality.js';
 import type { TakeLifecycle } from './take-session.js';
 import { decideTakeStart, type TakeStartBlockReason } from './take-start-policy.js';
+import { roomSongIsTakeBacking } from './take-song-snapshot.js';
 import {
   decideCalibrationStart,
   type CalibrationStartBlockReason,
@@ -351,7 +352,10 @@ export function buildProductViewModel(input: ProductViewModelInput): ProductStat
   const startTake = decideTakeStart({
     sessionActive: input.readiness.components.session.active,
     bootProbeCalibrationActive: preparingCalibrationActive(input) || input.duet?.realigning === true,
-    songLoaded: input.roomSong.videoId !== null,
+    // A premixed Mic carries its own song: a YouTube video merely cued in the
+    // room is not this Take's backing, so its route cannot block the Take,
+    // and the Mic itself is what must be live.
+    songLoaded: roomSongIsTakeBacking(input.roomSong, Boolean(input.localFile)),
     voiceOnlyMicState: mic,
     micMediaRecoveryDegraded,
     roomBlocked: health === 'blocked',

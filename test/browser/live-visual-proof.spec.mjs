@@ -231,3 +231,102 @@ test('Diagnostics tabs: click, locale changes and reopening retain the active pa
   await page.keyboard.press('Tab');
   await expect(page.getByRole('tabpanel')).toBeFocused();
 });
+
+function selectListenerSong(page, videoId) {
+  return page.evaluate((id) => {
+    window.dispatchEvent(new CustomEvent('relay:playback-view', {
+      detail: {
+        role: 'observer',
+        room: { videoId: id },
+        timeline: {
+          videoId: id, state: 1, duration: 200, serverTime: 20, handoffState: 'idle',
+          leaderConnected: true, leaderFresh: true, ageMs: 0,
+        },
+      },
+    }));
+  }, videoId);
+}
+
+test('listeners can read the current room song lyrics without moving the room controls', async ({ page }) => {
+  const song = 'PZGwZwGQTlk';
+  const missing = 'RNTq42Tg6Qs';
+  let attempts = 0;
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.route('**/api/song-lyrics?*', async (route) => {
+    const videoId = new URL(route.request().url()).searchParams.get('videoId');
+    if (videoId === song && ++attempts === 1) {
+      await route.fulfill({ status: 503, headers: { 'Retry-After': '1' } });
+      return;
+    }
+    await route.fulfill({
+      json: { videoId, lyrics: videoId === song ? { text: '示意歌詞\n'.repeat(50), source: null } : null },
+    });
+  });
+  await openState(page, 'listener');
+  await page.evaluate(async () => { await import('/song-lyrics.js'); });
+
+  const lyrics = page.getByRole('button', { name: '歌詞', exact: true });
+  const panel = page.locator('#song-lyrics');
+  await selectListenerSong(page, song);
+  await expect(lyrics).toBeVisible();
+  const diagnostics = page.locator('#diag-overview-ledger [data-row=lyrics]');
+  await expect(diagnostics).toContainText('可用');
+  const controls = page.locator('.live-actions');
+  const before = await controls.boundingBox();
+  await lyrics.click();
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText('示意歌詞');
+  expect(attempts).toBe(2);
+  await expect(page.locator('#start-publisher')).toHaveText('接手 Mic');
+  expect(await controls.boundingBox()).toEqual(before);
+
+  // A local file waiting in standby still shows the room's YouTube song.
+  await page.locator('#local-file-panel').evaluate((element) => { element.hidden = false; });
+  await expect(lyrics).toBeVisible();
+  await page.locator('.song-stage').evaluate((element) => { element.dataset.localFile = 'on'; });
+  await expect(panel).toBeHidden();
+  await expect(panel).not.toContainText('示意歌詞');
+  await page.locator('.song-stage').evaluate((element) => { element.dataset.localFile = 'off'; });
+  await expect(lyrics).toBeVisible();
+
+  await selectListenerSong(page, missing);
+  await expect(lyrics).toBeHidden();
+  await expect(panel).toBeHidden();
+  await expect(panel).not.toContainText('示意歌詞');
+  await expect(diagnostics).toContainText('來源查無歌詞');
+});
+
+test('late results cannot replace lyrics after a quick A–B–A song change', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openState(page, 'listener');
+  await page.evaluate(async () => {
+    // Deliver old responses even after cancellation to exercise the request identity guard.
+    window.lyricsRequests = [];
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = (input, options) => {
+      const url = new URL(input, location.href);
+      if (url.pathname !== '/api/song-lyrics') return originalFetch(input, options);
+      const videoId = url.searchParams.get('videoId');
+      return new Promise((resolve) => window.lyricsRequests.push((text) =>
+        resolve(Response.json({ videoId, lyrics: { text, source: null } }))));
+    };
+    await import('/song-lyrics.js');
+  });
+
+  const song = 'PZGwZwGQTlk';
+  await selectListenerSong(page, song);
+  await selectListenerSong(page, 'RNTq42Tg6Qs');
+  await selectListenerSong(page, song);
+  await page.evaluate(() => window.lyricsRequests[2]('最新歌詞'));
+  const lyrics = page.getByRole('button', { name: '歌詞', exact: true });
+  await lyrics.click();
+  const panel = page.locator('#song-lyrics');
+  await expect(panel).toContainText('最新歌詞');
+
+  await page.evaluate(async () => {
+    window.lyricsRequests[1]('另一首');
+    window.lyricsRequests[0]('舊歌詞');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  await expect(panel).toHaveText('最新歌詞');
+});

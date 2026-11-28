@@ -11,7 +11,7 @@ type TrafficPacket = {
   durationMs: number;
 };
 
-async function makeProcessor(options: Record<string, number> = {}) {
+async function makeProcessor(options: Record<string, number> = {}, sampleRate = SAMPLE_RATE) {
   const source = await readFile(new URL('../public/playback-worklet.js', import.meta.url), 'utf8');
   let RegisteredProcessor: any = null;
 
@@ -38,7 +38,7 @@ async function makeProcessor(options: Record<string, number> = {}) {
     Float32Array,
     Math,
     Number,
-    sampleRate: SAMPLE_RATE,
+    sampleRate,
     registerProcessor(_name: string, Processor: unknown) {
       RegisteredProcessor = Processor;
     },
@@ -868,3 +868,20 @@ for (const downlink of downlinks) {
     assert.equal(processor.underruns > 1, downlink.underruns, `${processor.underruns} underruns`);
   });
 }
+
+test('high-rate playback continues a periodic voice and rejects noise at an underrun', async () => {
+  for (const rate of [96_000, 192_000]) {
+    const processor = await makeProcessor({}, rate);
+    processor.historyFilled = processor.history.length;
+    for (let i = 0; i < processor.history.length; i++) {
+      processor.history[i] = Math.sin(i * 2 * Math.PI * 220 / rate);
+    }
+    assert.equal(processor.beginConcealment(), true);
+    let seed = 7;
+    for (let i = 0; i < processor.history.length; i++) {
+      seed = (Math.imul(1664525, seed) + 1013904223) >>> 0;
+      processor.history[i] = seed / 2147483648 - 1;
+    }
+    assert.equal(processor.beginConcealment(), false);
+  }
+});

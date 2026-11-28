@@ -84,8 +84,9 @@ function renderOwner() {
   seek.disabled = duration === null;
   if (!seeking) seek.value = String(localFileMix.currentTime);
   time.textContent = `${clock(localFileMix.currentTime)} / ${clock(duration)}`;
-  note.textContent = transientNote
-    ?? (!ready ? t('localFile.needsMic') : heldByRoom ? t('localFile.blockedSong') : '');
+  // What happened (transient) never hides what the singer can do now.
+  const nextStep = !ready ? t('localFile.needsMic') : heldByRoom ? t('localFile.blockedSong') : '';
+  note.textContent = [transientNote, nextStep].filter(Boolean).join(' ');
 
   music.value = String(Math.round(localFileMix.musicLevel * 100));
   musicValue.value = `${music.value}%`;
@@ -212,6 +213,8 @@ localFileMix.addEventListener('change', (event) => {
 
 window.addEventListener('relay-microphone-local-state', (event) => {
   micActive = Boolean(event.detail?.active);
+  // Why the last Mic session's song stopped is not this one's business.
+  if (!micActive) transientNote = null;
   render();
 });
 

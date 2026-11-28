@@ -15,6 +15,18 @@ export type TakeSongSnapshot = {
   state: number | null;
   serverTime: number | null;
   playbackRate: number | null;
+  /**
+   * Local file mode: the song the singer's phone mixed into the Mic. `heard`
+   * says it was playing at Start or started during the recording; a file
+   * only loaded (silent) leaves it false. Absent on older metadata and when
+   * no local file was open.
+   */
+  localFile?: TakeLocalFileSnapshot | null;
+};
+
+export type TakeLocalFileSnapshot = {
+  title: string | null;
+  heard: boolean;
 };
 
 export type TakeArtifact = {
@@ -68,8 +80,8 @@ export type StopTakeDecision =
   | { ok: true; take: TakeRecord; duplicate: boolean }
   | { ok: false; reason: 'take-not-recording' | 'stale-take' };
 
-function cloneSong(song: TakeSongSnapshot): TakeSongSnapshot {
-  return { ...song };
+export function cloneSong(song: TakeSongSnapshot): TakeSongSnapshot {
+  return song.localFile ? { ...song, localFile: { ...song.localFile } } : { ...song };
 }
 
 function cloneArtifact(artifact: TakeArtifact | null): TakeArtifact | null {
@@ -190,6 +202,15 @@ export class TakeSession {
    * sample identity. Forward holes are preserved; overlap, reordering or a
    * generation change would make one Take ambiguous and is rejected.
    */
+  /** The local file started playing while this Take records. */
+  noteLocalFileHeard(title: string | null) {
+    const take = this.current;
+    if (!take || take.lifecycle !== 'recording') return false;
+    if (take.song.localFile?.heard === true) return false;
+    take.song.localFile = { title: take.song.localFile?.title ?? title, heard: true };
+    return true;
+  }
+
   appendMixFrame(position: MixFramePosition, sampleCount: number) {
     const take = this.current;
     if (!take || take.lifecycle !== 'recording') return false;

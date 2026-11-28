@@ -61,6 +61,7 @@ test('a ready lifecycle Take overlays lossy recovery without leaking the full Ta
     takeId,
     endedAtMs: 3_000,
     songVideoId: 'video-b',
+    localFileTitle: null,
     artifact: { url: `/takes/${takeId}.wav`, durationMs: 1_500 },
     qualityVerdict: 'review',
     recovered: false,
@@ -87,6 +88,36 @@ test('Take history groups attempts by song while keeping voice and recovered rec
   assert.equal(groups[0].entries.length, 2);
   assert.equal(groups[1].entries.length, 1);
   assert.equal(groups[2].entries.length, 1);
+});
+
+test('a local file heard in the Take groups by its title; a silent one stays voice only', async () => {
+  const { groupHistory, historyFromStatus, validHistoryEntry } = await import(modelUrl.href);
+  const groups = groupHistory([
+    historyItem({ takeId: 'local-1', songVideoId: null, localFileTitle: 'audit' }),
+    historyItem({ takeId: 'local-2', songVideoId: null, localFileTitle: 'audit', endedAtMs: 1_900 }),
+    historyItem({ takeId: 'local-untitled', songVideoId: null, localFileTitle: '' }),
+    historyItem({ takeId: 'voice-1', songVideoId: null, localFileTitle: null }),
+    historyItem({ takeId: 'older-server', songVideoId: null }),
+  ]);
+  assert.deepEqual(groups.map((group: { key: string }) => group.key), ['localFile:audit', 'localFile:', 'voice']);
+  assert.equal(groups[0].localFileTitle, 'audit');
+  assert.equal(groups[0].entries.length, 2);
+  assert.equal(groups[2].entries.length, 2);
+  assert.equal(validHistoryEntry(historyItem({ localFileTitle: 7 })), false);
+
+  // The ready Take before its history arrives: only a heard file counts.
+  const ready = (localFile: unknown) => historyFromStatus({
+    lifecycle: 'ready',
+    take: {
+      takeId: 'ready', endedAtMs: 5_000,
+      song: { videoId: null, localFile },
+      artifact: { url: '/takes/ready.wav', durationMs: 900 },
+    },
+  }, [])[0].localFileTitle;
+  assert.equal(ready({ title: 'audit', heard: true }), 'audit');
+  assert.equal(ready({ title: null, heard: true }), '');
+  assert.equal(ready({ title: 'audit', heard: false }), null);
+  assert.equal(ready(undefined), null);
 });
 
 test('Take history ignores malformed status entries and preserves the last valid snapshot', async () => {

@@ -210,7 +210,7 @@ export class ChoirSecondaryCapture {
       : event.data?.type === 'pcm' && event.data.buffer instanceof ArrayBuffer
         ? event.data : null;
     if (event.data?.type === 'input-gap'
-      && event.data.reason !== 'digital-silence') {
+      && event.data.recovered !== true && event.data.reason !== 'digital-silence') {
       this.fail('input-gap');
       return;
     }

@@ -6,7 +6,7 @@ import { encodeAudioPacket } from '../src/audio-packet.js';
 import { participantIdForCapability } from '../src/participant-capability.js';
 import { laggedMultibandMusicPair } from './helpers/music-calibration.js';
 import { ChoirSeatCommands } from '../public/choir-commands.js';
-import { registerPlayback } from './support/client-commands.js';
+import { registerPlayback, requestProductStatus } from './support/client-commands.js';
 
 /**
  * With Choir off, Relay is the single-Mic Relay: no second Mic is advertised,
@@ -316,7 +316,14 @@ test('B joins by its own press, sets its own gain, and can be taken over like th
       // for its media.
       const c = await duet.connect();
       await duet.authenticate(c, 'e'.repeat(64), 'C');
-      await duet.join(c);
+      const previous = await requestProductStatus(c, (status) => status.room.duet?.state === 'singing');
+      assert.equal(typeof previous.room.duet.lagMs, 'number');
+      const from = c.messages.length;
+      c.send({ type: 'choir-secondary-join' });
+      const current = await requestProductStatus(c, (status) => status.room.duet?.secondaryNickname === 'C');
+      assert.equal((await waitForNewMessage(c, from, (m) => m.type === 'choir-secondary-consent-status')).status, 'accepted');
+      assert.equal(current.room.duet.state, 'joined');
+      assert.equal(current.room.duet.lagMs, null, "C must not inherit B's timing value during the fade");
       const replaced = await b.waitFor((m) => m.type === 'choir-secondary-consent-status' && m.status === 'revoked');
       assert.equal(replaced.reason, 'replaced');
       secondary = await duet.waitForSecondary((d) => !d?.audible);

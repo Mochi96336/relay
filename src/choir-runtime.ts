@@ -374,7 +374,11 @@ export class ChoirRuntime {
   view(): ProductDuet | null {
     const joined = this.seat.active();
     if (!joined) return null;
-    const secondary = this.deps.session.secondaryMic;
+    // A departing singer's track remains in the mixer for its fade. Its
+    // timing belongs to that singer, even after the next singer takes the seat.
+    const { session } = this.deps;
+    const hasCapture = session.secondaryMicGeneration !== null;
+    const secondary = hasCapture ? session.secondaryMic : null;
     // Allowed to sound is not singing: B's PCM must also be reaching the mix.
     const singing = secondary?.audible === true && secondary.blend > 0 && secondary.recentlyHeard;
     const lag = secondary?.appliedLagMs ?? null;
@@ -385,7 +389,7 @@ export class ChoirRuntime {
       lagMs: lag === null || !Number.isFinite(lag) ? null : Math.round(lag),
       realigning: this.probe.running,
       realignBlockedReason: this.deps.audibleProbeBlockReason()
-        ?? (this.deps.session.secondaryMicGeneration === null ? 'sources-not-streaming' : null),
+        ?? (hasCapture ? null : 'sources-not-streaming'),
     };
   }
 

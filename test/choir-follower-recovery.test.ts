@@ -65,6 +65,12 @@ async function fixture() {
     players, room, tick: () => tick(), emit,
     active: () => events.filter(event => event.type === 'relay-choir-local-playback').at(-1)?.detail.active ?? false,
     status: () => nodes.get('#choir-follower-status').textContent,
+    report: () => events.filter(event => event.type === 'relay-choir-follower-report').at(-1)?.detail,
+    /** Time passes with no room packet, as when B's link blips. */
+    async silence(ms: number) {
+      now += ms;
+      tick(); await Promise.resolve();
+    },
     async advance(ms: number) {
       now += ms;
       for (const [id, timer] of timers) if (timer.at <= now) { timers.delete(id); timer.run(); }
@@ -114,6 +120,33 @@ test('a local song stuck without an error gives Listen back after a grace, and L
   p.state = 1;
   await f.advance(1_000);
   assert.equal(f.active(), true, 'the local song plays again, so Listen yields again');
+});
+
+test('a link blip keeps B\'s song playing; only a long silence pauses it', async () => {
+  const f = await fixture();
+  const p = f.players[0];
+  p.config.events.onReady();
+  p.state = 1;
+  p.config.events.onStateChange({ data: 1 });
+  await f.advance(3_000); // past the seek cooldown from the player's creation
+  // B fell behind: the follower seeks, and says where B stood.
+  p.position = 79;
+  await f.advance(500);
+  assert.deepEqual(p.calls.filter((call: string) => call === 'seek'), ['seek']);
+  assert.deepEqual({ ...f.report().lastAction }, { seq: f.report().lastAction.seq, type: 'seek', driftMs: -1000 });
+  p.calls.length = 0;
+  // 2026-10-31: B's whole link stopped for ~2 s, three times in one song.
+  for (const ms of [500, 1_000, 1_000, 500]) await f.silence(ms);
+  assert.deepEqual(p.calls, [], 'no pause, seek or play on a stale room');
+  assert.equal(p.state, 1);
+  assert.equal(f.active(), true);
+  assert.equal(f.report().coasting, true);
+  await f.advance(500);
+  assert.equal(f.report().coasting, false);
+  await f.silence(10_500);
+  assert.deepEqual(p.calls, ['pause']);
+  assert.equal(f.status(), 'choir.followerRoomStale');
+  assert.equal(f.active(), false);
 });
 
 test('a slow player load keeps being retried, more slowly, and ignores retired iframe callbacks', async () => {

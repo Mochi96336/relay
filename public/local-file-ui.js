@@ -74,15 +74,18 @@ function renderOwner() {
 
   const playing = localFileMix.playing;
   const ready = micActive && localFileMix.attached;
+  // One song at a time: while the room's song plays, this one cannot start.
+  const heldByRoom = roomSongPlaying && !playing;
   playButton.textContent = t(playing ? 'localFile.pause' : 'localFile.play');
-  playButton.disabled = !playing && !ready;
+  playButton.disabled = !playing && (!ready || heldByRoom);
 
   const duration = localFileMix.duration;
   seek.max = String(duration ?? 0);
   seek.disabled = duration === null;
   if (!seeking) seek.value = String(localFileMix.currentTime);
   time.textContent = `${clock(localFileMix.currentTime)} / ${clock(duration)}`;
-  note.textContent = transientNote ?? (ready ? '' : t('localFile.needsMic'));
+  note.textContent = transientNote
+    ?? (!ready ? t('localFile.needsMic') : heldByRoom ? t('localFile.blockedSong') : '');
 
   music.value = String(Math.round(localFileMix.musicLevel * 100));
   musicValue.value = `${music.value}%`;
@@ -169,6 +172,7 @@ playButton.addEventListener('click', () => {
     localFileMix.pause();
     return;
   }
+  if (roomSongPlaying) return;
   syncVocalGain();
   void localFileMix.play();
 });
@@ -226,10 +230,10 @@ window.addEventListener('relay-product-status', (event) => {
 // Robot on top of the one mixed here.
 window.addEventListener('relay:playback-view', (event) => {
   const next = event.detail?.room?.state === 'playing';
-  if (next && !roomSongPlaying && localFileMix.playing) {
-    localFileMix.pause();
-    transientNote = t('localFile.roomSongPaused');
-  }
+  if (next && !roomSongPlaying && localFileMix.playing) transientNote = t('localFile.roomSongPaused');
+  // Every view while the room song plays, not only its first: this also
+  // withdraws a local play still waiting to start.
+  if (next && localFileMix.active) localFileMix.pause();
   roomSongPlaying = next;
   render();
 });

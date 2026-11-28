@@ -317,6 +317,7 @@ test('a timed out join cannot be revived by a late accepted reply', async ({ pag
   await page.clock.install();
   await page.locator('#choir-invite-open').click();
   await page.clock.fastForward(8_001);
+  await expect(page.locator('#choir-capture-notice')).toHaveText('房間未及時確認副 Mic 連線，這個頁面已停止收音。請再試一次。');
   await consent(page, accepted);
   await expect(page.locator('#choir-withdraw')).toBeHidden();
   await expect(page.locator('#choir-invite-open')).toBeEnabled();

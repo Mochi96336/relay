@@ -254,3 +254,20 @@ test('a pending takeover remembers the seat the singer saw before granting micro
   f.join();
   assert.equal(f.events.at(-1)?.detail.expectedSecondaryId, 'next');
 });
+
+test('an unanswered or refused join explains why capture stopped and allows retry', async () => {
+  const f = await choirPage();
+  f.join();
+  f.advance(8_000);
+  assert.equal(f.notice.textContent, 'choir.joinTimedOut');
+  assert.equal(f.leave.hidden, true);
+  f.emit('relay-choir-message', { type: 'choir-consent-rejected', reason: 'invalid-or-stale' });
+  assert.equal(f.notice.textContent, 'choir.joinTimedOut', 'the cleanup reply preserves the timeout explanation');
+  f.join();
+  f.emit('relay-choir-message', { type: 'choir-consent-rejected', reason: 'invalid-or-stale' });
+  assert.equal(f.notice.textContent, 'choir.joinRefused');
+  f.join();
+  f.accept();
+  assert.equal(f.notice.hidden, true);
+  assert.equal(f.leave.hidden, false);
+});

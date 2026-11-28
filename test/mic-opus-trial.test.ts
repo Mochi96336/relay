@@ -166,7 +166,33 @@ for (const failure of ['message', 'worker', 'postMessage', 'timeout']) {
       active.onmessage?.({ data: { type: 'error', message: 'duplicate' } });
       active.onmessage?.({ data: { type: 'ready', delaySamples: 120 } });
       assert.equal(active.terminations, 1);
-      assert.equal(errors, 1);
+      // Startup failure belongs to the caller's await, which can fall back to
+      // PCM on the same open microphone; onError would tear that capture down.
+      assert.equal(errors, 0);
     } finally { Object.assign(globalThis, { Worker: original }); }
   });
 }
+
+test('an encoder that fails after it started reports onError once', async () => {
+  const original = globalThis.Worker;
+  let active: any;
+  let errors = 0;
+  class Worker {
+    onmessage?: (event: { data: any }) => void;
+    onerror?: () => void;
+    terminations = 0;
+    constructor() { active = this; }
+    postMessage(message: any) {
+      if (message.type === 'init') queueMicrotask(() => this.onmessage?.({ data: { type: 'ready', delaySamples: 120 } }));
+    }
+    terminate() { this.terminations++; }
+  }
+  Object.assign(globalThis, { Worker });
+  try {
+    await createMicOpusTrial({ onPacket() {}, onDrop() {}, onError() { errors++; } });
+    active.onmessage?.({ data: { type: 'error', message: 'encoder crashed' } });
+    active.onerror?.();
+    assert.equal(errors, 1);
+    assert.equal(active.terminations, 1);
+  } finally { Object.assign(globalThis, { Worker: original }); }
+});
